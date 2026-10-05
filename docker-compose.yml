@@ -1,0 +1,78 @@
+name: cliprelay
+
+x-backend: &backend
+  build: ./backend
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cliprelay}:${POSTGRES_PASSWORD:-cliprelay}@postgres:5432/${POSTGRES_DB:-cliprelay}
+    REDIS_URL: redis://redis:6379/0
+    STORAGE_LOCAL_PATH: /data/media
+  volumes:
+    - media:/data/media
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cliprelay}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cliprelay}
+      POSTGRES_DB: ${POSTGRES_DB:-cliprelay}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cliprelay}"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    <<: *backend
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 15s
+      retries: 5
+
+  worker:
+    <<: *backend
+    command: celery -A app.workers.celery_app worker -Q default,fetch,uploads --loglevel=INFO --concurrency=${WORKER_CONCURRENCY:-4}
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  beat:
+    <<: *backend
+    command: celery -A app.workers.celery_app beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  media:
