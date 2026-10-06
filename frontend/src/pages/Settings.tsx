@@ -56,9 +56,17 @@ function Team() {
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const create = useMutation({ mutationFn: () => users.create(form), onSuccess: () => { setForm({ name: "", email: "", password: "" }); queryClient.invalidateQueries({ queryKey: ["users"] }); toast({ title: "Team member added" }); }, onError });
   const remove = useMutation({ mutationFn: (id: number) => users.remove(id), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["users"] }), onError });
-  return <Card><div className="card-title">Team members</div><div className="card-caption">Everyone here can sign in with email and password and manage the whole workspace.</div>
-    <div style={{ marginTop: 10 }}>{data?.map(u => <div className="team-row" key={u.id}><Avatar label={initialsOf(u.name || u.email)}/><div><strong>{u.name || u.email}</strong><span>{u.email}</span></div>{u.id === user?.id ? <Badge tone="primary" dot={false}>You</Badge> : <Button variant="danger" onClick={() => window.confirm(`Remove ${u.email}?`) && remove.mutate(u.id)}>Remove</Button>}</div>)}</div>
-    <form className="inline-form" onSubmit={e => { e.preventDefault(); create.mutate(); }}><input className="input" placeholder="Name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}/><input className="input" type="email" required placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}/><input className="input" type="password" required minLength={8} placeholder="Temporary password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}/><Button type="submit" variant="primary" icon="plus" disabled={create.isPending}>Add member</Button></form>
+  const setRole = useMutation({ mutationFn: ({ id, role }: { id: number; role: "owner" | "member" }) => users.setRole(id, role), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["users"] }); toast({ title: "Role updated" }); }, onError });
+  const isOwner = user?.role === "owner";
+  const owners = data?.filter(u => u.role === "owner").length ?? 0;
+  return <Card><div className="card-title">Team members</div><div className="card-caption">Owners manage API keys, AI models and the team. Members run the automation but only see whether keys are configured.</div>
+    <div style={{ marginTop: 10 }}>{data?.map(u => <div className="team-row" key={u.id}><Avatar label={initialsOf(u.name || u.email)}/><div><strong>{u.name || u.email}{u.id === user?.id ? " (you)" : ""}</strong><span>{u.email}</span></div>
+      <Badge tone={u.role === "owner" ? "primary" : "neutral"} dot={false}>{u.role === "owner" ? "Owner" : "Member"}</Badge>
+      {isOwner && (u.role === "owner"
+        ? <Button onClick={() => setRole.mutate({ id: u.id, role: "member" })} disabled={owners <= 1 || setRole.isPending} title={owners <= 1 ? "A workspace needs at least one owner" : undefined}>Make member</Button>
+        : <Button onClick={() => setRole.mutate({ id: u.id, role: "owner" })} disabled={setRole.isPending}>Make owner</Button>)}
+      {isOwner && u.id !== user?.id && <Button variant="danger" onClick={() => window.confirm(`Remove ${u.email}?`) && remove.mutate(u.id)}>Remove</Button>}</div>)}</div>
+    {isOwner && <form className="inline-form" onSubmit={e => { e.preventDefault(); create.mutate(); }}><input className="input" placeholder="Name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}/><input className="input" type="email" required placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}/><input className="input" type="password" required minLength={8} placeholder="Temporary password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}/><Button type="submit" variant="primary" icon="plus" disabled={create.isPending}>Add member</Button></form>}
   </Card>;
 }
 

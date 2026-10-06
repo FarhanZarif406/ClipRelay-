@@ -34,3 +34,12 @@ def current_user(db: DB, credentials: HTTPAuthorizationCredentials | None = Depe
 
 
 CurrentUser = Annotated[User, Depends(current_user)]
+
+
+def owner_user(user: CurrentUser) -> User:
+    if not user.is_owner:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only workspace owners can do this")
+    return user
+
+
+OwnerUser = Annotated[User, Depends(owner_user)]

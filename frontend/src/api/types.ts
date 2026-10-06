@@ -1,6 +1,6 @@
 export type Tone = "success" | "warning" | "danger" | "primary" | "neutral";
 
-export type User = { id: number; email: string; name: string; workspace_name: string; created_at: string };
+export type User = { id: number; email: string; name: string; workspace_name: string; role: "owner" | "member"; created_at: string };
 
 export type Ref = { id: number; username: string; color: string; initials: string; status?: string };
 

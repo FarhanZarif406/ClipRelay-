@@ -33,7 +33,10 @@ def register(body: RegisterIn, db: DB):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Registration is closed — ask an existing member to invite you")
     if db.scalar(select(User).where(func.lower(User.email) == body.email.lower())):
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
-    user = User(email=body.email.lower(), password_hash=hash_password(body.password), name=body.name, workspace_name=body.workspace_name)
+    user = User(
+        email=body.email.lower(), password_hash=hash_password(body.password), name=body.name,
+        workspace_name=body.workspace_name, role="member" if has_users else "owner",
+    )
     db.add(user)
     db.flush()
     activity.record(db, "Auth", f"User {user.email} registered", event="user_registered")

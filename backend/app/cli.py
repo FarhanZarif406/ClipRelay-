@@ -32,7 +32,8 @@ def main(argv: list[str]) -> int:
             if db.scalar(select(User).where(func.lower(User.email) == email)):
                 print(f"{email} already exists")
                 return 1
-            db.add(User(email=email, password_hash=hash_password(password), name=name))
+            first = not db.scalar(select(func.count(User.id)))
+            db.add(User(email=email, password_hash=hash_password(password), name=name, role="owner" if first else "member"))
         print(f"Created {email}")
         return 0
     print(f"unknown command {command}")

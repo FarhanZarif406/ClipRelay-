@@ -28,3 +28,19 @@ def test_team_members(client, auth):
     users = client.get("/api/users", headers=auth).json()
     assert {u["email"] for u in users} == {"alex@example.com", "sam@example.com"}
     assert client.delete(f"/api/users/{users[0]['id']}", headers=auth).status_code == 400  # can't remove self
+
+
+def test_first_user_is_owner_and_member_restrictions(client, auth, member_auth):
+    assert client.get("/api/auth/me", headers=auth).json()["role"] == "owner"
+    assert client.get("/api/auth/me", headers=member_auth).json()["role"] == "member"
+    assert client.post("/api/users", headers=member_auth, json={"email": "x@example.com", "password": "password123"}).status_code == 403
+
+
+def test_promote_demote_and_last_owner(client, auth, member_auth):
+    users = {u["email"]: u for u in client.get("/api/users", headers=auth).json()}
+    owner_id, sam_id = users["alex@example.com"]["id"], users["sam@example.com"]["id"]
+    # the last owner cannot be demoted
+    assert client.patch(f"/api/users/{owner_id}/role", headers=auth, json={"role": "member"}).status_code == 400
+    assert client.patch(f"/api/users/{sam_id}/role", headers=auth, json={"role": "owner"}).json()["role"] == "owner"
+    assert client.patch(f"/api/users/{owner_id}/role", headers=member_auth, json={"role": "member"}).json()["role"] == "member"
+    assert client.patch(f"/api/users/{sam_id}/role", headers=auth, json={"role": "member"}).status_code == 403

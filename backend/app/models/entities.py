@@ -47,6 +47,11 @@ class User(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(120), default="")
     workspace_name: Mapped[str] = mapped_column(String(120), default="My Workspace")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    role: Mapped[str] = mapped_column(String(16), default="member", server_default="member")  # owner | member
+
+    @property
+    def is_owner(self) -> bool:
+        return self.role == "owner"
 
 
 class AppSetting(Base):

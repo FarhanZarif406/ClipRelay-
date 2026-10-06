@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -24,7 +25,12 @@ class UserOut(BaseModel):
     email: str
     name: str
     workspace_name: str
+    role: str
     created_at: datetime
+
+
+class RoleIn(BaseModel):
+    role: Literal["owner", "member"]
 
 
 class TokenOut(BaseModel):

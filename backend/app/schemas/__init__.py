@@ -1,4 +1,4 @@
-from app.schemas.auth import LoginIn, RegisterIn, TokenOut, UserCreate, UserOut
+from app.schemas.auth import LoginIn, RegisterIn, RoleIn, TokenOut, UserCreate, UserOut
 from app.schemas.jobs import JobUpdate
 from app.schemas.prompts import PromptIn, PromptOut, PromptTestIn, PromptTestOut
 from app.schemas.settings import AuditIn, NotificationsIn, PolicyIn
@@ -17,6 +17,7 @@ __all__ = [
     "PromptTestIn",
     "PromptTestOut",
     "RegisterIn",
+    "RoleIn",
     "SourceUpdate",
     "TikTokUpdate",
     "TokenOut",

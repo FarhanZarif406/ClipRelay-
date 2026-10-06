@@ -127,3 +127,11 @@ def fake_media(monkeypatch):
     monkeypatch.setattr(media, "download", download)
     monkeypatch.setattr(media, "probe", probe)
     return durations
+
+
+@pytest.fixture
+def member_auth(client, auth):
+    r = client.post("/api/users", headers=auth, json={"email": "sam@example.com", "password": "password123", "name": "Sam"})
+    assert r.status_code == 201, r.text
+    token = client.post("/api/auth/login", json={"email": "sam@example.com", "password": "password123"}).json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}

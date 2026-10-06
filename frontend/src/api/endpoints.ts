@@ -105,4 +105,5 @@ export const users = {
   list: () => api<User[]>("/users"),
   create: (body: { email: string; password: string; name: string }) => api<User>("/users", { method: "POST", body }),
   remove: (id: number) => api<void>(`/users/${id}`, { method: "DELETE" }),
+  setRole: (id: number, role: "owner" | "member") => api<User>(`/users/${id}/role`, { method: "PATCH", body: { role } }),
 };
