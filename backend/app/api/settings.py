@@ -5,14 +5,14 @@ import tempfile
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
-from app.api.deps import DB, CurrentUser
+from app.api.deps import DB, CurrentUser, OwnerUser
 from app.config import get_settings
 from app.integrations import instagram, llm, tiktok, transcription
 from app.integrations.http import ApiError
 from app.models import InstagramSource, TikTokAccount, TikTokStatus
 from app.schemas import AuditIn, NotificationsIn, PolicyIn
 from app.security import decrypt
-from app.services import activity, notify, workspace_settings
+from app.services import activity, credentials, notify, workspace_settings
 from app.services.storage import get_storage
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -77,33 +77,39 @@ def _mask(value: str, prefix: int = 6) -> str:
 
 
 @router.get("/integrations")
-def integrations(_: CurrentUser):
+def integrations(user: CurrentUser):
+    """Status of every integration. Masked values are only included for owners."""
     s = get_settings()
+    ig_id, tt_key = credentials.get("instagram.app_id"), credentials.get("tiktok.client_key")
     rows = [
-        ("llm", f"LLM API · {s.llm_provider} · {s.llm_model}", s.llm_api_key),
-        ("instagram", "Instagram Graph API", s.instagram_app_id and f"{s.instagram_app_id}:{s.instagram_app_secret}"),
-        ("tiktok", "TikTok Content Posting API", s.tiktok_client_key),
-        ("storage", f"Storage · {s.storage_backend}", s.s3_bucket if s.storage_backend == "s3" else os.path.abspath(s.storage_local_path)),
-        ("transcription", "Transcription (language gate)", s.transcription_api_key),
-        ("ffmpeg", "FFmpeg / ffprobe", s.ffprobe_path),
+        ("llm", f"LLM API · {s.llm_provider} · {s.llm_model}", s.llm_api_key, "env" if s.llm_api_key else None),
+        ("instagram", "Instagram Graph API", ig_id and credentials.get("instagram.app_secret") and ig_id, credentials.source("instagram.app_id")),
+        ("tiktok", "TikTok Content Posting API", tt_key and credentials.get("tiktok.client_secret") and tt_key, credentials.source("tiktok.client_key")),
+        ("storage", f"Storage · {s.storage_backend}", s.s3_bucket if s.storage_backend == "s3" else os.path.abspath(s.storage_local_path), "env"),
+        ("transcription", "Transcription (language gate)", credentials.get("transcription.api_key"), credentials.source("transcription.api_key")),
+        ("ffmpeg", "FFmpeg / ffprobe", s.ffprobe_path, "env"),
     ]
     out = []
-    for key, name, value in rows:
-        masked = value if key in ("storage", "ffmpeg") else _mask(value or "")
-        out.append({"key": key, "name": name, "masked": masked, "configured": bool(value)})
+    for key, name, value, origin in rows:
+        item = {"key": key, "name": name, "configured": bool(value), "source": origin if value else None}
+        if user.is_owner:
+            item["masked"] = value if key in ("storage", "ffmpeg") else _mask(value or "")
+        else:
+            item["masked"] = "Configured" if value else "Needs setup"
+        out.append(item)
     return out
 
 
 @router.post("/integrations/{key}/test")
-def test_integration(key: str, db: DB, _: CurrentUser):
+def test_integration(key: str, db: DB, _: OwnerUser):
     s = get_settings()
     try:
         if key == "llm":
             reply = llm.complete("Reply with the single word OK.", max_tokens=5)
             message = f"{s.llm_model} replied: {reply[:20]}"
         elif key == "instagram":
-            if not s.instagram_app_id:
-                raise ApiError("INSTAGRAM_APP_ID is not set")
+            if not credentials.get("instagram.app_id"):
+                raise ApiError("Instagram App ID is not set")
             source = db.scalar(select(InstagramSource).where(InstagramSource.access_token_enc.is_not(None)).limit(1))
             if not source:
                 message = "App credentials set · connect an account to verify tokens"
@@ -111,8 +117,8 @@ def test_integration(key: str, db: DB, _: CurrentUser):
                 profile = instagram.get_profile(decrypt(source.access_token_enc) or "")
                 message = f"Token valid for @{profile.get('username')}"
         elif key == "tiktok":
-            if not s.tiktok_client_key:
-                raise ApiError("TIKTOK_CLIENT_KEY is not set")
+            if not credentials.get("tiktok.client_key"):
+                raise ApiError("TikTok client key is not set")
             account = db.scalar(select(TikTokAccount).where(TikTokAccount.status == TikTokStatus.ACTIVE).limit(1))
             if not account:
                 message = "App credentials set · connect an account to verify tokens"
@@ -136,7 +142,7 @@ def test_integration(key: str, db: DB, _: CurrentUser):
             message = "Storage is writable"
         elif key == "transcription":
             if not transcription.enabled():
-                raise ApiError("TRANSCRIPTION_API_KEY is not set (captions are used for language detection instead)")
+                raise ApiError("Transcription API key is not set (captions are used for language detection instead)")
             message = "Transcription key configured"
         elif key == "ffmpeg":
             out = subprocess.run([s.ffprobe_path, "-version"], capture_output=True, text=True, timeout=10, check=True).stdout

@@ -18,6 +18,8 @@ TT_EXPIRING_WINDOW = timedelta(days=3)
 
 def instagram_token(db: Session, source: InstagramSource) -> str:
     """Return a valid Instagram token, refreshing the 60-day long-lived token when it's close to expiry."""
+    if source.needs_reconnect:
+        raise AuthError(f"@{source.username} must reconnect — the Instagram app credentials changed")
     token = decrypt(source.access_token_enc)
     if not token:
         raise AuthError(f"@{source.username} has no Instagram token — reconnect it")

@@ -35,7 +35,7 @@ from app.integrations import http as http_module  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import InstagramSource, PromptTemplate, TikTokAccount, utcnow  # noqa: E402
 from app.security import encrypt  # noqa: E402
-from app.services import dispatch, media  # noqa: E402
+from app.services import credentials, dispatch, media  # noqa: E402
 from app.services.prompts import DEFAULT_TEMPLATE  # noqa: E402
 
 
@@ -44,6 +44,7 @@ def fresh_db(monkeypatch):
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     dispatch.sent.clear()
+    credentials.bust()
     monkeypatch.setattr(http_module.time, "sleep", lambda *_: None)
     yield
 

@@ -13,7 +13,7 @@ from app.integrations.http import ApiError
 from app.models import InstagramSource, PromptTemplate, TikTokAccount, utcnow
 from app.schemas import BulkAddIn, BulkUpdateIn, SourceUpdate
 from app.security import create_oauth_state, encrypt, verify_oauth_state
-from app.services import activity, dispatch, serializers, workspace_settings
+from app.services import activity, credentials, dispatch, serializers, workspace_settings
 
 router = APIRouter(tags=["instagram"])
 COLORS = ["blue", "orange", "pink", "green", "violet"]
@@ -31,9 +31,8 @@ def _get(db, source_id: int) -> InstagramSource:
 
 @router.get("/instagram/oauth/start")
 def oauth_start(user: CurrentUser):
-    s = get_settings()
-    if not s.instagram_app_id or not s.instagram_app_secret:
-        raise HTTPException(400, "Instagram app is not configured (INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET)")
+    if not credentials.get("instagram.app_id") or not credentials.get("instagram.app_secret"):
+        raise HTTPException(400, "Instagram app is not configured — add the App ID and secret in Settings → API keys")
     return {"url": instagram.authorize_url(create_oauth_state("instagram", user.id))}
 
 
@@ -168,7 +167,7 @@ def bulk_add(body: BulkAddIn, db: DB, user: CurrentUser):
         activity.record(db, "Instagram", f"{len(activated)} sources activated: " + ", ".join(f"@{u}" for u in activated[:5]), event="sources_activated")
     db.commit()
     authorize = None
-    if not_authorized and get_settings().instagram_app_id:
+    if not_authorized and credentials.get("instagram.app_id"):
         authorize = instagram.authorize_url(create_oauth_state("instagram", user.id))
     return {"activated": activated, "already_active": already, "not_authorized": not_authorized, "invalid": invalid, "authorize_url": authorize}
 

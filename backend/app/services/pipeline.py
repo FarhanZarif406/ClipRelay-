@@ -21,7 +21,6 @@ from app.models import (
     InstagramSource,
     Job,
     JobStatus,
-    TikTokAccount,
     TikTokStatus,
     Video,
     VideoStatus,

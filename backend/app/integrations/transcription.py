@@ -1,6 +1,6 @@
 """Optional speech-to-text (OpenAI-compatible /audio/transcriptions) used by the language gate."""
 
-from app.config import get_settings
+from app.services import credentials
 from app.integrations.http import ApiError, request
 
 LANGUAGE_NAMES = {
@@ -11,18 +11,18 @@ LANGUAGE_NAMES = {
 
 
 def enabled() -> bool:
-    return bool(get_settings().transcription_api_key)
+    return bool(credentials.get("transcription.api_key"))
 
 
 def transcribe(audio_path: str) -> tuple[str, str | None]:
     """Return (transcript, ISO language code or None)."""
-    s = get_settings()
+    base_url = credentials.get("transcription.base_url") or "https://api.openai.com/v1"
     with open(audio_path, "rb") as fh:
         response = request(
             "POST",
-            f"{s.transcription_base_url.rstrip('/')}/audio/transcriptions",
-            headers={"Authorization": f"Bearer {s.transcription_api_key}"},
-            data={"model": s.transcription_model, "response_format": "verbose_json"},
+            f"{base_url.rstrip('/')}/audio/transcriptions",
+            headers={"Authorization": f"Bearer {credentials.get('transcription.api_key')}"},
+            data={"model": credentials.get("transcription.model") or "whisper-1", "response_format": "verbose_json"},
             files={"file": ("audio.mp3", fh, "audio/mpeg")},
             timeout=120,
         )

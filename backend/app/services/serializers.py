@@ -38,6 +38,7 @@ def source(s: InstagramSource) -> dict:
         "prompt_template_id": s.prompt_template_id,
         "prompt_template_name": s.prompt_template.name if s.prompt_template else None,
         "videos_found": s.videos_found,
+        "needs_reconnect": s.needs_reconnect,
         "token_expires_at": s.token_expires_at,
         "tiktok_accounts": [tiktok_ref(a) for a in s.tiktok_accounts],
     }

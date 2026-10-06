@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import false as sa_false
 from sqlalchemy import Boolean, Column, Float, ForeignKey, Index, Integer, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -54,6 +55,19 @@ class User(Base, TimestampMixin):
         return self.role == "owner"
 
 
+class Credential(Base):
+    """Third-party credentials editable from Settings (values Fernet-encrypted). Falls back to .env when absent."""
+
+    __tablename__ = "credentials"
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value_enc: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="unverified")  # unverified | valid | invalid
+    last_error: Mapped[str | None] = mapped_column(Text)
+    verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
+
+
 class AppSetting(Base):
     __tablename__ = "settings"
     key: Mapped[str] = mapped_column(String(80), primary_key=True)
@@ -89,6 +103,7 @@ class InstagramSource(Base, TimestampMixin):
     approval_mode: Mapped[str] = mapped_column(String(16), default="auto")  # auto | manual
     prompt_template_id: Mapped[int | None] = mapped_column(ForeignKey("prompt_templates.id", ondelete="SET NULL"))
     videos_found: Mapped[int] = mapped_column(Integer, default=0)
+    needs_reconnect: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())
 
     tiktok_accounts: Mapped[list["TikTokAccount"]] = relationship(
         secondary=source_tiktok_links, back_populates="sources", lazy="selectin"

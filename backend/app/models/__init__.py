@@ -2,6 +2,7 @@ from app.models.base import utcnow
 from app.models.entities import (
     ActivityLog,
     AppSetting,
+    Credential,
     InstagramSource,
     Job,
     JobEvent,
@@ -20,6 +21,7 @@ from app.models.entities import (
 __all__ = [
     "ActivityLog",
     "AppSetting",
+    "Credential",
     "InstagramSource",
     "Job",
     "JobEvent",

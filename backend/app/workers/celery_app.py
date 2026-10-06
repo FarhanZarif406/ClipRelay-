@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.signals import worker_process_init
 
 from app.config import get_settings
 
@@ -22,3 +23,11 @@ celery_app.conf.update(
         "refresh-tokens": {"task": "app.workers.tasks.refresh_tokens", "schedule": 15 * 60.0},
     },
 )
+
+
+@worker_process_init.connect
+def _listen_for_credential_changes(**_kwargs) -> None:
+    """Each worker process drops its credential/LLM caches when Settings change them."""
+    from app.services import credentials
+
+    credentials.start_listener()

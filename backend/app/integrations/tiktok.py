@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from app.config import get_settings
+from app.services import credentials
 from app.integrations.http import ApiError, AuthError, RateLimitError, request
 
 AUTHORIZE_URL = "https://www.tiktok.com/v2/auth/authorize/"
@@ -57,7 +58,7 @@ def redirect_uri() -> str:
 def authorize_url(state: str) -> str:
     s = get_settings()
     query = {
-        "client_key": s.tiktok_client_key,
+        "client_key": credentials.get("tiktok.client_key"),
         "scope": s.tiktok_scopes,
         "response_type": "code",
         "redirect_uri": redirect_uri(),
@@ -101,14 +102,14 @@ def _token_set(data: dict) -> TokenSet:
 
 
 def exchange_code(code: str) -> TokenSet:
-    s = get_settings()
+    get_settings()
     data = _check(
         request(
             "POST",
             f"{API}/oauth/token/",
             data={
-                "client_key": s.tiktok_client_key,
-                "client_secret": s.tiktok_client_secret,
+                "client_key": credentials.get("tiktok.client_key"),
+                "client_secret": credentials.get("tiktok.client_secret"),
                 "code": code,
                 "grant_type": "authorization_code",
                 "redirect_uri": redirect_uri(),
@@ -120,14 +121,14 @@ def exchange_code(code: str) -> TokenSet:
 
 
 def refresh(refresh_token: str) -> TokenSet:
-    s = get_settings()
+    get_settings()
     data = _check(
         request(
             "POST",
             f"{API}/oauth/token/",
             data={
-                "client_key": s.tiktok_client_key,
-                "client_secret": s.tiktok_client_secret,
+                "client_key": credentials.get("tiktok.client_key"),
+                "client_secret": credentials.get("tiktok.client_secret"),
                 "grant_type": "refresh_token",
                 "refresh_token": refresh_token,
             },
@@ -138,11 +139,11 @@ def refresh(refresh_token: str) -> TokenSet:
 
 
 def revoke(access_token: str) -> None:
-    s = get_settings()
+    get_settings()
     request(
         "POST",
         f"{API}/oauth/revoke/",
-        data={"client_key": s.tiktok_client_key, "client_secret": s.tiktok_client_secret, "token": access_token},
+        data={"client_key": credentials.get("tiktok.client_key"), "client_secret": credentials.get("tiktok.client_secret"), "token": access_token},
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         retries=1,
     )

@@ -8,6 +8,7 @@ from app.api import api_router
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import PromptTemplate
+from app.services import credentials
 from app.services.prompts import DEFAULT_TEMPLATE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -32,6 +33,11 @@ def health():
         return {"status": "ok"}
     finally:
         db.close()
+
+
+@app.on_event("startup")
+def start_credential_listener() -> None:
+    credentials.start_listener()
 
 
 @app.on_event("startup")

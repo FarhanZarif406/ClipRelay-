@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from app.config import get_settings
+from app.services import credentials
 from app.integrations.http import ApiError, AuthError, RateLimitError, request
 
 AUTHORIZE_URL = "https://www.instagram.com/oauth/authorize"
@@ -58,7 +59,7 @@ def redirect_uri() -> str:
 def authorize_url(state: str) -> str:
     s = get_settings()
     query = {
-        "client_id": s.instagram_app_id,
+        "client_id": credentials.get("instagram.app_id"),
         "redirect_uri": redirect_uri(),
         "response_type": "code",
         "scope": s.instagram_scopes,
@@ -90,14 +91,14 @@ def _expires(seconds) -> datetime | None:
 
 def exchange_code(code: str) -> TokenResult:
     """Exchange the OAuth code for a short-lived token, then upgrade it to a 60-day long-lived token."""
-    s = get_settings()
+    get_settings()
     data = _check(
         request(
             "POST",
             TOKEN_URL,
             data={
-                "client_id": s.instagram_app_id,
-                "client_secret": s.instagram_app_secret,
+                "client_id": credentials.get("instagram.app_id"),
+                "client_secret": credentials.get("instagram.app_secret"),
                 "grant_type": "authorization_code",
                 "redirect_uri": redirect_uri(),
                 "code": code,
@@ -111,7 +112,7 @@ def exchange_code(code: str) -> TokenResult:
         request(
             "GET",
             f"{GRAPH}/access_token",
-            params={"grant_type": "ig_exchange_token", "client_secret": s.instagram_app_secret, "access_token": short},
+            params={"grant_type": "ig_exchange_token", "client_secret": credentials.get("instagram.app_secret"), "access_token": short},
         )
     )
     return TokenResult(long_lived["access_token"], _expires(long_lived.get("expires_in")), str(data.get("user_id") or ""))

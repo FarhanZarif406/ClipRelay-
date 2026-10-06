@@ -11,7 +11,7 @@ from app.integrations.http import ApiError
 from app.models import Job, JobStatus, TikTokAccount, TikTokStatus, Violation
 from app.schemas import TikTokUpdate
 from app.security import create_oauth_state, decrypt, verify_oauth_state
-from app.services import activity, serializers, stats, tokens
+from app.services import activity, credentials, serializers, stats, tokens
 
 router = APIRouter(tags=["tiktok"])
 COLORS = ["blue", "orange", "pink", "violet", "green"]
@@ -20,8 +20,8 @@ COLORS = ["blue", "orange", "pink", "violet", "green"]
 @router.get("/tiktok/oauth/start")
 def oauth_start(db: DB, user: CurrentUser):
     s = get_settings()
-    if not s.tiktok_client_key or not s.tiktok_client_secret:
-        raise HTTPException(400, "TikTok app is not configured (TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET)")
+    if not credentials.get("tiktok.client_key") or not credentials.get("tiktok.client_secret"):
+        raise HTTPException(400, "TikTok app is not configured — add the client key and secret in Settings → API keys")
     active = db.scalar(select(func.count(TikTokAccount.id)).where(TikTokAccount.status != TikTokStatus.REVOKED)) or 0
     if active >= s.max_tiktok_accounts:
         raise HTTPException(400, f"Limit of {s.max_tiktok_accounts} TikTok accounts reached")
