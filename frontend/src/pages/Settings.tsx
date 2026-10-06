@@ -24,7 +24,7 @@ function TikTokAuditToggle() {
 }
 
 /** Integrations that are configured on the server only (storage, FFmpeg) or elsewhere in Settings. */
-const CARD_KEYS = new Set(["instagram", "tiktok", "llm"]);
+const CARD_KEYS = new Set(["instagram", "tiktok", "llm", "transcription"]);
 
 function OtherIntegrations({ isOwner }: { isOwner: boolean }) {
   const { data } = useQuery({ queryKey: ["settings", "integrations"], queryFn: settings.integrations });

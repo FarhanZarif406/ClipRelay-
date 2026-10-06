@@ -14,6 +14,7 @@ router = APIRouter(prefix="/credentials", tags=["credentials"])
 CARDS = {
     "instagram": {"title": "Instagram app", "redirect": "/api/instagram/oauth/callback", "docs": "https://github.com/FarhanZarif406/ClipRelay-#2-create-the-meta-instagram-app"},
     "tiktok": {"title": "TikTok app", "redirect": "/api/tiktok/oauth/callback", "docs": "https://github.com/FarhanZarif406/ClipRelay-#3-create-the-tiktok-app"},
+    "transcription": {"title": "Transcription (language gate)", "docs": "https://github.com/FarhanZarif406/ClipRelay-#4-llm-transcription-storage"},
 }
 # Changing these means tokens issued under the old app no longer belong to the configured app.
 APP_IDENTITY = {"instagram": ["instagram.app_id", "instagram.app_secret"], "tiktok": ["tiktok.client_key", "tiktok.client_secret"]}
@@ -98,8 +99,9 @@ def _card(db, group: str, user: User) -> dict:
     card = {
         "group": group,
         "title": meta["title"],
-        "configured": all(f["configured"] for f in fields),
-        "state": status["state"] if any(f["configured"] for f in fields) else "none",
+        # Base URL / model have built-in defaults, so a card counts as set up once its secrets are.
+        "configured": all(f["configured"] for f in fields if f["secret"]),
+        "state": status["state"] if any(f["configured"] for f in fields if f["secret"]) else "none",
         "connected_accounts": _connected(db, group),
     }
     if user.is_owner:
