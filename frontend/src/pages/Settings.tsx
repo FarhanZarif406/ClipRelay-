@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { credentials, settings, users } from "@/api/endpoints";
 import type { NotificationSettings } from "@/api/types";
+import { AIModels } from "@/components/AIModels";
 import { CredentialCard } from "@/components/CredentialCard";
 import { Icon } from "@/components/Icon";
 import { Field } from "@/components/Modal";
@@ -11,7 +12,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { initialsOf } from "@/lib/format";
 
-const TABS = ["API keys", "Notifications", "Team members", "Appearance"] as const;
+const TABS = ["API keys", "AI models", "Notifications", "Team members", "Appearance"] as const;
 type Tab = (typeof TABS)[number];
 
 function TikTokAuditToggle() {
@@ -23,7 +24,7 @@ function TikTokAuditToggle() {
 }
 
 /** Integrations that are configured on the server only (storage, FFmpeg) or elsewhere in Settings. */
-const CARD_KEYS = new Set(["instagram", "tiktok"]);
+const CARD_KEYS = new Set(["instagram", "tiktok", "llm"]);
 
 function OtherIntegrations({ isOwner }: { isOwner: boolean }) {
   const { data } = useQuery({ queryKey: ["settings", "integrations"], queryFn: settings.integrations });
@@ -94,9 +95,11 @@ function Team() {
 }
 
 export default function Settings() {
+  const { user } = useAuth();
   const [tab, setTab] = useState<Tab>("API keys");
   return <><PageHeader title="Settings" description="Manage integrations, notifications, team access, and appearance."/><div className="settings-layout"><div className="settings-nav">{TABS.map(x => <button className={tab === x ? "active" : ""} key={x} onClick={() => setTab(x)}>{x}</button>)}</div><div className="settings-content">
     {tab === "API keys" && <><ApiKeys/><Appearance/></>}
+    {tab === "AI models" && <AIModels isOwner={user?.role === "owner"}/>}
     {tab === "Notifications" && <Notifications/>}
     {tab === "Team members" && <Team/>}
     {tab === "Appearance" && <Appearance/>}

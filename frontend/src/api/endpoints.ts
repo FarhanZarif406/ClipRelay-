@@ -1,6 +1,6 @@
 import { api } from "./client";
 import type {
-  ActivityLog, AuditItem, AuditSettings, CredentialCard, CredentialResult, DailyReport, Integration, Job, Nav, NotificationSettings, Page, Policy, Prompt,
+  ActivityLog, AuditItem, AuditSettings, CredentialCard, CredentialResult, DailyReport, LLMProvider, LLMProviderList, LLMProviderName, Integration, Job, Nav, NotificationSettings, Page, Policy, Prompt,
   Source, Summary, TikTokAccount, User, Video, Violation,
 } from "./types";
 
@@ -108,6 +108,19 @@ export const credentials = {
     api<CredentialResult>(`/credentials/${group}`, { method: "PUT", body: { values, confirm_reconnect } }),
   remove: (group: string, confirm_reconnect = false) =>
     api<{ fallback: "env" | "none"; card: CredentialCard }>(`/credentials/${group}`, { method: "DELETE", query: { confirm_reconnect } }),
+};
+
+export type LLMProviderBody = { label: string; provider: LLMProviderName; api_key: string; base_url: string | null; model: string; max_tokens: number; temperature: number | null };
+
+export const llmProviders = {
+  list: () => api<LLMProviderList>("/llm-providers"),
+  validate: (body: { provider: LLMProviderName; api_key: string; base_url: string | null; provider_id?: number }) =>
+    api<{ models: string[] }>("/llm-providers/validate", { method: "POST", body }),
+  create: (body: LLMProviderBody) => api<LLMProvider>("/llm-providers", { method: "POST", body }),
+  update: (id: number, body: Partial<LLMProviderBody> & { clear_temperature?: boolean }) => api<LLMProvider>(`/llm-providers/${id}`, { method: "PATCH", body }),
+  remove: (id: number, new_default_id?: number) => api<{ fallback: "env" | "none" | null }>(`/llm-providers/${id}`, { method: "DELETE", query: { new_default_id } }),
+  makeDefault: (id: number) => api<LLMProvider>(`/llm-providers/${id}/default`, { method: "POST" }),
+  test: (id: number) => api<{ ok: boolean; message: string; item: LLMProvider }>(`/llm-providers/${id}/test`, { method: "POST" }),
 };
 
 export const users = {

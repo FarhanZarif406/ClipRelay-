@@ -193,6 +193,24 @@ export type DailyReport = {
 
 export type Integration = { key: string; name: string; masked: string; configured: boolean; source: "app" | "env" | null };
 
+export type LLMProviderName = "anthropic" | "openai" | "gemini" | "openrouter" | "groq" | "mistral" | "custom";
+export type LLMProvider = {
+  id: number;
+  label: string;
+  provider: LLMProviderName;
+  model: string;
+  base_url: string | null;
+  max_tokens: number;
+  temperature: number | null;
+  is_default: boolean;
+  status: "unverified" | "valid" | "invalid";
+  last_error: string | null;
+  last_tested_at: string | null;
+  updated_at: string;
+  masked_key?: string;
+};
+export type LLMProviderList = { items: LLMProvider[]; providers: LLMProviderName[]; env_fallback: { configured: boolean; provider: string | null; model: string | null; active: boolean } };
+
 export type CredentialState = "none" | "env" | "unverified" | "valid" | "invalid";
 export type CredentialField = { key: string; label: string; secret: boolean; configured: boolean; source: "app" | "env" | null; value?: string; masked?: string };
 export type CredentialCard = {
