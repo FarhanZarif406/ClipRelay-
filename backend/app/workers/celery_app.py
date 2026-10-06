@@ -21,6 +21,7 @@ celery_app.conf.update(
     beat_schedule={
         "scheduler-tick": {"task": "app.workers.tasks.tick", "schedule": float(settings.scheduler_tick_seconds)},
         "refresh-tokens": {"task": "app.workers.tasks.refresh_tokens", "schedule": 15 * 60.0},
+        "validate-credentials": {"task": "app.workers.tasks.validate_credentials", "schedule": 24 * 60 * 60.0},
     },
 )
 

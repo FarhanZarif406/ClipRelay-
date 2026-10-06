@@ -2,7 +2,7 @@ import logging
 
 from app.db import session_scope
 from app.integrations.http import ApiError, AuthError, backoff_delay
-from app.services import pipeline, tokens
+from app.services import credential_checks, credentials, pipeline, tokens
 from app.services.events import get_redis
 from app.workers.celery_app import celery_app
 
@@ -84,3 +84,12 @@ def check_job(self, job_id: int) -> str | None:
 def refresh_tokens() -> dict:
     with session_scope() as db:
         return tokens.refresh_all(db)
+
+
+@celery_app.task
+def validate_credentials() -> dict:
+    """Daily: re-check stored credentials and AI models, alert on failures."""
+    with session_scope() as db:
+        result = credential_checks.run_daily(db)
+    credentials.changed()
+    return result
