@@ -210,7 +210,7 @@ def detect_video_language(path: str, video: Video) -> tuple[str, float]:
         video.transcript = transcript
         if not transcript.strip():
             return whisper_language or "und", 0.0
-        if not get_settings().llm_api_key and whisper_language:
+        if not llm.is_configured() and whisper_language:
             return whisper_language, 0.9
         return llm.detect_language(transcript)
     text = f"{video.original_title}\n{video.original_caption}"

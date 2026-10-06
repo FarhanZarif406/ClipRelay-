@@ -146,6 +146,25 @@ class PromptTemplate(Base, TimestampMixin):
     hashtags_prompt: Mapped[str] = mapped_column(Text, default="")
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    llm_provider_id: Mapped[int | None] = mapped_column(ForeignKey("llm_providers.id", ondelete="SET NULL"))
+
+
+class LLMProvider(Base, TimestampMixin):
+    """An AI model connection (API key encrypted). One is the workspace default; templates may pick another."""
+
+    __tablename__ = "llm_providers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    label: Mapped[str] = mapped_column(String(120))
+    provider: Mapped[str] = mapped_column(String(24))  # anthropic | openai | gemini | openrouter | groq | mistral | custom
+    api_key_enc: Mapped[str] = mapped_column(Text)
+    base_url: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(String(200))
+    max_tokens: Mapped[int] = mapped_column(Integer, default=600)
+    temperature: Mapped[float | None] = mapped_column(Float)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(16), default="unverified")  # unverified | valid | invalid
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_tested_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class PromptTemplateVersion(Base):

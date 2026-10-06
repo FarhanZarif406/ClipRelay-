@@ -81,8 +81,9 @@ def integrations(user: CurrentUser):
     """Status of every integration. Masked values are only included for owners."""
     s = get_settings()
     ig_id, tt_key = credentials.get("instagram.app_id"), credentials.get("tiktok.client_key")
+    llm_cfg = llm.resolve()
     rows = [
-        ("llm", f"LLM API · {s.llm_provider} · {s.llm_model}", s.llm_api_key, "env" if s.llm_api_key else None),
+        ("llm", f"AI model · {llm_cfg.label or llm_cfg.provider} · {llm_cfg.model}" if llm_cfg else "AI model", llm_cfg.api_key if llm_cfg else "", ("env" if llm_cfg and llm_cfg.id is None else "app") if llm_cfg else None),
         ("instagram", "Instagram Graph API", ig_id and credentials.get("instagram.app_secret") and ig_id, credentials.source("instagram.app_id")),
         ("tiktok", "TikTok Content Posting API", tt_key and credentials.get("tiktok.client_secret") and tt_key, credentials.source("tiktok.client_key")),
         ("storage", f"Storage · {s.storage_backend}", s.s3_bucket if s.storage_backend == "s3" else os.path.abspath(s.storage_local_path), "env"),
@@ -106,7 +107,7 @@ def test_integration(key: str, db: DB, _: OwnerUser):
     try:
         if key == "llm":
             reply = llm.complete("Reply with the single word OK.", max_tokens=5)
-            message = f"{s.llm_model} replied: {reply[:20]}"
+            message = f"{llm.resolve().model} replied: {reply[:20]}"
         elif key == "instagram":
             if not credentials.get("instagram.app_id"):
                 raise ApiError("Instagram App ID is not set")

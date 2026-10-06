@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import func, select, update
 
 from app.api.deps import DB, CurrentUser
-from app.config import get_settings
+from app.integrations import llm
 from app.integrations.http import ApiError
 from app.models import PromptTemplate, PromptTemplateVersion
 from app.schemas import PromptIn, PromptOut, PromptTestIn, PromptTestOut
@@ -32,8 +32,13 @@ def list_prompts(db: DB, _: CurrentUser):
 
 @router.get("/meta")
 def meta(_: CurrentUser):
-    s = get_settings()
-    return {"variables": prompts.VARIABLES, "provider": s.llm_provider, "model": s.llm_model, "configured": bool(s.llm_api_key)}
+    cfg = llm.resolve()
+    return {
+        "variables": prompts.VARIABLES,
+        "provider": cfg.provider if cfg else None,
+        "model": cfg.model if cfg else None,
+        "configured": bool(cfg and cfg.api_key),
+    }
 
 
 @router.post("", response_model=PromptOut, status_code=201)
