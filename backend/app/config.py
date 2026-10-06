@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     transcription_base_url: str = "https://api.openai.com/v1"
     transcription_model: str = "whisper-1"
 
+    # Optional email alerts (can also be set in Settings → Notifications)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_address: str = ""
+    smtp_security: Literal["starttls", "ssl", "none"] = "starttls"
+
     # Storage
     storage_backend: Literal["local", "s3"] = "local"
     storage_local_path: str = "./data/media"

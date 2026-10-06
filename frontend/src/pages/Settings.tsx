@@ -41,7 +41,7 @@ function ApiKeys() {
   const { data } = useQuery({ queryKey: ["credentials"], queryFn: credentials.list });
   return <>
     {!isOwner && <div className="form-note" style={{ marginTop: 0 }}>Only workspace owners can view or change API keys.</div>}
-    {data?.map(card => <CredentialCard key={card.group} card={card} isOwner={isOwner}>{card.group === "tiktok" && isOwner ? <TikTokAuditToggle/> : null}</CredentialCard>)}
+    {data?.filter(card => card.group !== "smtp").map(card => <CredentialCard key={card.group} card={card} isOwner={isOwner}>{card.group === "tiktok" && isOwner ? <TikTokAuditToggle/> : null}</CredentialCard>)}
     <OtherIntegrations isOwner={isOwner}/>
   </>;
 }
@@ -60,15 +60,22 @@ function Notifications() {
   useEffect(() => { if (data) setDraft(data); }, [data]);
   const save = useMutation({ mutationFn: (body: Partial<NotificationSettings>) => settings.saveNotifications(body), onSuccess: d => { queryClient.setQueryData(["settings", "notifications"], d); toast({ title: "Notification settings saved" }); }, onError });
   const test = useMutation({ mutationFn: settings.testNotification, onSuccess: r => toast({ title: r.ok ? "Test sent" : "Test failed", message: r.message, tone: r.ok ? "success" : "danger" }), onError });
+  const testEmail = useMutation({ mutationFn: settings.testEmail, onSuccess: r => toast({ title: r.ok ? "Test email sent" : "Test email failed", message: r.message, tone: r.ok ? "success" : "danger" }), onError });
+  const { user } = useAuth();
+  const isOwner = user?.role === "owner";
+  const smtpCard = useQuery({ queryKey: ["credentials"], queryFn: credentials.list }).data?.find(c => c.group === "smtp");
   if (!draft) return null;
   const flag = (k: "notify_violations" | "notify_failures" | "notify_tokens", label: string, help: string) => <div className="setting-row"><div><strong>{label}</strong><span>{help}</span></div><Toggle checked={draft[k]} onChange={() => setDraft({ ...draft, [k]: !draft[k] })}/></div>;
-  return <Card><div className="card-title">Notifications</div><div className="card-caption">Alerts always appear in the dashboard. Add a webhook (Slack, Discord, or any HTTPS endpoint) to get them elsewhere.</div>
-    <div style={{ marginTop: 16 }}><Field label="Webhook URL" hint="Receives JSON: {text, content, kind}."><input value={draft.webhook_url} onChange={e => setDraft({ ...draft, webhook_url: e.target.value })} placeholder="https://hooks.slack.com/services/…"/></Field></div>
+  return <><Card><div className="card-title">Notifications</div><div className="card-caption">Alerts always appear in the dashboard. Add a webhook (Slack, Discord, or any HTTPS endpoint) and/or email to get them elsewhere.</div>
+    <div style={{ marginTop: 16 }} className="field-row"><Field label="Webhook URL" hint="Receives JSON: {text, content, kind}."><input value={draft.webhook_url} onChange={e => setDraft({ ...draft, webhook_url: e.target.value })} placeholder="https://hooks.slack.com/services/…"/></Field>
+      <Field label="Alert email" hint="Comma-separated. Needs the SMTP settings below."><input value={draft.email} onChange={e => setDraft({ ...draft, email: e.target.value })} placeholder="ops@example.com"/></Field></div>
     {flag("notify_violations", "Violations", "When TikTok flags or removes a video")}
     {flag("notify_failures", "Failed jobs", "When a job fails after all retries")}
     {flag("notify_tokens", "Token problems", "When a TikTok account needs reconnecting")}
-    <div className="modal-foot"><Button onClick={() => test.mutate()} disabled={!data?.webhook_url || test.isPending}>Send test</Button><Button variant="primary" onClick={() => save.mutate(draft)} disabled={save.isPending}>Save</Button></div>
-  </Card>;
+    <div className="modal-foot"><Button onClick={() => test.mutate()} disabled={!data?.webhook_url || test.isPending}>Test webhook</Button><Button onClick={() => testEmail.mutate()} disabled={!data?.email || testEmail.isPending}>{testEmail.isPending ? "Sending…" : "Send test email"}</Button><Button variant="primary" onClick={() => save.mutate(draft)} disabled={save.isPending}>Save</Button></div>
+  </Card>
+  {smtpCard && <CredentialCard card={smtpCard} isOwner={isOwner} presets={[{ label: "Gmail preset", values: { host: "smtp.gmail.com", port: "587", security: "starttls" }, hint: "Gmail: use your full address as username and from address, and a 16-character app password (Google Account → Security → 2-Step Verification → App passwords)." }]}/>}
+  </>;
 }
 
 function Team() {

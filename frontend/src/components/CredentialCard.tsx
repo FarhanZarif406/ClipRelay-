@@ -39,7 +39,9 @@ function MemberCard({ card }: { card: Card_ }) {
   return <Card className="credential-card"><div className="credential-head"><div><div className="card-title">{card.title}</div><div className="card-caption">Managed by the workspace owner.</div></div><Badge tone={card.configured ? "success" : "warning"}>{card.configured ? "Configured" : "Needs setup"}</Badge></div></Card>;
 }
 
-export function CredentialCard({ card, isOwner, children }: { card: Card_; isOwner: boolean; children?: ReactNode }) {
+export type Preset = { label: string; values: Record<string, string>; hint?: string };
+
+export function CredentialCard({ card, isOwner, children, presets }: { card: Card_; isOwner: boolean; children?: ReactNode; presets?: Preset[] }) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const onError = useErrorToast();
@@ -81,6 +83,7 @@ export function CredentialCard({ card, isOwner, children }: { card: Card_; isOwn
   return <Card className="credential-card">
     <div className="credential-head"><div><div className="card-title">{card.title}</div><div className="card-caption">{savedInApp ? "Set in app" : card.state === "env" ? "From .env — saving here overrides it" : "Not configured yet"}{card.verified_at ? ` · verified ${dayTime(card.verified_at)}` : ""}</div></div><CredentialBadge state={card.state} testing={busy}/></div>
     {card.state === "invalid" && card.last_error && !result && <div className="form-error">{card.last_error}</div>}
+    {presets && <div className="inline-form" style={{ marginTop: 0, marginBottom: 12 }}>{presets.map(p => <Button key={p.label} onClick={() => { setValues(v => ({ ...v, ...p.values })); setResult(p.hint ? { ok: null, message: p.hint } : null); }}>{p.label}</Button>)}</div>}
     <div className="credential-fields">
       {card.fields.map(f => <Field key={f.key} label={`${f.label}${f.source ? ` · ${f.source === "app" ? "set in app" : "from .env"}` : ""}`}>
         {f.secret ? <SecretInput value={values[f.key] ?? ""} onChange={v => setValues(x => ({ ...x, [f.key]: v }))} placeholder={f.masked ? `${f.masked} — leave blank to keep` : "Not set"}/>

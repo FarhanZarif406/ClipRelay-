@@ -12,7 +12,7 @@ from app.integrations.http import ApiError
 from app.models import InstagramSource, TikTokAccount, TikTokStatus
 from app.schemas import AuditIn, NotificationsIn, PolicyIn
 from app.security import decrypt
-from app.services import activity, credentials, notify, workspace_settings
+from app.services import activity, credentials, mailer, notify, workspace_settings
 from app.services.storage import get_storage
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -61,6 +61,24 @@ def test_notification(db: DB, _: CurrentUser):
         raise HTTPException(400, "Set a webhook URL first")
     ok = notify.send(db, "violation", "Test notification — your webhook is connected.")
     return {"ok": ok, "message": "Sent" if ok else "Webhook call failed or notifications are disabled"}
+
+
+@router.post("/notifications/test-email")
+def test_email(db: DB, _: CurrentUser):
+    to = notify.recipients(workspace_settings.get(db, "notifications"))
+    if not to:
+        raise HTTPException(400, "Add an alert email address first")
+    if not mailer.configured():
+        raise HTTPException(400, "Configure SMTP first (host and from address)")
+    try:
+        mailer.send(to, "ClipRelay: test email", "This is a test alert from ClipRelay. Email notifications are working.\n\n— ClipRelay")
+    except Exception as exc:
+        activity.record(db, "Settings", f"Test email failed: {type(exc).__name__}", level="warning", event="email_test")
+        db.commit()
+        return {"ok": False, "message": f"Sending failed: {exc}"[:300]}
+    activity.record(db, "Settings", f"Test email sent to {len(to)} recipient(s)", event="email_test")
+    db.commit()
+    return {"ok": True, "message": f"Sent to {', '.join(to)}"}
 
 
 @router.post("/onboarding/complete")

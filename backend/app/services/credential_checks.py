@@ -70,3 +70,25 @@ def check_transcription(values: dict[str, str]) -> tuple[bool | None, str]:
 
 
 VALIDATORS = {"instagram": check_instagram, "tiktok": check_tiktok, "transcription": check_transcription}
+
+
+def check_smtp(values: dict[str, str]) -> tuple[bool | None, str]:
+    import smtplib
+    import socket
+
+    from app.services import mailer
+
+    if not values.get("host") or not values.get("from_address"):
+        return False, "SMTP host and from address are required"
+    if (values.get("security") or "starttls").lower() not in ("starttls", "ssl", "none"):
+        return False, "Security must be starttls, ssl or none"
+    try:
+        mailer.check(values)
+    except smtplib.SMTPAuthenticationError:
+        return False, "The SMTP server rejected the username or password (Gmail needs an app password)"
+    except (smtplib.SMTPException, OSError, socket.timeout, ValueError) as exc:
+        return False, f"Could not connect to {values['host']}:{values.get('port') or 587}: {exc}"
+    return True, "Connected and signed in to the SMTP server"
+
+
+VALIDATORS["smtp"] = check_smtp

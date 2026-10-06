@@ -96,6 +96,7 @@ export const settings = {
   notifications: () => api<NotificationSettings>("/settings/notifications"),
   saveNotifications: (body: Partial<NotificationSettings>) => api<NotificationSettings>("/settings/notifications", { method: "PUT", body }),
   testNotification: () => api<{ ok: boolean; message: string }>("/settings/notifications/test", { method: "POST" }),
+  testEmail: () => api<{ ok: boolean; message: string }>("/settings/notifications/test-email", { method: "POST" }),
   integrations: () => api<Integration[]>("/settings/integrations"),
   testIntegration: (key: string) => api<{ ok: boolean; message: string }>(`/settings/integrations/${key}/test`, { method: "POST" }),
   completeOnboarding: () => api<{ completed: boolean }>("/settings/onboarding/complete", { method: "POST" }),

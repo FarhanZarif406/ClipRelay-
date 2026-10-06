@@ -40,6 +40,12 @@ REGISTRY: dict[str, Spec] = {
     "transcription.api_key": Spec("transcription_api_key", "transcription", "API key"),
     "transcription.base_url": Spec("transcription_base_url", "transcription", "Base URL", secret=False),
     "transcription.model": Spec("transcription_model", "transcription", "Model", secret=False),
+    "smtp.host": Spec("smtp_host", "smtp", "SMTP host", secret=False),
+    "smtp.port": Spec("smtp_port", "smtp", "Port", secret=False),
+    "smtp.security": Spec("smtp_security", "smtp", "Security (starttls / ssl / none)", secret=False),
+    "smtp.username": Spec("smtp_username", "smtp", "Username", secret=False),
+    "smtp.password": Spec("smtp_password", "smtp", "Password / app password"),
+    "smtp.from_address": Spec("smtp_from_address", "smtp", "From address", secret=False),
 }
 
 
