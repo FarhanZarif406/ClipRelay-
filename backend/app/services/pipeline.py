@@ -272,6 +272,7 @@ def rewrite_job(db: Session, job_id: int) -> str | None:
             tags=video.original_tags or [],
             source=video.source.username if video.source else "",
             niche=template.niche,
+            provider_id=template.llm_provider_id,
         )
         job.prompt_template_id = template.id
         activity.record(db, "AI rewrite", f"Caption rewritten · prompt “{template.name}” applied", event="rewritten", job_id=job.id)

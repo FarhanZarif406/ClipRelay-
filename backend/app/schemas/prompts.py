@@ -11,6 +11,7 @@ class PromptIn(BaseModel):
     caption_prompt: str = ""
     hashtags_prompt: str = ""
     is_enabled: bool = True
+    llm_provider_id: int | None = None  # None = workspace default model
 
 
 class PromptOut(PromptIn):
@@ -26,6 +27,7 @@ class PromptTestIn(BaseModel):
     caption_prompt: str = ""
     hashtags_prompt: str = ""
     niche: str = ""
+    llm_provider_id: int | None = None
     title: str = ""
     caption: str = Field(default="", max_length=5000)
     tags: list[str] = []

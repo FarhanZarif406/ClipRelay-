@@ -131,3 +131,5 @@ select.inline-input option, .field select option { background: var(--surface-2);
 .setting-inline strong, .setting-inline span { display: block; font-size: 10px; }
 .setting-inline span { color: var(--muted); font-size: 9px; margin-top: 3px; line-height: 1.5; }
 @media (max-width: 560px) { .credential-fields { grid-template-columns: 1fr; } }
+.editor-foot select.model-select { max-width: 220px; color: var(--text); border-bottom: 1px dashed var(--border-strong); }
+.editor-foot select.model-select { max-width: 220px; color: var(--text); border-bottom: 1px dashed var(--border-strong); }

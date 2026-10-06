@@ -4,13 +4,13 @@ from sqlalchemy import func, select, update
 from app.api.deps import DB, CurrentUser
 from app.integrations import llm
 from app.integrations.http import ApiError
-from app.models import PromptTemplate, PromptTemplateVersion
+from app.models import LLMProvider, PromptTemplate, PromptTemplateVersion
 from app.schemas import PromptIn, PromptOut, PromptTestIn, PromptTestOut
 from app.services import activity, prompts
 
 router = APIRouter(prefix="/prompts", tags=["prompts"])
 
-SNAPSHOT_FIELDS = ["name", "description", "niche", "title_prompt", "caption_prompt", "hashtags_prompt", "is_enabled"]
+SNAPSHOT_FIELDS = ["name", "description", "niche", "title_prompt", "caption_prompt", "hashtags_prompt", "is_enabled", "llm_provider_id"]
 
 
 def _get(db, prompt_id: int) -> PromptTemplate:
@@ -18,6 +18,11 @@ def _get(db, prompt_id: int) -> PromptTemplate:
     if not template:
         raise HTTPException(404, "Prompt not found")
     return template
+
+
+def _check_provider(db, provider_id: int | None) -> None:
+    if provider_id is not None and not db.get(LLMProvider, provider_id):
+        raise HTTPException(422, "That AI model no longer exists")
 
 
 def _snapshot(db, template: PromptTemplate) -> None:
@@ -43,6 +48,7 @@ def meta(_: CurrentUser):
 
 @router.post("", response_model=PromptOut, status_code=201)
 def create_prompt(body: PromptIn, db: DB, _: CurrentUser):
+    _check_provider(db, body.llm_provider_id)
     template = PromptTemplate(**body.model_dump())
     if not db.scalar(select(func.count(PromptTemplate.id))):
         template.is_default = True
@@ -62,6 +68,7 @@ def get_prompt(prompt_id: int, db: DB, _: CurrentUser):
 @router.put("/{prompt_id}", response_model=PromptOut)
 def update_prompt(prompt_id: int, body: PromptIn, db: DB, _: CurrentUser):
     template = _get(db, prompt_id)
+    _check_provider(db, body.llm_provider_id)
     for field, value in body.model_dump().items():
         setattr(template, field, value)
     db.flush()
@@ -108,7 +115,10 @@ def restore(prompt_id: int, version: int, db: DB, _: CurrentUser):
         raise HTTPException(404, "Version not found")
     for field in SNAPSHOT_FIELDS:
         if field in row.snapshot:
-            setattr(template, field, row.snapshot[field])
+            value = row.snapshot[field]
+            if field == "llm_provider_id" and value is not None and not db.get(LLMProvider, value):
+                value = None  # the model was removed since this version
+            setattr(template, field, value)
     db.flush()
     _snapshot(db, template)
     db.commit()
@@ -126,6 +136,7 @@ def test_prompt(body: PromptTestIn, db: DB, _: CurrentUser):
             caption=body.caption,
             tags=body.tags,
             niche=body.niche,
+            provider_id=body.llm_provider_id,
         )
     except ApiError as exc:
         raise HTTPException(502, f"LLM request failed: {exc}") from exc

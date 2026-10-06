@@ -44,15 +44,15 @@ def resolve_template(db: Session, template_id: int | None) -> PromptTemplate | N
 
 def rewrite(
     *, title_prompt: str, caption_prompt: str, hashtags_prompt: str, title: str, caption: str, tags: list[str],
-    source: str = "", niche: str = "",
+    source: str = "", niche: str = "", provider_id: int | None = None,
 ) -> dict:
     """Run each non-empty template field through the LLM. Empty fields keep the original value."""
     values = {"title": title, "caption": caption, "tags": " ".join(f"#{t}" for t in tags), "source": source, "niche": niche}
     result = {"title": title, "caption": caption, "tags": list(tags)}
     if title_prompt.strip():
-        result["title"] = llm.complete(render(title_prompt, values)).strip().strip('"')[:150]
+        result["title"] = llm.complete(render(title_prompt, values), provider_id=provider_id).strip().strip('"')[:150]
     if caption_prompt.strip():
-        result["caption"] = llm.complete(render(caption_prompt, values)).strip().strip('"')
+        result["caption"] = llm.complete(render(caption_prompt, values), provider_id=provider_id).strip().strip('"')
     if hashtags_prompt.strip():
-        result["tags"] = parse_hashtags(llm.complete(render(hashtags_prompt, values)))
+        result["tags"] = parse_hashtags(llm.complete(render(hashtags_prompt, values), provider_id=provider_id))
     return result

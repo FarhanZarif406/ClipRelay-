@@ -144,6 +144,7 @@ export type Prompt = {
   hashtags_prompt: string;
   is_default: boolean;
   is_enabled: boolean;
+  llm_provider_id: number | null;
   created_at: string;
   updated_at: string;
 };

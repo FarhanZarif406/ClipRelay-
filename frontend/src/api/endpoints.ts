@@ -59,7 +59,7 @@ export const prompts = {
   makeDefault: (id: number) => api<Prompt>(`/prompts/${id}/default`, { method: "POST" }),
   versions: (id: number) => api<{ version: number; created_at: string; snapshot: PromptBody }[]>(`/prompts/${id}/versions`),
   restore: (id: number, version: number) => api<Prompt>(`/prompts/${id}/versions/${version}/restore`, { method: "POST" }),
-  test: (body: { title_prompt: string; caption_prompt: string; hashtags_prompt: string; niche: string; caption: string; title?: string; tags?: string[] }) =>
+  test: (body: { title_prompt: string; caption_prompt: string; hashtags_prompt: string; niche: string; caption: string; title?: string; tags?: string[]; llm_provider_id?: number | null }) =>
     api<{ title: string; caption: string; tags: string[] }>("/prompts/test", { method: "POST", body }),
 };
 

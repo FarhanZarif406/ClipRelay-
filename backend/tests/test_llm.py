@@ -105,3 +105,22 @@ def test_complete_uses_default_provider(db):
     )
     assert llm.complete("translate") == "Hola"
     assert b'"model":"llama"' in route.calls[0].request.content.replace(b" ", b"")
+
+
+@respx.mock
+def test_template_uses_its_own_model(db, source, template):
+    from tests.test_pipeline import _make_job
+    from app.services import pipeline
+
+    _provider(db, "default", provider="openai", model="gpt-4o-mini", is_default=True)
+    groq = _provider(db, "groq", provider="groq", model="llama")
+    template.llm_provider_id = groq.id
+    db.commit()
+    llm_registry.bust()
+    groq_route = respx.post("https://api.groq.com/openai/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": [{"message": {"content": "#a #b"}}]})
+    )
+    openai_route = respx.post("https://api.openai.com/v1/chat/completions")
+    job = _make_job(db, source)
+    assert pipeline.rewrite_job(db, job.id) == "ready"
+    assert groq_route.call_count == 3 and openai_route.call_count == 0
