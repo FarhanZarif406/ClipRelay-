@@ -28,13 +28,16 @@ cp .env.example .env
 # Generate the two secrets:
 python -c "import secrets;print('SECRET_KEY='+secrets.token_urlsafe(48))"
 python -c "from cryptography.fernet import Fernet;print('ENCRYPTION_KEY='+Fernet.generate_key().decode())"
-# Paste them into .env, then fill in INSTAGRAM_*, TIKTOK_*, LLM_* and PUBLIC_BASE_URL / FRONTEND_URL.
+# Paste them into .env and set PUBLIC_BASE_URL / FRONTEND_URL. API keys can be added later in the app
+# (Settings → API keys / AI models), or put in .env as INSTAGRAM_*, TIKTOK_*, LLM_*, TRANSCRIPTION_*, SMTP_*.
 
 docker compose up -d --build
 ```
 
-Open **http://localhost:8080**. The first visitor creates the owner account; after that, registration is closed and you
-add team members under **Settings → Team members**. You can also create users from the CLI:
+Open **http://localhost:8080**. The first visitor creates the **owner** account; after that, registration is closed and
+owners add team members under **Settings → Team members**. Owners manage API keys, AI models and the team; members run
+the automation and only see whether keys are configured. Owners can promote or demote others (a workspace always keeps
+at least one owner). You can also create users from the CLI (the first user created this way becomes the owner):
 
 ```bash
 docker compose exec backend python -m app.cli create-user you@example.com 'a-strong-password' "Your Name"
@@ -47,6 +50,23 @@ Services: `postgres`, `redis`, `backend` (FastAPI, which runs migrations on star
 > put the `frontend` service behind your TLS proxy (Caddy, Traefik, a load balancer). For local testing, run a tunnel such as
 > `ngrok http 8080` or `cloudflared tunnel --url http://localhost:8080`, and set `PUBLIC_BASE_URL` and `FRONTEND_URL`
 > to the tunnel URL.
+
+### Where API keys live
+
+Every third-party credential can be managed from the UI **without a restart**. Values saved in the app are encrypted with
+`ENCRYPTION_KEY` and take priority; anything not saved there falls back to `.env`. Each card shows its source
+(**Set in app** / **From .env**) and status (**Not configured · From .env · Valid · Unverified · Invalid**).
+
+| Credential | Where in the app | `.env` fallback |
+|---|---|---|
+| Instagram app ID / secret | Settings → API keys | `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET` |
+| TikTok client key / secret | Settings → API keys | `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET` |
+| Transcription key / base URL / model | Settings → API keys | `TRANSCRIPTION_*` |
+| AI models (any number, one default) | Settings → AI models | `LLM_*` (used only when no model is added) |
+| SMTP for email alerts | Settings → Notifications | `SMTP_*` |
+
+Infrastructure settings stay in `.env` only: database, Redis, storage, `SECRET_KEY`, `ENCRYPTION_KEY`, `PUBLIC_BASE_URL`,
+and OAuth scopes. Saved credentials and AI models are re-validated daily, and you get a *Token problems* alert if one stops working.
 
 ---
 
@@ -64,11 +84,12 @@ accounts that sign in through your app, so there is no scraping.
    - **OAuth redirect URIs:** `https://YOUR_DOMAIN/api/instagram/oauth/callback`
    - Save.
 5. Copy the **Instagram app ID** and **Instagram app secret**. These are shown on the same page and are *not* the Facebook
-   App ID. Put them in `.env`:
-   ```
-   INSTAGRAM_APP_ID=...
-   INSTAGRAM_APP_SECRET=...
-   ```
+   App ID. As an owner, paste them into **Settings → API keys → Instagram app** and click **Save**. The card also shows
+   the exact redirect URI to register, with a Copy button. (Or set `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` in `.env`.)
+
+   Meta has no way to check an Instagram app secret directly, so ClipRelay checks the format, saves it as **Unverified**,
+   and marks it **Valid** after the next successful Instagram sign-in. Changing the app while accounts are connected asks
+   for confirmation, because those accounts were authorised under the old app and must reconnect.
 6. **Permissions:** ClipRelay needs only `instagram_business_basic` (profile + media, including video `media_url`).
 7. **Access level:**
    - *Development / Standard access*: works for Instagram accounts that have a role on the app. Add them under
@@ -77,7 +98,7 @@ accounts that sign in through your app, so there is no scraping.
      **Business Verification**, then switch the app to **Live**.
 
 **How it works in ClipRelay:** in *Instagram Sources*, click **Add accounts → Authorize with Instagram**. Each account
-signs in once. ClipRelay stores the 60-day long-lived token encrypted (Fernet) and refreshes it automatically before it
+signs in once. Personal accounts are rejected with instructions to switch to Business or Creator. ClipRelay stores the 60-day long-lived token encrypted (Fernet) and refreshes it automatically before it
 expires. In the *Add accounts* box you can then activate or reactivate authorized accounts by username or profile link.
 Usernames that have not authorized the app are listed back to you with a sign-in link.
 
@@ -98,15 +119,14 @@ Usernames that have not authorized the app are listed back to you with a sign-in
    | `video.publish` | Direct-post videos (Content Posting API) |
    | `video.list` | Confirm a published video is still live (violation check) |
    | `user.info.profile` *(optional)* | Show the real `@username`. Add it to `TIKTOK_SCOPES` once approved |
-5. Copy the **Client key** and **Client secret** into `.env`:
-   ```
-   TIKTOK_CLIENT_KEY=...
-   TIKTOK_CLIENT_SECRET=...
-   ```
+5. Copy the **Client key** and **Client secret** into **Settings → API keys → TikTok app** (owner only) and click
+   **Validate** then **Save**. ClipRelay checks them with TikTok's `client_credentials` grant. (Or set
+   `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET` in `.env`.)
 6. **Sandbox and audit.** While the app is in Sandbox, add your TikTok accounts as **target users**. **Unaudited apps can
    only post with `SELF_ONLY` (private) visibility.** ClipRelay picks a privacy level from what TikTok's
    `creator_info` returns, so private posting works automatically. To post publicly, submit the app for TikTok's
-   Content Posting **audit**.
+   Content Posting **audit**, then turn on **App audited** on the TikTok card. Until then, *TikTok Accounts* shows a reminder
+   that posts will be private.
 7. **Rate limits.** The video init endpoint allows about 6 requests per minute per user token, and TikTok caps the number of
    API posts per creator per day. ClipRelay enforces a per-account **daily cap** (default 15), a workspace **hourly cap**,
    an optional **random delay**, and exponential backoff on `rate_limit_exceeded` / HTTP 429.
@@ -119,21 +139,39 @@ with the refresh token (365 days). Accounts are shown as **Expiring** 3 days bef
 
 ## 4. LLM, transcription, storage
 
+**AI models** (Settings → AI models, owner only). Add as many as you like: **Anthropic, OpenAI, Google Gemini,
+OpenRouter, Groq, Mistral**, or any **custom** OpenAI-compatible endpoint (with a base URL). Paste the key, click
+**Validate** to load that provider's model list, pick a model, and save. One model is the workspace default. Each model
+has **Test** (sends "Reply with the single word OK."), **Edit** (leave the key blank to keep it), **Set default** and
+**Remove**. When no model has been added, ClipRelay uses the `.env` values:
+
 ```ini
 LLM_PROVIDER=anthropic          # or: openai (any OpenAI-compatible API; set LLM_BASE_URL for others)
 LLM_MODEL=claude-sonnet-5-5
 LLM_API_KEY=sk-...
 ```
 
+If `LLM_API_KEY` is set when you upgrade, the migration adds it as the default AI model automatically.
+
 **Prompt Studio** templates have three parts (Title / Caption / Hashtags). You can use the variables `{title}`, `{caption}`,
 `{tags}`, `{source}` and `{niche}` (`{original_title}`, `{original_caption}` and `{original_tags}` also work). A part left
 empty keeps the original text. Every save creates a version you can restore, and **Test prompt** runs the template
-against a real caption.
+against a real caption. Each template can also pick its own **model** from the dropdown under the editor. The default
+option uses the workspace default.
 
-**Language gate** (optional, under *Automation Rules*). If you set `TRANSCRIPTION_API_KEY`, the audio is extracted with
+**Language gate** (optional, under *Automation Rules*). If a transcription key is configured (Settings → API keys →
+Transcription, validated with `GET {base_url}/models`; or `TRANSCRIPTION_API_KEY`), the audio is extracted with
 ffmpeg and transcribed (`whisper-1` or any compatible model), and the transcript's language is detected. Without the
 key, the caption is classified instead. Videos whose language isn't in the allowed list are rejected and logged with a
 reason.
+
+### Email alerts
+
+Alerts always appear in the dashboard. Under **Settings → Notifications** you can also add a webhook (Slack, Discord or
+any HTTPS endpoint) and/or **alert email addresses**. For email, fill in the **Email (SMTP)** card. The **Gmail preset**
+fills `smtp.gmail.com:587` with STARTTLS; use your Gmail address as the username and from address, and a 16-character
+**app password** (Google Account → Security → 2-Step Verification → App passwords). Click **Send test email** to confirm.
+Violations, failed jobs and token problems are emailed according to the toggles on that tab.
 
 **Storage.** `STORAGE_BACKEND=local` stores files under `STORAGE_LOCAL_PATH` (a Docker volume in compose).
 `STORAGE_BACKEND=s3` works with AWS S3, Cloudflare R2, MinIO and Backblaze B2. Set `S3_ENDPOINT_URL` for non-AWS providers.
@@ -238,7 +276,7 @@ cd backend
 pytest -q
 ```
 
-The suite (46 tests) uses SQLite and mocks **Instagram, TikTok and the LLM** with `respx`, and stubs ffprobe and downloads. It
+The suite (88 tests) uses SQLite and mocks **Instagram, TikTok and the LLM** with `respx`, and stubs ffprobe and downloads. It
 covers:
 - auth
 - fetch, duration and language filtering, and skipping already-processed videos
@@ -249,6 +287,13 @@ covers:
 - violation detection, checkpoints and retry safety
 - token refresh and expiry
 - backoff
+- owner/member permissions
+- the credential store (DB over `.env`, fallback on removal, encryption, cache busting) and its validators
+  (TikTok `client_credentials`, transcription, SMTP)
+- rejection of personal Instagram accounts
+- every LLM adapter (`list_models` and `complete`, including 401/403 → auth error), default and per-template model
+  resolution, and the `.env` fallback
+- the daily credential check
 - every API area
 
 ```bash
