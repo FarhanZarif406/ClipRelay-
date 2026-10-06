@@ -85,7 +85,7 @@ export function CredentialCard({ card, isOwner, children, presets }: { card: Car
     {card.state === "invalid" && card.last_error && !result && <div className="form-error">{card.last_error}</div>}
     {presets && <div className="inline-form" style={{ marginTop: 0, marginBottom: 12 }}>{presets.map(p => <Button key={p.label} onClick={() => { setValues(v => ({ ...v, ...p.values })); setResult(p.hint ? { ok: null, message: p.hint } : null); }}>{p.label}</Button>)}</div>}
     <div className="credential-fields">
-      {card.fields.map(f => <Field key={f.key} label={`${f.label}${f.source ? ` · ${f.source === "app" ? "set in app" : "from .env"}` : ""}`}>
+      {card.fields.map(f => <Field key={f.key} label={`${f.label}${f.source ? ` · ${f.source === "app" ? "set in app" : f.source === "env" ? "from .env" : "default"}` : ""}`}>
         {f.secret ? <SecretInput value={values[f.key] ?? ""} onChange={v => setValues(x => ({ ...x, [f.key]: v }))} placeholder={f.masked ? `${f.masked} — leave blank to keep` : "Not set"}/>
           : <input value={values[f.key] ?? ""} onChange={e => setValues(x => ({ ...x, [f.key]: e.target.value }))} placeholder="Not set" spellCheck={false}/>}
       </Field>)}

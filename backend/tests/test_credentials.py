@@ -42,3 +42,9 @@ def test_group_status(db):
     credentials.set_status(db, "tiktok", "invalid", "bad secret")
     status = credentials.group_status(db, "tiktok")
     assert status["state"] == "invalid" and status["last_error"] == "bad secret"
+
+
+def test_builtin_defaults_are_not_reported_as_env():
+    assert credentials.source("transcription.model") == "default"
+    assert credentials.source("smtp.port") == "default"
+    assert credentials.source("tiktok.client_key") == "env"

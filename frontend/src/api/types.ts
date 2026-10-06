@@ -213,7 +213,7 @@ export type LLMProvider = {
 export type LLMProviderList = { items: LLMProvider[]; providers: LLMProviderName[]; env_fallback: { configured: boolean; provider: string | null; model: string | null; active: boolean } };
 
 export type CredentialState = "none" | "env" | "unverified" | "valid" | "invalid";
-export type CredentialField = { key: string; label: string; secret: boolean; configured: boolean; source: "app" | "env" | null; value?: string; masked?: string };
+export type CredentialField = { key: string; label: string; secret: boolean; configured: boolean; source: "app" | "env" | "default" | null; value?: string; masked?: string };
 export type CredentialCard = {
   group: string;
   title: string;

@@ -112,10 +112,16 @@ def get(key: str) -> str:
 
 
 def source(key: str) -> str | None:
-    """'app' (saved in Settings), 'env' (from .env) or None."""
+    """'app' (saved in Settings), 'env' (set in .env), 'default' (built-in default) or None."""
     if _db_values().get(key):
         return "app"
-    return "env" if env_value(key) else None
+    value = env_value(key)
+    if not value:
+        return None
+    from app.config import Settings
+
+    default = Settings.model_fields[REGISTRY[key].env].default
+    return "default" if value == ("" if default is None else str(default)) else "env"
 
 
 def rows(db: Session, group: str) -> dict[str, Credential]:
