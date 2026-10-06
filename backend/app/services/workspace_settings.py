@@ -24,6 +24,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "unique_video_per_account": True,
         "default_interval_minutes": 60,
         "max_videos_per_run": 25,
+        "tiktok_app_audited": False,
     },
     "audit": {
         "check_hours": [1, 6, 12, 24],

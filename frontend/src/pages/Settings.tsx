@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { settings, users } from "@/api/endpoints";
+import { credentials, settings, users } from "@/api/endpoints";
 import type { NotificationSettings } from "@/api/types";
+import { CredentialCard } from "@/components/CredentialCard";
 import { Icon } from "@/components/Icon";
 import { Field } from "@/components/Modal";
 import { useErrorToast, useToast } from "@/components/Toast";
@@ -13,13 +14,35 @@ import { initialsOf } from "@/lib/format";
 const TABS = ["API keys", "Notifications", "Team members", "Appearance"] as const;
 type Tab = (typeof TABS)[number];
 
-function ApiKeys() {
+function TikTokAuditToggle() {
+  const queryClient = useQueryClient();
+  const onError = useErrorToast();
+  const { data: policy } = useQuery({ queryKey: ["policy"], queryFn: settings.policy });
+  const save = useMutation({ mutationFn: (v: boolean) => settings.savePolicy({ tiktok_app_audited: v }), onSuccess: p => queryClient.setQueryData(["policy"], p), onError });
+  return <div className="setting-inline"><div><strong>App audited</strong><span>Turn on once TikTok approves the app in the Content Posting audit. Until then posts are private (SELF_ONLY).</span></div><Toggle checked={!!policy?.tiktok_app_audited} onChange={() => policy && save.mutate(!policy.tiktok_app_audited)} label="App audited"/></div>;
+}
+
+/** Integrations that are configured on the server only (storage, FFmpeg) or elsewhere in Settings. */
+const CARD_KEYS = new Set(["instagram", "tiktok"]);
+
+function OtherIntegrations({ isOwner }: { isOwner: boolean }) {
   const { data } = useQuery({ queryKey: ["settings", "integrations"], queryFn: settings.integrations });
   const [results, setResults] = useState<Record<string, { ok: boolean; message: string }>>({});
   const test = useMutation({ mutationFn: (key: string) => settings.testIntegration(key), onSuccess: (r, key) => setResults(x => ({ ...x, [key]: r })) });
-  return <Card><div className="card-title">API keys</div><div className="card-caption">Connect the services that power your automation. Keys are set in the server’s <code>.env</code> file.</div>
-    {data?.map(x => { const r = results[x.key]; return <div className="api-row" key={x.key}><div><strong>{x.name}</strong><span>{x.masked}</span></div>{r ? <span className={`test-result ${r.ok ? "ok" : "fail"}`}>{r.message}</span> : <Badge tone={x.configured ? "success" : "warning"}>{x.configured ? "Configured" : "Needs setup"}</Badge>}<Button onClick={() => test.mutate(x.key)} disabled={test.isPending && test.variables === x.key}>{test.isPending && test.variables === x.key ? "Testing…" : "Test connection"}</Button></div>; })}
+  return <Card><div className="card-title">Other integrations</div><div className="card-caption">Storage and FFmpeg are configured in the server’s <code>.env</code> file.</div>
+    {data?.filter(x => !CARD_KEYS.has(x.key)).map(x => { const r = results[x.key]; return <div className="api-row" key={x.key}><div><strong>{x.name}</strong><span>{x.masked}</span></div>{r ? <span className={`test-result ${r.ok ? "ok" : "fail"}`}>{r.message}</span> : <Badge tone={x.configured ? "success" : "warning"}>{x.configured ? (x.source === "app" ? "Set in app" : x.source === "env" ? "From .env" : "Configured") : "Needs setup"}</Badge>}{isOwner && <Button onClick={() => test.mutate(x.key)} disabled={test.isPending && test.variables === x.key}>{test.isPending && test.variables === x.key ? "Testing…" : "Test connection"}</Button>}</div>; })}
   </Card>;
+}
+
+function ApiKeys() {
+  const { user } = useAuth();
+  const isOwner = user?.role === "owner";
+  const { data } = useQuery({ queryKey: ["credentials"], queryFn: credentials.list });
+  return <>
+    {!isOwner && <div className="form-note" style={{ marginTop: 0 }}>Only workspace owners can view or change API keys.</div>}
+    {data?.map(card => <CredentialCard key={card.group} card={card} isOwner={isOwner}>{card.group === "tiktok" && isOwner ? <TikTokAuditToggle/> : null}</CredentialCard>)}
+    <OtherIntegrations isOwner={isOwner}/>
+  </>;
 }
 
 function Appearance() {

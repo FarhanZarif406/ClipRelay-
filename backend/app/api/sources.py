@@ -80,6 +80,8 @@ def oauth_callback(db: DB, code: str | None = None, state: str | None = None, er
     source.token_expires_at = token.expires_at
     source.token_refreshed_at = utcnow()
     source.last_error = None
+    source.needs_reconnect = False
+    credentials.set_status(db, "instagram", "valid")  # a completed OAuth exchange proves the app ID/secret
     db.flush()
     activity.record(db, "OAuth", f"Instagram account @{source.username} connected", event="instagram_connected")
     db.commit()

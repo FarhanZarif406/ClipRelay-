@@ -1,6 +1,6 @@
 import { api } from "./client";
 import type {
-  ActivityLog, AuditItem, AuditSettings, DailyReport, Integration, Job, Nav, NotificationSettings, Page, Policy, Prompt,
+  ActivityLog, AuditItem, AuditSettings, CredentialCard, CredentialResult, DailyReport, Integration, Job, Nav, NotificationSettings, Page, Policy, Prompt,
   Source, Summary, TikTokAccount, User, Video, Violation,
 } from "./types";
 
@@ -99,6 +99,15 @@ export const settings = {
   integrations: () => api<Integration[]>("/settings/integrations"),
   testIntegration: (key: string) => api<{ ok: boolean; message: string }>(`/settings/integrations/${key}/test`, { method: "POST" }),
   completeOnboarding: () => api<{ completed: boolean }>("/settings/onboarding/complete", { method: "POST" }),
+};
+
+export const credentials = {
+  list: () => api<CredentialCard[]>("/credentials"),
+  validate: (group: string, values: Record<string, string> = {}) => api<CredentialResult>(`/credentials/${group}/validate`, { method: "POST", body: { values } }),
+  save: (group: string, values: Record<string, string>, confirm_reconnect = false) =>
+    api<CredentialResult>(`/credentials/${group}`, { method: "PUT", body: { values, confirm_reconnect } }),
+  remove: (group: string, confirm_reconnect = false) =>
+    api<{ fallback: "env" | "none"; card: CredentialCard }>(`/credentials/${group}`, { method: "DELETE", query: { confirm_reconnect } }),
 };
 
 export const users = {

@@ -2,7 +2,7 @@ const TOKEN_KEY = "cliprelay.token";
 const BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 
 export class ApiError extends Error {
-  constructor(message: string, public status: number) {
+  constructor(message: string, public status: number, public code?: string, public detail?: unknown) {
     super(message);
   }
 }
@@ -39,6 +39,7 @@ function errorMessage(body: unknown, fallback: string): string {
   if (body && typeof body === "object" && "detail" in body) {
     const detail = (body as { detail: unknown }).detail;
     if (typeof detail === "string") return detail;
+    if (detail && typeof detail === "object" && "message" in detail) return String((detail as { message: unknown }).message);
     if (Array.isArray(detail)) return detail.map((d) => d?.msg ?? String(d)).join("; ");
   }
   return fallback;
@@ -60,7 +61,11 @@ export async function api<T>(path: string, options: { method?: string; body?: un
   }
   if (response.status === 204) return undefined as T;
   const body = await response.json().catch(() => null);
-  if (!response.ok) throw new ApiError(errorMessage(body, `Request failed (${response.status})`), response.status);
+  if (!response.ok) {
+    const detail = body && typeof body === "object" && "detail" in body ? (body as { detail: unknown }).detail : undefined;
+    const code = detail && typeof detail === "object" && "code" in detail ? String((detail as { code: unknown }).code) : undefined;
+    throw new ApiError(errorMessage(body, `Request failed (${response.status})`), response.status, code, detail);
+  }
   return body as T;
 }
 

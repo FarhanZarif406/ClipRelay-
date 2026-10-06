@@ -112,3 +112,22 @@ select.inline-input option, .field select option { background: var(--surface-2);
 .select-box .inline-input[type="time"] { width: 74px; color-scheme: dark; }
 :root[data-theme="light"] .select-box .inline-input[type="time"] { color-scheme: light; }
 .chip { color: inherit; font-family: inherit; }
+
+/* Settings → credential cards */
+.credential-card { padding: 20px; }
+.credential-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.credential-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.credential-fields > .span-2 { grid-column: 1 / -1; }
+.credential-foot { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; flex-wrap: wrap; }
+.credential-foot a { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
+.secret-input { display: flex; align-items: stretch; border: 1px solid var(--border); background: var(--surface-2); border-radius: 8px; overflow: hidden; }
+.secret-input:focus-within { border-color: var(--primary); }
+.field .secret-input input { border: 0 !important; background: transparent !important; flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+.secret-input button { border: 0; border-left: 1px solid var(--border); background: var(--surface-3); color: var(--muted); font-size: 9px; font-weight: 600; padding: 0 11px; cursor: pointer; }
+.secret-input button:hover { color: var(--text); }
+.secret-input.readonly input { color: var(--muted); }
+.scope-list { display: block; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); font-size: 9px; color: var(--muted); }
+.setting-inline { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0 2px; }
+.setting-inline strong, .setting-inline span { display: block; font-size: 10px; }
+.setting-inline span { color: var(--muted); font-size: 9px; margin-top: 3px; line-height: 1.5; }
+@media (max-width: 560px) { .credential-fields { grid-template-columns: 1fr; } }

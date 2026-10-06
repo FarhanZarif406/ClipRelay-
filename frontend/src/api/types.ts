@@ -101,6 +101,7 @@ export type Source = Ref & {
   prompt_template_name: string | null;
   videos_found: number;
   token_expires_at: string | null;
+  needs_reconnect: boolean;
   tiktok_accounts: Ref[];
 };
 
@@ -163,6 +164,7 @@ export type Policy = {
   unique_video_per_account: boolean;
   default_interval_minutes: number;
   max_videos_per_run: number;
+  tiktok_app_audited: boolean;
 };
 
 export type AuditSettings = { check_hours: number[]; auto_remove: boolean; notifications_enabled: boolean };
@@ -189,6 +191,23 @@ export type DailyReport = {
   hourly: { hour: number; published: number; failed: number }[];
 };
 
-export type Integration = { key: string; name: string; masked: string; configured: boolean };
+export type Integration = { key: string; name: string; masked: string; configured: boolean; source: "app" | "env" | null };
+
+export type CredentialState = "none" | "env" | "unverified" | "valid" | "invalid";
+export type CredentialField = { key: string; label: string; secret: boolean; configured: boolean; source: "app" | "env" | null; value?: string; masked?: string };
+export type CredentialCard = {
+  group: string;
+  title: string;
+  configured: boolean;
+  state: CredentialState;
+  connected_accounts: number;
+  fields?: CredentialField[];
+  last_error?: string | null;
+  verified_at?: string | null;
+  redirect_uri?: string | null;
+  scopes?: string | null;
+  docs_url?: string | null;
+};
+export type CredentialResult = { ok: boolean | null; message: string; card: CredentialCard };
 
 export type Page<T> = { items: T[]; total: number };

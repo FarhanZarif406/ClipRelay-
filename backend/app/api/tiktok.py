@@ -60,6 +60,7 @@ def oauth_callback(db: DB, code: str | None = None, state: str | None = None, er
     account.display_name = info.get("display_name")
     account.avatar_url = info.get("avatar_url")
     tokens.store_tiktok_tokens(account, token_set)
+    credentials.set_status(db, "tiktok", "valid")
     db.flush()
     activity.record(db, "OAuth", f"TikTok account @{account.username} connected", event="tiktok_connected")
     db.commit()

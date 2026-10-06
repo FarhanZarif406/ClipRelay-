@@ -19,6 +19,7 @@ class PolicyIn(BaseModel):
     unique_video_per_account: bool | None = None
     default_interval_minutes: int | None = Field(default=None, ge=5, le=10080)
     max_videos_per_run: int | None = Field(default=None, ge=1, le=100)
+    tiktok_app_audited: bool | None = None
 
     @field_validator("active_days")
     @classmethod
