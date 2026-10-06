@@ -57,6 +57,13 @@ def oauth_callback(db: DB, code: str | None = None, state: str | None = None, er
         db.commit()
         return back(error=str(exc))
 
+    credentials.set_status(db, "instagram", "valid")  # the code exchange succeeded, so the app ID/secret work
+    account_type = str(profile.get("account_type") or "").upper()
+    if account_type not in ("BUSINESS", "MEDIA_CREATOR"):
+        activity.record(db, "OAuth", f"Instagram account @{profile.get('username', '?')} rejected: account type {account_type or 'unknown'}", level="warning", event="oauth_rejected")
+        db.commit()
+        return back(error="This Instagram account must be Business or Creator. Switch it in Instagram → Settings → Account type and tools.")
+
     ig_user_id = str(profile.get("user_id") or profile.get("id"))
     source = db.scalar(select(InstagramSource).where(InstagramSource.ig_user_id == ig_user_id))
     if not source:

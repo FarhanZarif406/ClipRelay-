@@ -163,3 +163,42 @@ def test_logs_filter_and_csv(client, auth):
     logs = client.get("/api/logs?service=Scheduler", headers=auth).json()
     assert logs["total"] == 1 and "Scheduler" in logs["services"]
     assert "Automation started" in client.get("/api/logs.csv", headers=auth).text
+
+
+def _ig_oauth_mocks(account_type: str):
+    import httpx
+
+    from app.integrations import instagram
+
+    respx.post(instagram.TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": "short", "user_id": 42}))
+    respx.get("https://graph.instagram.com/access_token").mock(return_value=httpx.Response(200, json={"access_token": "long", "expires_in": 5184000}))
+    respx.get(url__startswith="https://graph.instagram.com/v21.0/me").mock(
+        return_value=httpx.Response(200, json={"user_id": "42", "username": "someone", "account_type": account_type})
+    )
+
+
+@respx.mock
+def test_instagram_callback_rejects_personal_account(client, db):
+    from app.models import InstagramSource
+    from app.security import create_oauth_state
+
+    _ig_oauth_mocks("PERSONAL")
+    state = create_oauth_state("instagram", 1)
+    r = client.get(f"/api/instagram/oauth/callback?code=abc&state={state}", follow_redirects=False)
+    assert r.status_code == 307 and "Business+or+Creator" in r.headers["location"]
+    assert db.query(InstagramSource).count() == 0
+
+
+@respx.mock
+def test_instagram_callback_accepts_creator_and_clears_reconnect(client, db):
+    from app.models import InstagramSource
+    from app.security import create_oauth_state
+
+    db.add(InstagramSource(ig_user_id="42", username="someone", needs_reconnect=True, last_error="Reconnect required"))
+    db.commit()
+    _ig_oauth_mocks("MEDIA_CREATOR")
+    r = client.get(f"/api/instagram/oauth/callback?code=abc&state={create_oauth_state('instagram', 1)}", follow_redirects=False)
+    assert "connected=someone" in r.headers["location"]
+    db.expire_all()
+    source = db.query(InstagramSource).one()
+    assert source.needs_reconnect is False and source.last_error is None
