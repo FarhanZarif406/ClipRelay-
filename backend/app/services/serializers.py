@@ -110,7 +110,6 @@ def job(j: Job, *, detail: bool = False) -> dict:
     }
     if detail:
         data["events"] = [{"id": e.id, "status": e.status, "message": e.message, "created_at": e.created_at} for e in j.events]
-        data["video"]["transcript"] = j.video.transcript
     return data
 
 

@@ -14,7 +14,6 @@ router = APIRouter(prefix="/credentials", tags=["credentials"])
 CARDS = {
     "instagram": {"title": "Instagram app", "redirect": "/api/instagram/oauth/callback", "docs": "https://github.com/FarhanZarif406/ClipRelay-#2-create-the-meta-instagram-app"},
     "tiktok": {"title": "TikTok app", "redirect": "/api/tiktok/oauth/callback", "docs": "https://github.com/FarhanZarif406/ClipRelay-#3-create-the-tiktok-app"},
-    "transcription": {"title": "Transcription (language gate)", "docs": "https://github.com/FarhanZarif406/ClipRelay-#4-llm-transcription-storage"},
     "smtp": {"title": "Email (SMTP)", "docs": "https://github.com/FarhanZarif406/ClipRelay-#email-alerts"},
 }
 # Changing these means tokens issued under the old app no longer belong to the configured app.

@@ -64,15 +64,3 @@ def probe(path: str) -> ProbeResult:
     if duration is None:
         raise ProbeError("could not determine duration")
     return ProbeResult(float(duration), video.get("width"), video.get("height"))
-
-
-def extract_audio(path: str) -> str:
-    fd, out = tempfile.mkstemp(suffix=".mp3")
-    os.close(fd)
-    cmd = [get_settings().ffmpeg_path, "-y", "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", out]
-    try:
-        subprocess.run(cmd, capture_output=True, timeout=120, check=True)
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        os.remove(out)
-        raise ProbeError(f"ffmpeg audio extraction failed: {exc}") from exc
-    return out

@@ -32,7 +32,6 @@ export type Video = {
   rejection_reason: string | null;
   created_at: string;
   source: Ref | null;
-  transcript?: string | null;
 };
 
 export type JobStatus =

@@ -40,11 +40,6 @@ class Settings(BaseSettings):
     llm_base_url: str = ""  # optional; for OpenAI-compatible providers
     llm_max_tokens: int = 600
 
-    # Optional transcription (OpenAI-compatible /audio/transcriptions) for the language gate
-    transcription_api_key: str = ""
-    transcription_base_url: str = "https://api.openai.com/v1"
-    transcription_model: str = "whisper-1"
-
     # Optional email alerts (can also be set in Settings → Notifications)
     smtp_host: str = ""
     smtp_port: int = 587

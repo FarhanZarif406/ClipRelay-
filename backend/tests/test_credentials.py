@@ -5,7 +5,7 @@ from app.services import credentials
 def test_env_fallback_when_nothing_saved():
     assert credentials.get("tiktok.client_key") == "tt-key"  # from conftest env
     assert credentials.source("tiktok.client_key") == "env"
-    assert credentials.get("transcription.api_key") == "" and credentials.source("transcription.api_key") is None
+    assert credentials.get("smtp.host") == "" and credentials.source("smtp.host") is None
 
 
 def test_db_overrides_env_and_is_encrypted(db):
@@ -36,7 +36,7 @@ def test_cache_busts_on_write(db):
 
 def test_group_status(db):
     assert credentials.group_status(db, "tiktok")["state"] == "env"
-    assert credentials.group_status(db, "transcription")["state"] == "env"  # base_url/model default in Settings
+    assert credentials.group_status(db, "smtp")["state"] == "env"  # port/security default in Settings
     credentials.set_value(db, "tiktok.client_key", "k", user_id=None)
     assert credentials.group_status(db, "tiktok")["state"] == "unverified"
     credentials.set_status(db, "tiktok", "invalid", "bad secret")
@@ -45,6 +45,6 @@ def test_group_status(db):
 
 
 def test_builtin_defaults_are_not_reported_as_env():
-    assert credentials.source("transcription.model") == "default"
+    assert credentials.source("smtp.security") == "default"
     assert credentials.source("smtp.port") == "default"
     assert credentials.source("tiktok.client_key") == "env"

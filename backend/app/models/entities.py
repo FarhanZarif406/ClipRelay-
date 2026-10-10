@@ -194,7 +194,6 @@ class Video(Base):
     height: Mapped[int | None] = mapped_column(Integer)
     storage_key: Mapped[str | None] = mapped_column(Text)
     size_bytes: Mapped[int | None] = mapped_column(Integer)
-    transcript: Mapped[str | None] = mapped_column(Text)
     detected_language: Mapped[str | None] = mapped_column(String(32))
     language_confidence: Mapped[float | None] = mapped_column(Float)
     status: Mapped[str] = mapped_column(String(16), default=VideoStatus.FETCHED, index=True)

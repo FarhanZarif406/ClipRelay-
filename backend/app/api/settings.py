@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.api.deps import DB, CurrentUser, OwnerUser
 from app.config import get_settings
-from app.integrations import instagram, llm, tiktok, transcription
+from app.integrations import instagram, llm, tiktok
 from app.integrations.http import ApiError
 from app.models import InstagramSource, TikTokAccount, TikTokStatus
 from app.schemas import AuditIn, NotificationsIn, PolicyIn
@@ -105,7 +105,6 @@ def integrations(user: CurrentUser):
         ("instagram", "Instagram Graph API", ig_id and credentials.get("instagram.app_secret") and ig_id, credentials.source("instagram.app_id")),
         ("tiktok", "TikTok Content Posting API", tt_key and credentials.get("tiktok.client_secret") and tt_key, credentials.source("tiktok.client_key")),
         ("storage", f"Storage · {s.storage_backend}", s.s3_bucket if s.storage_backend == "s3" else os.path.abspath(s.storage_local_path), "env"),
-        ("transcription", "Transcription (language gate)", credentials.get("transcription.api_key"), credentials.source("transcription.api_key")),
         ("ffmpeg", "FFmpeg / ffprobe", s.ffprobe_path, "env"),
     ]
     out = []
@@ -159,10 +158,6 @@ def test_integration(key: str, db: DB, _: OwnerUser):
                 storage.save(path, ".healthcheck")
                 storage.delete(".healthcheck")
             message = "Storage is writable"
-        elif key == "transcription":
-            if not transcription.enabled():
-                raise ApiError("Transcription API key is not set (captions are used for language detection instead)")
-            message = "Transcription key configured"
         elif key == "ffmpeg":
             out = subprocess.run([s.ffprobe_path, "-version"], capture_output=True, text=True, timeout=10, check=True).stdout
             message = out.split("\n", 1)[0][:80]

@@ -29,7 +29,7 @@ cp .env.example .env
 python -c "import secrets;print('SECRET_KEY='+secrets.token_urlsafe(48))"
 python -c "from cryptography.fernet import Fernet;print('ENCRYPTION_KEY='+Fernet.generate_key().decode())"
 # Paste them into .env and set PUBLIC_BASE_URL / FRONTEND_URL. API keys can be added later in the app
-# (Settings → API keys / AI models), or put in .env as INSTAGRAM_*, TIKTOK_*, LLM_*, TRANSCRIPTION_*, SMTP_*.
+# (Settings → API keys / AI models), or put in .env as INSTAGRAM_*, TIKTOK_*, LLM_*, SMTP_*.
 
 docker compose up -d --build
 ```
@@ -61,7 +61,6 @@ Every third-party credential can be managed from the UI **without a restart**. V
 |---|---|---|
 | Instagram app ID / secret | Settings → API keys | `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET` |
 | TikTok client key / secret | Settings → API keys | `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET` |
-| Transcription key / base URL / model | Settings → API keys | `TRANSCRIPTION_*` |
 | AI models (any number, one default) | Settings → AI models | `LLM_*` (used only when no model is added) |
 | SMTP for email alerts | Settings → Notifications | `SMTP_*` |
 
@@ -137,7 +136,7 @@ with the refresh token (365 days). Accounts are shown as **Expiring** 3 days bef
 
 ---
 
-## 4. LLM, transcription, storage
+## 4. LLM, language gate, storage
 
 **AI models** (Settings → AI models, owner only). Add as many as you like: **Anthropic, OpenAI, Google Gemini,
 OpenRouter, Groq, Mistral**, or any **custom** OpenAI-compatible endpoint (with a base URL). Paste the key, click
@@ -159,11 +158,8 @@ empty keeps the original text. Every save creates a version you can restore, and
 against a real caption. Each template can also pick its own **model** from the dropdown under the editor. The default
 option uses the workspace default.
 
-**Language gate** (optional, under *Automation Rules*). If a transcription key is configured (Settings → API keys →
-Transcription, validated with `GET {base_url}/models`; or `TRANSCRIPTION_API_KEY`), the audio is extracted with
-ffmpeg and transcribed (`whisper-1` or any compatible model), and the transcript's language is detected. Without the
-key, the caption is classified instead. Videos whose language isn't in the allowed list are rejected and logged with a
-reason.
+**Language gate** (optional, under *Automation Rules*). The video's title and caption are classified by the AI model
+to detect their language. Videos whose language isn't in the allowed list are rejected and logged with a reason.
 
 ### Email alerts
 
@@ -225,7 +221,7 @@ dashboard, the bell icon and the Compliance Audit page. **Account health** (comp
 > removal hook (`integrations/tiktok.py: delete_video`) is in one place, so it can be filled in if TikTok ever exposes such an endpoint.
 
 ### Reliability
-- Every external call (Instagram, TikTok, LLM, transcription, downloads, webhooks) goes through `integrations/http.py`,
+- Every external call (Instagram, TikTok, LLM, downloads, webhooks) goes through `integrations/http.py`,
   which retries network errors, 429 and 5xx with **exponential backoff and jitter** (honoring `Retry-After`).
 - Celery tasks retry with backoff. Auth errors are not retried; they mark the account as needing reconnection.
 - Each source has a Redis lock, so two runs of the same source never overlap.
@@ -289,7 +285,7 @@ covers:
 - backoff
 - owner/member permissions
 - the credential store (DB over `.env`, fallback on removal, encryption, cache busting) and its validators
-  (TikTok `client_credentials`, transcription, SMTP)
+  (TikTok `client_credentials`, SMTP)
 - rejection of personal Instagram accounts
 - every LLM adapter (`list_models` and `complete`, including 401/403 → auth error), default and per-template model
   resolution, and the `.env` fallback
@@ -311,7 +307,7 @@ backend/
     models/        SQLAlchemy 2.0 models
     schemas/       Pydantic v2 request models
     services/      pipeline, scheduler tick, tokens, prompts, stats, storage, media (ffprobe), activity log, notifications
-    integrations/  instagram.py, tiktok.py, llm.py, transcription.py, http.py (retry/backoff)
+    integrations/  instagram.py, tiktok.py, llm.py, http.py (retry/backoff)
     workers/       Celery app + tasks
     cli.py         gen-key / create-user
   alembic/         migrations

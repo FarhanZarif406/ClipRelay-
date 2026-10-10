@@ -17,7 +17,6 @@ os.environ.update(
         "INSTAGRAM_APP_SECRET": "ig-secret",
         "TIKTOK_CLIENT_KEY": "tt-key",
         "TIKTOK_CLIENT_SECRET": "tt-secret",
-        "TRANSCRIPTION_API_KEY": "",
         "STORAGE_BACKEND": "local",
         "STORAGE_LOCAL_PATH": os.path.join(_TMP, "media"),
         "PUBLIC_BASE_URL": "http://api.test",

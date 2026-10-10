@@ -51,7 +51,7 @@ Overlays: `AddModal` (add Instagram accounts), `JobDrawer` (job detail), `Onboar
 - **Job status** donut (conic-gradient) + legend (Published/Pending/Failed/Removed) + total.
 - **Recent activity** list (icon, tone, title, description, relative time) + **View all →** (→ Logs).
 - **Next scheduled run**: HH:MM:SS countdown, interval ("Every 30 minutes"), Active badge, scanning avatars, "6 sources", **View automation rule**.
-- **Removed by language filter** table: Video thumb, title, Source, Detected language, Transcript confidence bar, Removed (relative), Reason. Summary: removed today, acceptance rate, "Hindi + Urdu only" badge.
+- **Removed by language filter** table: Video thumb, title, Source, Detected language, Language confidence bar, Removed (relative), Reason. Summary: removed today, acceptance rate, "Hindi + Urdu only" badge.
 - **Total uploads by connected account** grid: avatar, handle, uploaded today, lifetime total + **Open daily report →**.
 
 Mock → real: all numbers from `GET /api/dashboard/summary`; chart from `GET /api/dashboard/performance?days=7|30`;
@@ -91,7 +91,7 @@ Real: `GET /api/tiktok-accounts`, OAuth start/callback, `DELETE`, `POST …/reco
 
 ### Automation Rules
 - Header: global pause toggle ("Automations live"/"All paused"), primary action.
-- Rule card: WHEN (interval, active window, weekdays), IF (source is…, duration under 60 sec), TRANSCRIBE & LANGUAGE GATE (allowed languages), THEN (prompt, post to), settings grid (Daily cap, Hourly cap, Random delay, Timezone).
+- Rule card: WHEN (interval, active window, weekdays), IF (source is…, duration under 60 sec), LANGUAGE GATE on title + caption (allowed languages), THEN (prompt, post to), settings grid (Daily cap, Hourly cap, Random delay, Timezone).
 - Schedule summary: clock face, active window, next run, estimated posts/day, **Edit schedule**.
 
 Real: the rule card is the workspace **publishing policy** (`GET/PUT /api/settings/policy`); per-source
@@ -174,7 +174,7 @@ prompt_templates     (id, name, description, niche, title_prompt, caption_prompt
 prompt_template_versions (id, template_id FK, version, snapshot JSONB, created_at)
 videos               (id, source_id FK, ig_media_id, permalink, media_url, thumbnail_url, posted_at,
                       original_title, original_caption, original_tags JSONB, duration_sec, width, height,
-                      local_path, storage_key, transcript, detected_language, language_confidence,
+                      local_path, storage_key, detected_language, language_confidence,
                       status[fetched|accepted|rejected], rejection_reason, created_at)
                       UQ(source_id, ig_media_id)
 jobs                 (id, video_id FK, tiktok_account_id FK NULL, prompt_template_id FK NULL,

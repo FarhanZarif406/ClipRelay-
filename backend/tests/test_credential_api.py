@@ -85,16 +85,10 @@ def test_changing_app_with_connected_accounts_requires_reconnect(client, auth, d
     assert db.get(InstagramSource, source.id).needs_reconnect is True
 
 
-@respx.mock
-def test_transcription_card_validates_against_models_endpoint(client, auth):
-    assert _card(client, auth, "transcription")["state"] == "none"  # no key yet, defaults alone don't count
-    route = respx.get("https://api.openai.com/v1/models").mock(side_effect=[httpx.Response(200, json={"data": []}), httpx.Response(401, json={"error": {"message": "Incorrect API key"}})])
-    r = client.put("/api/credentials/transcription", headers=auth, json={"values": {"api_key": "sk-transcribe-123456"}}).json()
-    assert r["ok"] is True and r["card"]["state"] == "valid"
-    assert route.calls[0].request.headers["Authorization"] == "Bearer sk-transcribe-123456"
-    assert credentials.get("transcription.api_key") == "sk-transcribe-123456"
-    bad = client.post("/api/credentials/transcription/validate", headers=auth, json={}).json()
-    assert bad["ok"] is False and bad["card"]["state"] == "invalid" and "Incorrect API key" in bad["message"]
+def test_transcription_card_is_gone(client, auth):
+    groups = [c["group"] for c in client.get("/api/credentials", headers=auth).json()]
+    assert "transcription" not in groups
+    assert client.put("/api/credentials/transcription", headers=auth, json={"values": {"api_key": "sk-x"}}).status_code == 404
 
 
 class FakeSMTP:

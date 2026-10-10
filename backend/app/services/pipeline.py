@@ -15,7 +15,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.integrations import instagram, llm, tiktok, transcription
+from app.integrations import instagram, llm, tiktok
 from app.integrations.http import ApiError, AuthError, RateLimitError, backoff_delay
 from app.models import (
     InstagramSource,
@@ -183,8 +183,8 @@ def process_media(db: Session, source: InstagramSource, item: instagram.MediaIte
     if policy.get("language_gate_enabled"):
         allowed = [lang.lower() for lang in policy.get("allowed_languages", [])]
         try:
-            language, confidence = detect_video_language(path, video)
-        except (ApiError, media.ProbeError) as exc:
+            language, confidence = detect_caption_language(video)
+        except ApiError as exc:
             return _reject(db, video, f"Language detection failed: {exc}", path)
         video.detected_language, video.language_confidence = language, confidence
         if allowed and language not in allowed:
@@ -199,20 +199,8 @@ def process_media(db: Session, source: InstagramSource, item: instagram.MediaIte
 LANG_LABELS = {"hi": "Hindi", "ur": "Urdu", "en": "English", "es": "Spanish", "pt": "Portuguese", "ja": "Japanese", "ar": "Arabic", "bn": "Bengali", "fr": "French", "de": "German"}
 
 
-def detect_video_language(path: str, video: Video) -> tuple[str, float]:
-    """Transcribe the audio when a transcription API is configured, otherwise classify the caption."""
-    if transcription.enabled():
-        audio = media.extract_audio(path)
-        try:
-            transcript, whisper_language = transcription.transcribe(audio)
-        finally:
-            os.remove(audio)
-        video.transcript = transcript
-        if not transcript.strip():
-            return whisper_language or "und", 0.0
-        if not llm.is_configured() and whisper_language:
-            return whisper_language, 0.9
-        return llm.detect_language(transcript)
+def detect_caption_language(video: Video) -> tuple[str, float]:
+    """Classify the language of the video's title and caption."""
     text = f"{video.original_title}\n{video.original_caption}"
     if not text.strip():
         return "und", 0.0

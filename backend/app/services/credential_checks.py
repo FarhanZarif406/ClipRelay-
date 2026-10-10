@@ -55,21 +55,7 @@ def check_tiktok(values: dict[str, str]) -> tuple[bool | None, str]:
     return False, f"TikTok rejected the credentials: {_error_text(response)}"
 
 
-def check_transcription(values: dict[str, str]) -> tuple[bool | None, str]:
-    key = values.get("api_key", "")
-    base = (values.get("base_url") or "https://api.openai.com/v1").rstrip("/")
-    if not key:
-        return False, "API key is required"
-    try:
-        response = request("GET", f"{base}/models", headers={"Authorization": f"Bearer {key}"}, retries=2, timeout=15)
-    except ApiError as exc:
-        return False, str(exc)
-    if response.status_code == 200:
-        return True, "Transcription API key accepted"
-    return False, f"Provider rejected the key ({response.status_code}): {_error_text(response)}"
-
-
-VALIDATORS = {"instagram": check_instagram, "tiktok": check_tiktok, "transcription": check_transcription}
+VALIDATORS = {"instagram": check_instagram, "tiktok": check_tiktok}
 
 
 def check_smtp(values: dict[str, str]) -> tuple[bool | None, str]:
