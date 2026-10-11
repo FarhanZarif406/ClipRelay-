@@ -1,45 +1,8 @@
 from pydantic import BaseModel, Field, field_validator
 
-HHMM = r"^([01]\d|2[0-3]):[0-5]\d$"
-
 
 class PolicyIn(BaseModel):
-    automations_paused: bool | None = None
-    name: str | None = Field(default=None, max_length=120)
-    active_window_start: str | None = Field(default=None, pattern=HHMM)
-    active_window_end: str | None = Field(default=None, pattern=HHMM)
-    active_days: list[int] | None = None
-    language_gate_enabled: bool | None = None
-    allowed_languages: list[str] | None = None
-    hourly_cap: int | None = Field(default=None, ge=1, le=60)
-    random_delay_min_minutes: int | None = Field(default=None, ge=0, le=240)
-    random_delay_max_minutes: int | None = Field(default=None, ge=0, le=240)
-    timezone: str | None = None
     tiktok_app_audited: bool | None = None
-
-    @field_validator("active_days")
-    @classmethod
-    def _days(cls, v):
-        if v is not None and any(d not in range(7) for d in v):
-            raise ValueError("days must be 0-6 (Monday=0)")
-        return sorted(set(v)) if v is not None else v
-
-    @field_validator("timezone")
-    @classmethod
-    def _tz(cls, v):
-        if v is not None:
-            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-            try:
-                ZoneInfo(v)
-            except (ZoneInfoNotFoundError, ValueError) as exc:
-                raise ValueError(f"unknown timezone {v!r}") from exc
-        return v
-
-    @field_validator("allowed_languages")
-    @classmethod
-    def _langs(cls, v):
-        return [x.strip().lower() for x in v if x.strip()] if v is not None else v
 
 
 class AuditIn(BaseModel):

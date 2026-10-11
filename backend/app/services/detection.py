@@ -13,15 +13,14 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.integrations import llm, youtube
+from app.integrations import youtube
 from app.integrations.http import ApiError
 from app.models import Channel, Job, SkipReason, TikTokAccount, Video, VideoStatus, utcnow
-from app.services import activity, pipeline, rules, workspace_settings
+from app.services import activity, pipeline, rules
 
 log = logging.getLogger(__name__)
 
 RENEW_BEFORE = timedelta(days=2)
-LANG_LABELS = {"hi": "Hindi", "ur": "Urdu", "en": "English", "es": "Spanish", "pt": "Portuguese", "ja": "Japanese", "ar": "Arabic", "bn": "Bengali", "fr": "French", "de": "German"}
 
 
 def _skip(db: Session, video: Video, code: str, reason: str) -> Video:
@@ -32,34 +31,16 @@ def _skip(db: Session, video: Video, code: str, reason: str) -> Video:
     return video
 
 
-def _language_reason(video: Video, policy: dict) -> str | None:
-    """Optional language rule from Automation Rules (off by default). Returns the reason to skip, if any."""
-    if not policy.get("language_gate_enabled"):
-        return None
-    allowed = [lang.lower() for lang in policy.get("allowed_languages", [])]
-    text = f"{video.original_title}\n{video.original_caption}".strip()
-    try:
-        video.detected_language, video.language_confidence = llm.detect_language(text) if text else ("und", 0.0)
-    except (ApiError, ValueError) as exc:
-        return f"Language detection failed: {exc}"
-    if allowed and video.detected_language not in allowed:
-        return "Not " + " or ".join(LANG_LABELS.get(code, code) for code in allowed)
-    return None
-
-
 def _check(db: Session, video: Video, channel: Channel, account: TikTokAccount | None) -> tuple[str, str] | None:
-    """The Shorts, duration and cap checks, counted against the videos table inside the caller's transaction."""
+    """The short-form and cap checks, counted against the videos table inside the caller's transaction."""
     values = rules.effective(db, channel.id)
     duration = video.duration_sec or 0
-    if values["shorts_only"] and not youtube.is_short(video.youtube_video_id):
-        return SkipReason.NOT_SHORT, f"Not a YouTube Short — a regular video of {duration:.0f}s"
-    if duration > values["max_duration_seconds"]:
-        return SkipReason.TOO_LONG, f"Duration {duration:.0f}s is over the {values['max_duration_seconds']}s limit — not short-form"
+    # Short-form = up to the maximum duration from Settings, or anything YouTube itself lists as a Short.
+    limit = values["max_duration_seconds"]
+    if duration > limit and not youtube.is_short(video.youtube_video_id):
+        return SkipReason.LONG_FORM, f"Long-form video: {duration:.0f}s, over the {limit}s short-form limit"
     if duration < values["min_duration_seconds"]:
         return SkipReason.TOO_SHORT, f"Duration {duration:.0f}s is under the {values['min_duration_seconds']}s minimum"
-    reason = _language_reason(video, workspace_settings.get(db, "policy"))
-    if reason:
-        return SkipReason.LANGUAGE, reason
 
     since = pipeline.cap_day_start(values["cap_reset_timezone"])
     taken = db.scalar(
@@ -183,16 +164,32 @@ def subscribe(db: Session, channel: Channel) -> bool:
     """Ask the hub to push this channel's uploads to us. Returns False where push cannot work (no public HTTPS URL)."""
     if not youtube.push_available():
         return False
+    channel.pubsub_requested_at = utcnow()
     try:
         youtube.subscribe(channel.youtube_channel_id)
     except ApiError as exc:
-        channel.last_error = str(exc)[:500]
+        channel.pubsub_error = str(exc)[:500]
         activity.record(db, "Detection", f"Push subscription failed for {channel.display_name}: {exc}", level="warning", event="pubsub_failed")
         return False
+    channel.pubsub_error = None
     return True
 
 
+def push_status(channel: Channel) -> str:
+    """off (paused) · unavailable (no public HTTPS address) · failed · subscribed · expired · pending."""
+    if not channel.active:
+        return "off"
+    if not youtube.push_available():
+        return "unavailable"
+    if channel.pubsub_error:
+        return "failed"
+    if channel.pubsub_subscription_expires_at:
+        return "subscribed" if channel.pubsub_subscription_expires_at > utcnow() else "expired"
+    return "pending"
+
+
 def unsubscribe(channel: Channel) -> None:
+    channel.pubsub_subscription_expires_at = channel.pubsub_requested_at = channel.pubsub_error = None
     if youtube.push_available():
         try:
             youtube.subscribe(channel.youtube_channel_id, mode="unsubscribe")
@@ -201,7 +198,7 @@ def unsubscribe(channel: Channel) -> None:
 
 
 def renew_subscriptions(db: Session) -> dict:
-    """Daily: push subscriptions expire, so renew every active channel's before it lapses."""
+    """Hourly: push subscriptions expire, so renew every active channel's well before it lapses."""
     renewed = 0
     soon = utcnow() + RENEW_BEFORE
     for channel in db.scalars(select(Channel).where(Channel.active.is_(True))):

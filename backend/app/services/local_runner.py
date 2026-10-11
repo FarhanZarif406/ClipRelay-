@@ -17,7 +17,7 @@ _pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="cliprelay-task")
 _started = False
 _lock = threading.Lock()
 DAILY = 24 * 60 * 60.0
-PERIODIC = {"refresh_tokens": 15 * 60.0, "renew_subscriptions": DAILY, "cleanup_files": DAILY, "validate_credentials": DAILY}
+PERIODIC = {"refresh_tokens": 15 * 60.0, "renew_subscriptions": 60 * 60.0, "cleanup_files": DAILY, "validate_credentials": DAILY}
 
 
 def _run(name: str, *args) -> None:

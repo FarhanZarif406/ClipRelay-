@@ -36,7 +36,7 @@ def details(monkeypatch):
     """Metadata for `youtube.video_details`, by video id (30 seconds unless set)."""
     known: dict[str, VideoMeta] = {}
     monkeypatch.setattr(youtube, "video_details", lambda video_id: known.get(video_id) or meta(video_id))
-    monkeypatch.setattr(youtube, "is_short", lambda video_id: not video_id.startswith("regular"))
+    monkeypatch.setattr(youtube, "is_short", lambda video_id: video_id.startswith("short"))
     return known
 
 
@@ -97,19 +97,20 @@ def test_render_command_only_does_the_two_edits():
 def test_rules_inherit_override_and_audit(db, channel, client, auth):
     assert rules.effective(db, channel.id)["speed"] == 1.08 and rules.effective(db)["cap_reset_timezone"] == "Asia/Karachi"
     rules.set_values(db, {"speed": 1.2})
-    rules.set_values(db, {"speed": 1.4, "approval_required": False}, channel=channel)
+    rules.set_values(db, {"speed": 1.4, "keep_audio": False}, channel=channel)
     assert rules.effective(db)["speed"] == 1.2 and rules.effective(db, channel.id)["speed"] == 1.4
     rules.set_values(db, {"speed": None}, channel=channel)  # remove the override: inherit again
-    assert rules.effective(db, channel.id)["speed"] == 1.2 and rules.effective(db, channel.id)["approval_required"] is False
+    assert rules.effective(db, channel.id)["speed"] == 1.2 and rules.effective(db, channel.id)["keep_audio"] is False
     changes = db.scalars(select(RuleChange).order_by(RuleChange.id)).all()
     assert [(c.key, c.old_value, c.new_value, c.channel_id) for c in changes] == [
-        ("speed", 1.08, 1.2, None), ("speed", None, 1.4, channel.id), ("approval_required", None, False, channel.id), ("speed", 1.4, None, channel.id),
+        ("speed", 1.08, 1.2, None), ("speed", None, 1.4, channel.id), ("keep_audio", None, False, channel.id), ("speed", 1.4, None, channel.id),
     ]
     for bad in ({"speed": 2}, {"speed": "fast"}, {"hashtag_count": 16}, {"cap_reset_timezone": "Mars/Base"}, {"nope": 1}, {"min_duration_seconds": 500}):
         with pytest.raises(ValueError):
             rules.set_values(db, bad)
-    with pytest.raises(ValueError, match="only be set globally"):
-        rules.set_values(db, {"cap_reset_timezone": "UTC"}, channel=channel)
+    for global_only in ({"cap_reset_timezone": "UTC"}, {"approval_required": False}):  # one switch, not one per channel
+        with pytest.raises(ValueError, match="only be set globally"):
+            rules.set_values(db, global_only, channel=channel)
     db.commit()
 
     r = client.put("/api/settings/rules", headers=auth, json={"values": {"hashtag_count": 5}})
@@ -118,7 +119,7 @@ def test_rules_inherit_override_and_audit(db, channel, client, auth):
     history = client.get("/api/settings/rules/history", headers=auth).json()
     assert history[0]["key"] == "hashtag_count" and history[0]["changed_by"] == "alex@example.com" and history[0]["changed_at"]
     r = client.put(f"/api/channels/{channel.id}/rules", headers=auth, json={"values": {"horizontal_flip": False}})
-    assert r.json()["overrides"] == {"approval_required": False, "horizontal_flip": False} and r.json()["effective"]["hashtag_count"] == 5
+    assert r.json()["overrides"] == {"keep_audio": False, "horizontal_flip": False} and r.json()["effective"]["hashtag_count"] == 5
 
 
 # ---------------------------------------------------------------- detection
@@ -138,7 +139,7 @@ def test_new_upload_is_stored_once_and_gets_one_job(db, channel, tiktok_account,
 def test_duration_checks_hold_the_video_with_a_reason(db, channel, details):
     details["long"], details["tiny"] = meta("long", 181), meta("tiny", 4)
     long_video, tiny = detection.discover(db, channel, "long"), detection.discover(db, channel, "tiny")
-    assert (long_video.status, long_video.skip_reason) == (VideoStatus.SKIPPED, SkipReason.TOO_LONG) and "181s" in long_video.rejection_reason
+    assert (long_video.status, long_video.skip_reason) == (VideoStatus.SKIPPED, SkipReason.LONG_FORM) and "181s" in long_video.rejection_reason
     assert tiny.skip_reason == SkipReason.TOO_SHORT and db.scalar(select(Job)) is None
     assert db.scalar(select(ActivityLog).where(ActivityLog.event == "video_skipped"))
     rules.set_values(db, {"max_duration_seconds": 600}, channel=channel)  # a channel override applies to the next video
@@ -146,13 +147,44 @@ def test_duration_checks_hold_the_video_with_a_reason(db, channel, details):
     assert detection.discover(db, channel, "long2").status == VideoStatus.ACCEPTED
 
 
-def test_only_shorts_are_processed(db, channel, details):
-    details["regular1"] = meta("regular1", 95)  # short enough, but a normal video, not a Short
-    video = detection.discover(db, channel, "regular1")
-    assert (video.status, video.skip_reason) == (VideoStatus.SKIPPED, SkipReason.NOT_SHORT) and db.scalar(select(Job)) is None
-    assert detection.discover(db, channel, "short1").status == VideoStatus.ACCEPTED
-    rules.set_values(db, {"shorts_only": False})  # switched off: duration alone decides
-    assert detection.discover(db, channel, "regular2").status == VideoStatus.ACCEPTED
+def test_short_means_under_the_limit_or_a_youtube_short(db, channel, details):
+    details["regular1"] = meta("regular1", 95)  # under the limit: short-form, whatever YouTube calls it
+    assert detection.discover(db, channel, "regular1").status == VideoStatus.ACCEPTED
+    details["short-long"] = meta("short-long", 200)  # over the limit, but YouTube lists it as a Short
+    assert detection.discover(db, channel, "short-long").status == VideoStatus.ACCEPTED
+    details["regular2"] = meta("regular2", 200)  # over the limit and not a Short: long-form
+    video = detection.discover(db, channel, "regular2")
+    assert (video.status, video.skip_reason) == (VideoStatus.SKIPPED, "long-form")
+
+
+def test_push_status(db, channel, monkeypatch):
+    assert detection.push_status(channel) == "unavailable"  # no public HTTPS address in the test settings
+    monkeypatch.setattr(youtube, "push_available", lambda: True)
+    assert detection.push_status(channel) == "pending"
+    channel.pubsub_subscription_expires_at = utcnow() + timedelta(days=3)
+    assert detection.push_status(channel) == "subscribed"
+    channel.pubsub_subscription_expires_at = utcnow() - timedelta(minutes=1)
+    assert detection.push_status(channel) == "expired"
+    channel.pubsub_error = "hub refused"
+    assert detection.push_status(channel) == "failed"
+    channel.active = False
+    assert detection.push_status(channel) == "off"
+
+
+@respx.mock
+def test_subscriptions_are_renewed_before_they_lapse(db, channel, monkeypatch):
+    monkeypatch.setattr(youtube, "push_available", lambda: True)
+    hub = respx.post(youtube.HUB_URL).mock(return_value=httpx.Response(202))
+    channel.pubsub_subscription_expires_at = utcnow() + timedelta(days=4)
+    assert detection.renew_subscriptions(db) == {"renewed": 0} and hub.call_count == 0
+    channel.pubsub_subscription_expires_at = utcnow() + timedelta(hours=20)
+    assert detection.renew_subscriptions(db) == {"renewed": 1}
+    sent = hub.calls[0].request.content.decode()
+    assert "hub.mode=subscribe" in sent and "hub.secret=" in sent and "channel_id%3D" + channel.youtube_channel_id in sent
+    assert "hub.callback=http%3A%2F%2Fapi.test%2Fapi%2Fyoutube%2Fwebhook" in sent
+    hub.mock(return_value=httpx.Response(500, text="down"))
+    channel.pubsub_subscription_expires_at = None
+    assert detection.renew_subscriptions(db) == {"renewed": 0} and detection.push_status(channel) == "failed"
 
 
 @respx.mock
@@ -165,7 +197,7 @@ def test_is_short_reads_youtubes_own_answer(db, channel, details, monkeypatch):
     with pytest.raises(youtube.YouTubeError):
         youtube.is_short("x1")
     # No answer from YouTube: nothing is stored, so the next poll or push tries the video again.
-    monkeypatch.setattr(youtube, "video_details", lambda video_id: meta(video_id))
+    monkeypatch.setattr(youtube, "video_details", lambda video_id: meta(video_id, 400))
     with pytest.raises(youtube.YouTubeError):
         detection.discover(db, channel, "x1")
     assert db.scalar(select(Video)) is None
@@ -284,7 +316,7 @@ def test_review_published_and_skipped_screens(client, auth, db, channel, tiktok_
     assert rejected["status"] == "cancelled" and rejected["reject_reason"] == "Not ours"
 
     skipped = client.get("/api/videos?status=skipped", headers=auth).json()
-    assert [(v["youtube_video_id"], v["skip_reason"]) for v in skipped] == [("long", "too_long")]
+    assert [(v["youtube_video_id"], v["skip_reason"]) for v in skipped] == [("long", "long-form")]
     dispatch.sent.clear()
     forced = client.post(f"/api/videos/{skipped[0]['id']}/process", headers=auth).json()
     assert forced["status"] == "fetched" and [name for name, _ in dispatch.sent] == ["process_video", "rewrite_job"]

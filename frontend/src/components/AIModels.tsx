@@ -87,7 +87,7 @@ function RemoveModal({ item, all, envConfigured, close }: { item: LLMProvider; a
     {item.is_default && others.length > 0 && <Field label="New default model"><select value={replacement} onChange={e => setReplacement(Number(e.target.value))}>{others.map(o => <option key={o.id} value={o.id}>{o.label} · {o.model}</option>)}</select></Field>}
     {others.length === 0 && (envConfigured
       ? <div className="form-note">This is the last AI model. ClipRelay falls back to the <code>LLM_*</code> settings in <code>.env</code>.</div>
-      : <div className="form-error">This is the last AI model and <code>.env</code> has no LLM key — rewriting and the language gate stop working until you add one.</div>)}
+      : <div className="form-error">This is the last AI model and <code>.env</code> has no LLM key — captions fall back to the original title until you add one.</div>)}
     <div className="form-note">Prompt templates that use this model switch to the workspace default.</div>
   </Modal>;
 }

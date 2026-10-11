@@ -15,7 +15,8 @@ def test_dashboard_and_report_empty(client, auth):
     assert report["uploaded"] == 0 and len(report["hourly"]) == 12
     assert client.get("/api/reports/daily.csv", headers=auth).text.startswith("date,account")
     nav = client.get("/api/dashboard/nav", headers=auth).json()
-    assert nav["monthly_quota"] == 1000
+    assert "monthly_quota" not in nav and "monthly_jobs" not in nav and nav["failed_jobs"] == 0
+    assert report["timezone"] == "Asia/Karachi" and summary["timezone"] == "Asia/Karachi"
 
 
 def test_dashboard_counts(client, auth, db, tiktok_account):
@@ -33,7 +34,8 @@ def test_dashboard_counts(client, auth, db, tiktok_account):
     assert kpis == {"fetched": 2, "published": 1, "pending": 0, "failed": 0, "removed": 1}
     assert summary["rejections"]["items"][0]["rejection_reason"].startswith("Duration")
     assert summary["accounts"][0]["posts_today"] == 1
-    assert "next_run" not in summary and summary["automations_paused"] is False
+    assert "automations_paused" not in summary and summary["rejections"]["max_duration_seconds"] == 180
+    assert "detected_language" not in summary["rejections"]["items"][0]
     assert "source" not in summary["rejections"]["items"][0]
     nav = client.get("/api/dashboard/nav", headers=auth).json()
     assert nav["unacknowledged_violations"] == 1 and nav["tiktok_accounts"] == 1 and "active_sources" not in nav
@@ -107,10 +109,11 @@ def test_job_approve_edit_cancel(client, auth, db, tiktok_account):
 
 
 def test_settings_validation(client, auth):
-    assert client.put("/api/settings/policy", headers=auth, json={"hourly_cap": 0}).status_code == 422
-    assert client.put("/api/settings/policy", headers=auth, json={"timezone": "Mars/Base"}).status_code == 422
-    r = client.put("/api/settings/policy", headers=auth, json={"active_window_start": "09:00", "hourly_cap": 6, "active_days": [0, 1, 2]})
-    assert r.json()["hourly_cap"] == 6 and r.json()["active_days"] == [0, 1, 2]
+    # The schedule rules are gone: the only thing left in "policy" is the TikTok audit flag.
+    r = client.put("/api/settings/policy", headers=auth, json={"tiktok_app_audited": True, "hourly_cap": 6, "automations_paused": True})
+    assert r.json() == {"tiktok_app_audited": True}
+    assert client.post("/api/jobs/process-next", headers=auth).status_code in (404, 405)
+    assert client.get("/api/audit", headers=auth).json()["compliance_rate"] is None  # nothing published: no rate
     r = client.put("/api/settings/audit", headers=auth, json={"check_hours": [24, 1, 6]})
     assert r.json()["check_hours"] == [1, 6, 24]
     assert {i["key"] for i in client.get("/api/settings/integrations", headers=auth).json()} == {"llm", "tiktok", "storage", "ffmpeg", "ytdlp"}

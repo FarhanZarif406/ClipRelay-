@@ -36,12 +36,10 @@ class VideoStatus:
 
 
 class SkipReason:
-    NOT_SHORT = "not_a_short"
-    TOO_LONG = "too_long"
+    LONG_FORM = "long-form"
     TOO_SHORT = "too_short"
     CHANNEL_CAP = "skipped_channel_cap"
     ACCOUNT_CAP = "skipped_account_cap"
-    LANGUAGE = "language"
 
 
 class CaptionStatus:
@@ -198,6 +196,8 @@ class Channel(Base, TimestampMixin):
     monitoring_since: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)  # only uploads after this are republished
     added_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     pubsub_subscription_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    pubsub_requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime())  # asked the hub; waiting for it to verify
+    pubsub_error: Mapped[str | None] = mapped_column(Text)
     last_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     next_poll_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     last_upload_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
@@ -227,8 +227,6 @@ class Video(Base):
     rendered_file_path: Mapped[str | None] = mapped_column(Text)  # storage key of the edited file sent to TikTok
     files_deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     size_bytes: Mapped[int | None] = mapped_column(Integer)
-    detected_language: Mapped[str | None] = mapped_column(String(32))
-    language_confidence: Mapped[float | None] = mapped_column(Float)
     status: Mapped[str] = mapped_column(String(16), default=VideoStatus.FETCHED, index=True)
     skip_reason: Mapped[str | None] = mapped_column(String(40))  # SkipReason code
     rejection_reason: Mapped[str | None] = mapped_column(Text)  # the same reason, written out for people

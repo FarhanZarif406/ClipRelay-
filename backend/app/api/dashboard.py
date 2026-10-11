@@ -1,6 +1,6 @@
 import csv
 import io
-from datetime import date, datetime, timezone
+from datetime import date
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
@@ -26,19 +26,14 @@ def nav(db: DB, _: CurrentUser):
     return stats.nav(db)
 
 
-def _day(value: date | None) -> datetime:
-    value = value or datetime.now(timezone.utc).date()
-    return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
-
-
 @router.get("/reports/daily")
 def daily(db: DB, _: CurrentUser, day: date | None = None):
-    return stats.daily_report(db, _day(day))
+    return stats.daily_report(db, day)
 
 
 @router.get("/reports/daily.csv")
 def daily_csv(db: DB, _: CurrentUser, day: date | None = None):
-    report = stats.daily_report(db, _day(day))
+    report = stats.daily_report(db, day)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["date", "account", "status", "uploaded_today", "share_pct", "failed_today", "total_uploaded"])

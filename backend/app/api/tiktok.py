@@ -11,7 +11,7 @@ from app.integrations.http import ApiError
 from app.models import Job, JobStatus, TikTokAccount, TikTokStatus, Violation
 from app.schemas import TikTokUpdate
 from app.security import create_oauth_state, decrypt, verify_oauth_state
-from app.services import activity, credentials, rules, serializers, stats, tokens
+from app.services import activity, credentials, pipeline, rules, serializers, stats, tokens
 
 router = APIRouter(tags=["tiktok"])
 COLORS = ["blue", "orange", "pink", "violet", "green"]
@@ -66,7 +66,8 @@ def oauth_callback(db: DB, code: str | None = None, state: str | None = None, er
     tokens.store_tiktok_tokens(account, token_set)
     credentials.set_status(db, "tiktok", "valid")
     db.flush()
-    activity.record(db, "OAuth", f"TikTok account @{account.username} connected", event="tiktok_connected")
+    waiting = pipeline.assign_waiting_jobs(db)  # videos that were waiting for an account can go out now
+    activity.record(db, "OAuth", f"TikTok account @{account.username} connected" + (f" · {waiting} waiting video(s) assigned to it" if waiting else ""), event="tiktok_connected")
     db.commit()
     return back(connected=account.username)
 

@@ -20,14 +20,15 @@ const isLong = (def: RuleDef) => def.key === "caption_prompt";
 const groupsOf = (defs: RuleDef[]) => Array.from(new Set(defs.map(d => d.group)));
 const invalid = (v: RuleValue | null) => typeof v === "number" && Number.isNaN(v);
 
-export function GlobalRules({ groups, title = "Pipeline rules", caption = "Global defaults. Nothing is hardcoded: a change applies to the next job, with no restart. A channel can override most of them under “Channel overrides”." }: { groups?: string[]; title?: string; caption?: string } = {}) {
+export function GlobalRules({ groups, title = "Pipeline rules", caption = "Global defaults. Nothing is hardcoded: a change applies to the next job, with no restart. A channel can override most of them under “Channel overrides”." , hideKeys = [] }: { groups?: string[]; title?: string; caption?: string; hideKeys?: string[] } = {}) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const onError = useErrorToast();
   const { data } = useQuery({ queryKey: ["rules"], queryFn: rules.get });
   const [draft, setDraft] = useState<RuleValues | null>(null);
   useEffect(() => { if (data) setDraft(data.values); }, [data]);
-  const definitions = (data?.definitions ?? []).filter(d => !groups || groups.includes(d.group));
+  const definitions = (data?.definitions ?? []).filter(d => (!groups || groups.includes(d.group)) && !hideKeys.includes(d.key));
+  const headings = new Set(definitions.map(d => d.group)).size > 1;
   const changed = data && draft ? definitions.map(d => d.key).filter(k => draft[k] !== data.values[k]) : [];
   const save = useMutation({
     mutationFn: () => rules.save(Object.fromEntries(changed.map(k => [k, draft![k]]))),
@@ -36,7 +37,7 @@ export function GlobalRules({ groups, title = "Pipeline rules", caption = "Globa
   });
   if (!data || !draft) return null;
   return <Card><div className="card-title">{title}</div><div className="card-caption">{caption}</div>
-    {groupsOf(definitions).map(group => <div className="rule-group" key={group}>{!groups && <h4>{group}</h4>}
+    {groupsOf(definitions).map(group => <div className="rule-group" key={group}>{headings && <h4>{group}</h4>}
       {definitions.filter(d => d.group === group).map(def => <div className={`rule-row ${isLong(def) ? "wide" : ""}`} key={def.key}>
         <div><strong>{def.label}{draft[def.key] !== def.default && <> <Badge tone="primary" dot={false}>changed</Badge></>}</strong><small>{def.help}{def.kind !== "bool" && def.kind !== "text" ? ` Default: ${show(def.default)}.` : ""}{def.min !== null && def.max !== null && def.kind !== "text" ? ` Range ${def.min}–${def.max}.` : ""}{!def.per_channel ? " Global only." : ""}</small></div>
         {isLong(def)

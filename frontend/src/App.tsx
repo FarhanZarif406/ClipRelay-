@@ -18,9 +18,7 @@ const Integrations = lazy(() => import("@/pages/Integrations"));
 const EditingRules = lazy(() => import("@/pages/EditingRules"));
 const DailyReport = lazy(() => import("@/pages/DailyReport"));
 const TikTokAccounts = lazy(() => import("@/pages/TikTokAccounts"));
-const AutomationRules = lazy(() => import("@/pages/AutomationRules"));
 const PromptStudio = lazy(() => import("@/pages/PromptStudio"));
-const JobsQueue = lazy(() => import("@/pages/JobsQueue"));
 const ComplianceAudit = lazy(() => import("@/pages/ComplianceAudit"));
 const Logs = lazy(() => import("@/pages/Logs"));
 const Settings = lazy(() => import("@/pages/Settings"));
@@ -44,7 +42,7 @@ export default function App() {
       <Route path="/terms" element={<Terms/>}/>
       <Route path="/privacy" element={<Privacy/>}/>
       <Route element={<RequireAuth><Layout/></RequireAuth>}>
-        {([["/", Dashboard], ["/channels", Channels], ["/review", ReviewQueue], ["/published", Published], ["/skipped", Skipped], ["/editing", EditingRules], ["/integrations", Integrations], ["/report", DailyReport], ["/tiktok", TikTokAccounts], ["/rules", AutomationRules], ["/prompts", PromptStudio], ["/jobs", JobsQueue], ["/audit", ComplianceAudit], ["/logs", Logs], ["/settings", Settings]] as const).map(([path, Page]) =>
+        {([["/", Dashboard], ["/channels", Channels], ["/review", ReviewQueue], ["/published", Published], ["/skipped", Skipped], ["/editing", EditingRules], ["/integrations", Integrations], ["/report", DailyReport], ["/tiktok", TikTokAccounts], ["/prompts", PromptStudio], ["/audit", ComplianceAudit], ["/logs", Logs], ["/settings", Settings]] as const).map(([path, Page]) =>
           <Route key={path} path={path} element={<Suspense fallback={<Spinner/>}><Page/></Suspense>}/>)}
       </Route>
       <Route path="*" element={<Navigate to="/" replace/>}/>

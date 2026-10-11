@@ -91,9 +91,9 @@ def rewrite_job(job_id: int) -> str | None:
 
 
 @celery_app.task
-def upload_job(job_id: int, ignore_window: bool = False) -> str:
+def upload_job(job_id: int) -> str:
     with session_scope() as db:
-        return pipeline.upload_job(db, job_id, ignore_window=ignore_window)
+        return pipeline.upload_job(db, job_id)
 
 
 @celery_app.task(bind=True, max_retries=5)
@@ -115,7 +115,7 @@ def refresh_tokens() -> dict:
 
 @celery_app.task
 def renew_subscriptions() -> dict:
-    """Daily: YouTube push subscriptions expire and must be renewed."""
+    """Hourly: YouTube push subscriptions expire, so each is renewed before it lapses."""
     with session_scope() as db:
         return detection.renew_subscriptions(db)
 

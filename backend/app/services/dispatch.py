@@ -37,8 +37,8 @@ def start_job(job_id: int) -> None:
     rewrite_job(job_id)
 
 
-def upload_job(job_id: int, ignore_window: bool = False) -> None:
-    _send("upload_job", job_id, ignore_window)
+def upload_job(job_id: int) -> None:
+    _send("upload_job", job_id)
 
 
 def check_job(job_id: int) -> None:

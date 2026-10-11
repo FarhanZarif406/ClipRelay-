@@ -31,8 +31,6 @@ export type Video = {
   original_caption: string;
   original_tags: string[];
   duration_sec: number | null;
-  detected_language: string | null;
-  language_confidence: number | null;
   status: "fetched" | "accepted" | "skipped";
   rejection_reason: string | null;
   created_at: string;
@@ -56,6 +54,7 @@ export type Job = {
   caption_fallback: boolean;
   publish_mode: "inbox" | "direct" | null;
   reject_reason: string | null;
+  waiting_for_account: boolean;
   tiktok_url: string | null;
   privacy_level: string | null;
   tiktok_post_id: string | null;
@@ -78,17 +77,15 @@ export type Summary = {
   attention: { username: string; status: string; refresh_expires_at: string | null }[];
   unacknowledged_violations: number;
   recent_activity: ActivityLog[];
-  automations_paused: boolean;
-  rejections: { items: Video[]; removed_today: number; acceptance_rate: number | null; language_gate_enabled: boolean; allowed_languages: string[] };
+  timezone: string;
+  rejections: { items: Video[]; removed_today: number; acceptance_rate: number | null; max_duration_seconds: number };
   accounts: (Ref & { posts_today: number; lifetime_posts: number })[];
 };
 
 export type Nav = {
   pending_jobs: number;
   unacknowledged_violations: number;
-  monthly_jobs: number;
-  monthly_quota: number;
-  reset_in_days: number;
+  failed_jobs: number;
   onboarding_completed: boolean;
   tiktok_accounts: number;
   review_jobs: number;
@@ -140,20 +137,7 @@ export type Prompt = {
   updated_at: string;
 };
 
-export type Policy = {
-  automations_paused: boolean;
-  name: string;
-  active_window_start: string;
-  active_window_end: string;
-  active_days: number[];
-  language_gate_enabled: boolean;
-  allowed_languages: string[];
-  hourly_cap: number;
-  random_delay_min_minutes: number;
-  random_delay_max_minutes: number;
-  timezone: string;
-  tiktok_app_audited: boolean;
-};
+export type Policy = { tiktok_app_audited: boolean };
 
 export type AuditSettings = { check_hours: number[]; auto_remove: boolean; notifications_enabled: boolean };
 export type NotificationSettings = { webhook_url: string; email: string; notify_violations: boolean; notify_failures: boolean; notify_tokens: boolean };
@@ -168,13 +152,13 @@ export type AuditItem = Job & {
 
 export type DailyReport = {
   date: string;
+  timezone: string;
   uploaded: number;
   failed: number;
   accounts: (Ref & { posts_today: number; failed_today: number; lifetime_posts: number })[];
   active_accounts: number;
   lifetime_uploads: number;
   accepted: number;
-  accepted_by_language: Record<string, number>;
   filtered_out: number;
   hourly: { hour: number; published: number; failed: number }[];
 };
@@ -224,7 +208,9 @@ export type Channel = ChannelRef & {
   url: string;
   active: boolean;
   default_tiktok_account: Ref | null;
-  pubsub_subscription_expires_at: string | null;
+  push_status: "subscribed" | "pending" | "expired" | "failed" | "unavailable" | "off";
+  push_expires_at: string | null;
+  push_error: string | null;
   last_checked_at: string | null;
   last_upload_at: string | null;
   last_error: string | null;

@@ -60,7 +60,6 @@ export const jobs = {
   cancel: (id: number) => api<Job>(`/jobs/${id}/cancel`, { method: "POST" }),
   reject: (id: number, reason: string) => api<Job>(`/jobs/${id}/reject`, { method: "POST", body: { reason } }),
   processAnyway: (videoId: number) => api<Job>(`/videos/${videoId}/process`, { method: "POST" }),
-  processNext: () => api<{ job_id: number; action: string }>("/jobs/process-next", { method: "POST" }),
   videos: (status?: string, limit = 20, channel_id?: number) => api<Video[]>("/videos", { query: { status, limit, channel_id } }),
 };
 
@@ -82,7 +81,7 @@ export const rules = {
 };
 
 export const audit = {
-  list: () => api<{ items: AuditItem[]; settings: AuditSettings; compliance_rate: number; monitoring: number }>("/audit"),
+  list: () => api<{ items: AuditItem[]; settings: AuditSettings; compliance_rate: number | null; monitoring: number }>("/audit"),
   violations: (unacknowledged = false) => api<Violation[]>("/violations", { query: { unacknowledged } }),
   ack: (id: number) => api<Violation>(`/violations/${id}/ack`, { method: "POST" }),
 };

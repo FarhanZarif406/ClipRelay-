@@ -54,7 +54,7 @@ def audit(db: DB, _: CurrentUser, limit: int = Query(30, ge=1, le=200)):
     return {
         "items": items,
         "settings": config,
-        "compliance_rate": round((1 - violations / published) * 100, 1) if published else 100.0,
+        "compliance_rate": round((1 - violations / published) * 100, 1) if published else None,  # nothing published: no rate yet
         "monitoring": sum(1 for j in jobs if j.status == JobStatus.MONITORING),
     }
 

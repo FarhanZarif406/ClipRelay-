@@ -6,7 +6,7 @@ import type { ActivityLog, Kpi, Summary } from "@/api/types";
 import { Icon, type IconName } from "@/components/Icon";
 import { Avatar, Badge, Button, Card, Empty, MiniBars, PageHeader, VideoThumb } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
-import { greeting, languageName, longAgo, relativeTime } from "@/lib/format";
+import { duration, greeting, longAgo, relativeTime } from "@/lib/format";
 
 function kpiMeta(k: Kpi) {
   if (k.meta) return k.meta;
@@ -62,8 +62,8 @@ function JobStatusCard({ summary }: { summary: Summary }) {
   const a = pct(d.published), b = a + pct(d.pending), c = b + pct(d.failed);
   const background = total ? `conic-gradient(var(--success) 0 ${a}%,var(--primary) ${a}% ${b}%,var(--danger) ${b}% ${c}%,var(--warning) ${c}%)` : "var(--surface-3)";
   return <Card className="status-card">
-    <div className="card-header"><div><div className="card-title">Job status</div><div className="card-caption">Today’s distribution</div></div></div>
-    <div className="donut-wrap"><div className="donut" style={{ background }}><div><strong>{total}</strong><span>Total jobs</span></div></div></div>
+    <div className="card-header"><div><div className="card-title">Video status</div><div className="card-caption">Today’s distribution</div></div></div>
+    <div className="donut-wrap"><div className="donut" style={{ background }}><div><strong>{total}</strong><span>Total videos</span></div></div></div>
     <div className="legend">{([["Published", d.published, "success"], ["Pending", d.pending, "primary"], ["Failed", d.failed, "danger"], ["Removed", d.removed, "warning"]] as const).map(([x, n, cl]) => <div key={x}><span><i className={cl}/>{x}</span><strong>{n}</strong></div>)}</div>
   </Card>;
 }
@@ -96,12 +96,11 @@ export default function Dashboard() {
       </Card>
     </div>
     {summary && <Card className="language-removals">
-      <div className="card-header"><div><div className="card-title">{summary.rejections.language_gate_enabled ? "Removed by language filter" : "Removed by filters"}</div><div className="card-caption">{summary.rejections.language_gate_enabled ? `Each incoming video's title and caption are checked first. Only ${summary.rejections.allowed_languages.map(languageName).join(" and ")} content continues to rewriting and publishing.` : "Every incoming video is checked with ffprobe. Only videos under 60 seconds continue to rewriting and publishing."}</div></div><div className="language-summary"><div><strong>{summary.rejections.removed_today}</strong><span>Removed today</span></div><div><strong>{summary.rejections.acceptance_rate === null ? "—" : `${summary.rejections.acceptance_rate}%`}</strong><span>Acceptance rate</span></div><Badge tone="success">{summary.rejections.language_gate_enabled ? `${summary.rejections.allowed_languages.map(languageName).join(" + ")} only` : "Under 60s only"}</Badge></div></div>
-      <div className="language-table">
-        <div className="language-table-head"><span>Video</span><span>Detected language</span><span>Language confidence</span><span>Removed</span><span>Reason</span></div>
-        {summary.rejections.items.length === 0 && <Empty icon="check" title="Nothing removed yet"/>}
-        {summary.rejections.items.map((video, index) => { const conf = video.language_confidence != null ? `${(video.language_confidence * 100).toFixed(1)}%` : "—"; return <div className="language-row" key={video.id}><div><VideoThumb index={index + 1} image={video.thumbnail_url} label={String(video.id).padStart(2, "0").slice(-2)} size={12}/><strong>{video.original_title || video.original_caption || video.youtube_video_id || `Video ${video.id}`}</strong></div><Badge tone="warning">{video.detected_language ? languageName(video.detected_language) : video.duration_sec ? `${video.duration_sec.toFixed(0)}s` : "—"}</Badge><span className="confidence"><i style={{ width: conf }}/>{conf}</span><span>{longAgo(video.created_at)}</span><span className="reason"><Icon name="close" size={13}/>{video.rejection_reason}</span></div>; })}
-      </div>
+      <div className="card-header"><div><div className="card-title">Skipped videos</div><div className="card-caption">Short-form means up to {summary.rejections.max_duration_seconds} seconds (or any YouTube Short). Longer videos are received and held as long-form; nothing is discarded.</div></div><div className="language-summary"><div><strong>{summary.rejections.removed_today}</strong><span>Skipped today</span></div><div><strong>{summary.rejections.acceptance_rate === null ? "—" : `${summary.rejections.acceptance_rate}%`}</strong><span>Acceptance rate</span></div><Badge tone="success">Up to {summary.rejections.max_duration_seconds}s</Badge><Button variant="ghost" onClick={() => navigate("/skipped")}>View all <Icon name="arrow" size={14}/></Button></div></div>
+      {summary.rejections.items.length === 0 && <Empty icon="check" title="Nothing skipped yet"/>}
+      {summary.rejections.items.length > 0 && <div className="table-wrap"><table><thead><tr><th>Video</th><th>Channel</th><th>Duration</th><th>Skipped</th><th>Reason</th></tr></thead><tbody>
+        {summary.rejections.items.map((video, index) => <tr key={video.id}><td><div className="channel-cell"><VideoThumb index={index + 1} image={video.thumbnail_url} size={12}/><strong>{video.original_title || video.youtube_video_id || `Video ${video.id}`}</strong></div></td><td>{video.channel?.display_name ?? "—"}</td><td>{duration(video.duration_sec)}</td><td>{longAgo(video.created_at)}</td><td style={{ whiteSpace: "normal" }}>{video.rejection_reason}</td></tr>)}
+      </tbody></table></div>}
     </Card>}
     {summary && <Card className="account-totals-card">
       <div className="card-header"><div><div className="card-title">Total uploads by connected account</div><div className="card-caption">Lifetime published video count for every TikTok account currently linked to this workspace.</div></div><Button variant="ghost" onClick={() => navigate("/report")}>Open daily report <Icon name="arrow" size={14}/></Button></div>

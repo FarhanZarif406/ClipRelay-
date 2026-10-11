@@ -21,9 +21,7 @@ const navigation: { label: string; icon: IconName; to: string }[] = [
   { label: "Integrations", icon: "link", to: "/integrations" },
   { label: "Daily Report", icon: "logs", to: "/report" },
   { label: "TikTok Accounts", icon: "tiktok", to: "/tiktok" },
-  { label: "Automation Rules", icon: "rules", to: "/rules" },
   { label: "Prompt Studio", icon: "sparkles", to: "/prompts" },
-  { label: "Jobs Queue", icon: "queue", to: "/jobs" },
   { label: "Compliance Audit", icon: "shield", to: "/audit" },
   { label: "Logs", icon: "logs", to: "/logs" },
   { label: "Settings", icon: "settings", to: "/settings" },
@@ -64,18 +62,17 @@ export function Layout() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const usage = nav.data ? Math.min(100, (nav.data.monthly_jobs / Math.max(1, nav.data.monthly_quota)) * 100) : 0;
   const name = user?.name || user?.email || "";
 
   return <div className="app-shell">
     <aside className={`sidebar ${menu ? "open" : ""}`}><div className="brand"><div className="brand-mark"><Icon name="play" size={15}/></div><span>ClipRelay</span><Badge tone="primary" dot={false}>BETA</Badge><button className="mobile-close" onClick={() => setMenu(false)}><Icon name="close"/></button></div>
-      <nav>{navigation.map(n => { const active = n.to === "/" ? location.pathname === "/" : location.pathname.startsWith(n.to); return <button key={n.to} className={active ? "active" : ""} aria-current={active ? "page" : undefined} onClick={() => navigate(n.to)}><Icon name={n.icon}/><span>{n.label}</span>{n.to === "/jobs" && !!nav.data?.pending_jobs && <b>{nav.data.pending_jobs}</b>}{n.to === "/review" && !!nav.data?.review_jobs && <b>{nav.data.review_jobs}</b>}{n.to === "/skipped" && !!nav.data?.skipped_videos && <b>{nav.data.skipped_videos}</b>}{n.to === "/audit" && !!nav.data?.unacknowledged_violations && <i/>}</button>; })}</nav>
-      <div className="sidebar-bottom"><button className="usage" onClick={() => setOnboarding(true)}><span><Icon name="sparkles" size={15}/>Monthly usage</span><strong>{(nav.data?.monthly_jobs ?? 0).toLocaleString()} / {(nav.data?.monthly_quota ?? 0).toLocaleString()} jobs</strong><div><i style={{ width: `${usage}%` }}/></div><small>Reset in {nav.data?.reset_in_days ?? "–"} days</small></button>
+      <nav>{navigation.map(n => { const active = n.to === "/" ? location.pathname === "/" : location.pathname.startsWith(n.to); return <button key={n.to} className={active ? "active" : ""} aria-current={active ? "page" : undefined} onClick={() => navigate(n.to)}><Icon name={n.icon}/><span>{n.label}</span>{n.to === "/published" && !!nav.data?.failed_jobs && <b title="Failed videos">{nav.data.failed_jobs}</b>}{n.to === "/review" && !!nav.data?.review_jobs && <b>{nav.data.review_jobs}</b>}{n.to === "/skipped" && !!nav.data?.skipped_videos && <b>{nav.data.skipped_videos}</b>}{n.to === "/audit" && !!nav.data?.unacknowledged_violations && <i/>}</button>; })}</nav>
+      <div className="sidebar-bottom">
         <a className="help" href={DOCS_URL} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}><Icon name="alert" size={16}/><div><strong>Need help?</strong><span>View documentation</span></div><Icon name="chevron" size={14}/></a>
         <div className="legal-links"><a href="/terms" target="_blank" rel="noreferrer">Terms</a><a href="/privacy" target="_blank" rel="noreferrer">Privacy</a></div></div>
     </aside>
     <div className="workspace"><header className="topbar"><button className="menu-button" onClick={() => setMenu(true)}><Icon name="menu"/></button><div className="mobile-brand"><div className="brand-mark"><Icon name="play" size={13}/></div>ClipRelay</div>
-      <form className="global-search" onSubmit={e => { e.preventDefault(); navigate(`/jobs?q=${encodeURIComponent(search)}`); }}><Icon name="search" size={17}/><input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search jobs, accounts…"/><kbd>⌘ K</kbd></form>
+      <form className="global-search" onSubmit={e => { e.preventDefault(); navigate(`/published?q=${encodeURIComponent(search)}`); }}><Icon name="search" size={17}/><input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search videos, accounts…"/><kbd>⌘ K</kbd></form>
       <div className="top-actions">
         <div className="menu-anchor" ref={bellRef}><button className="icon-button notification" aria-label="Notifications" onClick={() => setNotifications(o => !o)}><Icon name="bell"/>{!!nav.data?.unacknowledged_violations && <i/>}</button>
           {notifications && <div className="menu-pop right" style={{ width: 300 }}>

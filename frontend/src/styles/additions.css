@@ -216,3 +216,5 @@ select.inline-input option, .field select option { background: var(--surface-2);
 @media (max-width: 560px) { .edit-preview { grid-template-columns: 1fr; } }
 
 .narrow-page > .card { padding: 20px; }
+.cell-sub { font-size: 9px; color: var(--muted); margin-top: 3px; white-space: normal; max-width: 200px; line-height: 1.4; }
+a.button { text-decoration: none; display: inline-flex; align-items: center; }

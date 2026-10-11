@@ -60,7 +60,6 @@ class Settings(BaseSettings):
 
     # Limits from the design
     max_tiktok_accounts: int = 20
-    monthly_job_quota: int = 1000
 
     # Scheduler
     scheduler_tick_seconds: int = 30

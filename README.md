@@ -133,8 +133,8 @@ an accepted condition, not a solved problem. The downloader sits behind an adapt
    Content Posting **audit**, then turn on **App audited** on the TikTok card. Until then, *TikTok Accounts* shows a reminder
    that posts will be private.
 8. **Rate limits.** The video init endpoint allows about 6 requests per minute per user token, and TikTok caps the number of
-   API posts per creator per day. ClipRelay enforces a per-account **daily cap** (default 7, counted from midnight Asia/Karachi), a workspace **hourly cap**,
-   an optional **random delay**, and exponential backoff on `rate_limit_exceeded` / HTTP 429.
+   API posts per creator per day. ClipRelay enforces a per-account **daily cap** (default 7, counted from midnight Asia/Karachi)
+   and exponential backoff on `rate_limit_exceeded` / HTTP 429.
 
 Click **Connect account** in *TikTok Accounts* to run Login Kit OAuth. Access tokens (24 h) are refreshed automatically
 with the refresh token (365 days). Accounts are shown as **Expiring** 3 days before the refresh token expires and as
@@ -142,7 +142,7 @@ with the refresh token (365 days). Accounts are shown as **Expiring** 3 days bef
 
 ---
 
-## 4. LLM, language gate, storage
+## 4. LLM and storage
 
 **AI models** (Settings → AI models, owner only). Add as many as you like: **Anthropic, OpenAI, Google Gemini,
 OpenRouter, Groq, Mistral**, or any **custom** OpenAI-compatible endpoint (with a base URL). Paste the key, click
@@ -163,9 +163,6 @@ If `LLM_API_KEY` is set when you upgrade, the migration adds it as the default A
 empty keeps the original text. Every save creates a version you can restore, and **Test prompt** runs the template
 against a real caption. Each template can also pick its own **model** from the dropdown under the editor. The default
 option uses the workspace default.
-
-**Language gate** (optional, under *Automation Rules*). The video's title and caption are classified by the AI model
-to detect their language. Videos whose language isn't in the allowed list are rejected and logged with a reason.
 
 ### Email alerts
 
@@ -188,7 +185,8 @@ PostgreSQL:
 - **Channels** whose poll is due have their uploads feed checked.
 - **Detected** jobs are sent to download and render, and to the caption rewrite, side by side. A stage that failed is
   retried from where it broke: three attempts with a growing delay, then the job is marked failed.
-- **Ready** jobs are sent to the upload queue, subject to the active window, weekdays, caps and random delay.
+- **Ready** jobs are uploaded straight away, subject only to the daily caps. There is no schedule: the pipeline runs
+  around the clock. A job with no connected TikTok account waits ("Waiting for account") and goes out once one is connected.
 - **Monitoring** jobs whose next checkpoint is due are re-checked.
 
 Because windows, caps and checkpoints are all rows in the database, changes made in the UI apply on the next tick.
@@ -203,14 +201,12 @@ Channel overrides). Every change is recorded with who made it and when (Settings
 | `speed` | 1.08 | 1.0 to 1.5; video and audio are sped up together (`setpts` + `atempo`) |
 | `horizontal_flip` | on | `hflip` |
 | `keep_audio` | on | off removes the sound |
-| `shorts_only` | on | only YouTube Shorts are processed; a regular video is held as `not_a_short` |
-| `max_duration_seconds` / `min_duration_seconds` | 180 / 5 | outside this range a video is skipped |
+| `max_duration_seconds` / `min_duration_seconds` | 180 / 5 | short-form = up to the maximum, or any YouTube Short; anything longer is skipped as `long-form` |
 | `videos_per_channel_per_day` | 3 | further uploads are held as `skipped_channel_cap` |
 | `uploads_per_tiktok_account_per_day` | 7 | global only; an account can also have its own cap. Held as `skipped_account_cap` |
-| `approval_required` | on | on: review queue; off: published without a human step |
+| `approval_required` | on | global only; the **Require approval** switch on the Review Queue page |
 | `publish_mode` | inbox | global only; `inbox` or `direct` (see section 3) |
 | `cap_reset_timezone` | Asia/Karachi | global only; caps reset at midnight in this timezone |
-| `caption_prompt` | empty | one prompt for caption and hashtags; empty uses the default Prompt Studio template |
 | `hashtag_count` | 8 | 0 to 15 |
 | `fallback_hashtags` | fyp foryou viral trending shorts | used when the AI model fails |
 | `file_retention_days` | 7 | days after publishing before the files are deleted |
@@ -313,7 +309,7 @@ cd backend
 pytest -q
 ```
 
-The suite (105 tests) uses SQLite and mocks **YouTube, TikTok and the LLM** with `respx`, and stubs FFmpeg and downloads. It
+The suite (107 tests) uses SQLite and mocks **YouTube, TikTok and the LLM** with `respx`, and stubs FFmpeg and downloads. It
 covers:
 - auth
 - channel lookup, adding a channel, the uploads feed and the push webhook

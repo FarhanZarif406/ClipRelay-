@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { prompts, settings, tiktok } from "@/api/endpoints";
+import { channels, prompts, settings, tiktok } from "@/api/endpoints";
 import { Icon } from "./Icon";
 import { Button } from "./ui";
 
@@ -11,13 +11,13 @@ export function Onboarding({ close }: { close: () => void }) {
   const queryClient = useQueryClient();
   const accounts = useQuery({ queryKey: ["tiktok"], queryFn: tiktok.list });
   const promptList = useQuery({ queryKey: ["prompts"], queryFn: prompts.list });
-  const policy = useQuery({ queryKey: ["policy"], queryFn: settings.policy });
+  const channelList = useQuery({ queryKey: ["channels"], queryFn: channels.list });
 
   const defaultPrompt = promptList.data?.find(p => p.is_default);
   const content: [string, string, string, string, string, string][] = [
     ["Connect TikTok", "Choose where your rewritten videos should be published.", "T", "TikTok account", accounts.data?.items.length ? accounts.data.items.map(a => `@${a.username}`).slice(0, 3).join(", ") : "Connect with TikTok", "/tiktok"],
     ["Set your AI prompt", "Choose how titles, captions, and tags should be rewritten.", "✦", "Prompt", defaultPrompt?.name ?? "Create a prompt", "/prompts"],
-    ["Choose a schedule", "Decide when ClipRelay is allowed to publish.", "◷", "Publishing window", policy.data ? `${policy.data.active_window_start}–${policy.data.active_window_end}` : "Set a window", "/rules"],
+    ["Add a channel", "Add the YouTube channels whose new short videos should be republished.", "▶", "YouTube channels", channelList.data?.items.length ? channelList.data.items.map(c => c.display_name).slice(0, 3).join(", ") : "Add a channel", "/channels"],
   ];
   const c = content[step - 1];
   const finish = async () => {

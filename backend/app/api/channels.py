@@ -120,7 +120,6 @@ def update_channel(channel_id: int, body: ChannelUpdate, db: DB, user: CurrentUs
             channel.monitoring_since = channel.next_poll_at = utcnow()
             detection.subscribe(db, channel)
         else:
-            channel.pubsub_subscription_expires_at = None
             detection.unsubscribe(channel)
         activity.record(db, "Detection", f"Channel {channel.display_name} {'activated' if channel.active else 'paused'} by {user.email}", event="channel_toggled")
     db.commit()
@@ -187,6 +186,7 @@ def webhook_verify(
         from datetime import timedelta
 
         channel.pubsub_subscription_expires_at = utcnow() + timedelta(seconds=lease_seconds or youtube.LEASE_SECONDS)
+        channel.pubsub_error = None
         db.commit()
     elif not (mode == "unsubscribe" and not wanted):
         raise HTTPException(404, "No such subscription")

@@ -12,7 +12,6 @@ decides what to enqueue next. This keeps the pipeline unit-testable.
 
 import logging
 import os
-import random
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -46,21 +45,6 @@ PROCESSING_STATES = {"PROCESSING_UPLOAD", "PROCESSING_DOWNLOAD", "SEND_TO_USER_I
 
 
 # ---------------------------------------------------------------- helpers
-
-def within_window(policy: dict, now: datetime | None = None) -> bool:
-    now = (now or utcnow()).astimezone(ZoneInfo(policy.get("timezone") or "UTC"))
-    if now.weekday() not in policy.get("active_days", list(range(7))):
-        return False
-    start = policy.get("active_window_start", "00:00")
-    end = policy.get("active_window_end", "23:59")
-    current = now.strftime("%H:%M")
-    return start <= current <= end if start <= end else (current >= start or current <= end)
-
-
-def start_of_day(now: datetime | None = None) -> datetime:
-    now = now or utcnow()
-    return now.replace(hour=0, minute=0, second=0, microsecond=0)
-
 
 def cap_day_start(timezone_name: str, now: datetime | None = None) -> datetime:
     """Midnight of the current day in the cap-reset timezone — the moment the daily caps start counting."""
@@ -249,16 +233,9 @@ def rewrite_job(db: Session, job_id: int) -> str | None:
     values = rules.effective(db, video.channel_id)
     count = int(values["hashtag_count"])
     channel_name = video.channel.display_name if video.channel else ""
-    custom_prompt = (values.get("caption_prompt") or "").strip()
-    template = None if custom_prompt else prompts.resolve_template(db, job.prompt_template_id)
+    template = prompts.resolve_template(db, job.prompt_template_id)
     try:
-        if custom_prompt:
-            result = prompts.rewrite_single(
-                custom_prompt, title=video.original_title, description=video.original_caption,
-                tags=video.original_tags or [], channel=channel_name, hashtag_count=count,
-            )
-            used = "the caption prompt from Settings"
-        elif template:
+        if template:
             result = prompts.rewrite(
                 title_prompt=template.title_prompt, caption_prompt=template.caption_prompt, hashtags_prompt=template.hashtags_prompt,
                 title=video.original_title, caption=video.original_caption, tags=video.original_tags or [],
@@ -267,7 +244,7 @@ def rewrite_job(db: Session, job_id: int) -> str | None:
             job.prompt_template_id = template.id
             used = f"prompt “{template.name}”"
         else:
-            raise ApiError("No caption prompt is set and no prompt template is enabled")
+            raise ApiError("No prompt template is enabled in Prompt Studio")
         result["tags"] = result["tags"][:count]
         job.caption_status = CaptionStatus.DONE
         activity.record(db, "AI rewrite", f"Video #{video.id}: caption rewritten with {used}", event="rewritten", job_id=job.id)
@@ -294,7 +271,27 @@ def _defer(job: Job, delta: timedelta, reason: str) -> str:
     return "deferred"
 
 
-def upload_job(db: Session, job_id: int, *, ignore_window: bool = False) -> str:
+WAITING_FOR_ACCOUNT = "Waiting for a TikTok account — connect one in TikTok Accounts"
+
+
+def assign_waiting_jobs(db: Session) -> int:
+    """Give every unfinished job that has no TikTok account one, as soon as an account is connected."""
+    assigned = 0
+    for job in db.scalars(select(Job).where(Job.tiktok_account_id.is_(None), Job.status.in_(JobStatus.PENDING))):
+        account = pick_account(db, job.video)
+        if account is None:
+            break
+        job.tiktok_account_id = account.id
+        job.tiktok_account = account
+        job.error = None
+        if job.status == JobStatus.READY:
+            job.next_check_at = None
+        assigned += 1
+    db.flush()
+    return assigned
+
+
+def upload_job(db: Session, job_id: int) -> str:
     """Upload one READY job. Returns 'posted' | 'deferred' | 'skipped' | 'failed'.
 
     In inbox mode the file lands in the account's TikTok inbox and a person finishes the post in the app;
@@ -303,18 +300,14 @@ def upload_job(db: Session, job_id: int, *, ignore_window: bool = False) -> str:
     job = db.get(Job, job_id)
     if not job or job.status != JobStatus.READY or job.tiktok_publish_id:
         return "skipped"
-    policy = workspace_settings.get(db, "policy")
-    account = job.tiktok_account
     now = utcnow()
+    if job.tiktok_account is None:
+        assign_waiting_jobs(db)
+    account = job.tiktok_account
     if account is None:
-        return _defer(job, timedelta(hours=1), "No TikTok account assigned")
+        return _defer(job, timedelta(minutes=2), WAITING_FOR_ACCOUNT)  # nothing is lost: it is sent once an account exists
     if account.status not in (TikTokStatus.ACTIVE, TikTokStatus.EXPIRING):
-        return _defer(job, timedelta(minutes=30), f"@{account.username} is {account.status} — reconnect it")
-    if not ignore_window:
-        if policy["automations_paused"]:
-            return _defer(job, timedelta(minutes=5), "Automations paused")
-        if not within_window(policy, now):
-            return _defer(job, timedelta(minutes=10), "Outside the active publishing window")
+        return _defer(job, timedelta(minutes=10), f"@{account.username} is {account.status} — reconnect it")
     values = rules.effective(db, job.video.channel_id)
     cap = account_cap(account, values)
     if not job.video.forced and posts_since(db, account.id, cap_day_start(values["cap_reset_timezone"], now)) >= cap:
@@ -322,8 +315,6 @@ def upload_job(db: Session, job_id: int, *, ignore_window: bool = False) -> str:
     if not job.video.rendered_file_path:
         mark_failed(db, job.id, "The rendered file is no longer stored — it was deleted after the retention period")
         return "failed"
-    if posts_since(db, account.id, now - timedelta(hours=1)) >= int(policy.get("hourly_cap", 4)):
-        return _defer(job, timedelta(minutes=10), "Hourly cap reached")
 
     # Atomic claim: only one worker can move READY → UPLOADING, and only if nothing was ever published.
     claimed = db.execute(
@@ -542,8 +533,7 @@ def approve_job(db: Session, job: Job) -> None:
 # ---------------------------------------------------------------- 6. scheduler
 
 def scheduler_tick(db: Session) -> dict:
-    """Called by Celery beat every few seconds. Schedules live in the DB, so UI edits apply without restarts."""
-    policy = workspace_settings.get(db, "policy")
+    """Called by the scheduler every few seconds. The pipeline runs around the clock: there is no schedule rule."""
     now = utcnow()
     out: dict[str, list] = {"process": [], "rewrites": [], "uploads": [], "checks": []}
 
@@ -567,16 +557,14 @@ def scheduler_tick(db: Session) -> dict:
         job.next_check_at = now + LEASE
         out["rewrites"].append(job.id)
 
-    if not policy["automations_paused"]:
-        low = int(policy.get("random_delay_min_minutes", 0))
-        high = max(low, int(policy.get("random_delay_max_minutes", 0)))
-        for job in lease(JobStatus.READY, 50):
-            if job.tiktok_account_id is None:
-                job.next_check_at = now + timedelta(hours=1)
-                continue
-            delay = random.randint(low * 60, high * 60) if high else 0
-            job.next_check_at = now + timedelta(seconds=delay) + LEASE
-            out["uploads"].append((job.id, delay))
+    assign_waiting_jobs(db)
+    for job in lease(JobStatus.READY, 50):
+        if job.tiktok_account_id is None:
+            job.error = WAITING_FOR_ACCOUNT
+            job.next_check_at = now + timedelta(minutes=2)
+            continue
+        job.next_check_at = now + LEASE
+        out["uploads"].append((job.id, 0))
 
     for job in lease(JobStatus.MONITORING, 200):
         job.next_check_at = now + LEASE

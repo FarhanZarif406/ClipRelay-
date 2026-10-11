@@ -1,13 +1,13 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { channels, tiktok } from "@/api/endpoints";
-import type { Channel, ChannelCard } from "@/api/types";
+import type { Channel, ChannelCard, Tone } from "@/api/types";
 import { Icon } from "@/components/Icon";
 import { Menu } from "@/components/Menu";
 import { Field, Modal } from "@/components/Modal";
 import { useErrorToast, useToast } from "@/components/Toast";
-import { Button, Card, Empty, PageHeader, Spinner, Toggle } from "@/components/ui";
-import { relativeTime } from "@/lib/format";
+import { Badge, Button, Card, Empty, PageHeader, Spinner, Toggle } from "@/components/ui";
+import { dayTime, relativeTime } from "@/lib/format";
 
 function ChannelAvatar({ channel }: { channel: { thumbnail_url: string | null; display_name: string } }) {
   return channel.thumbnail_url ? <img src={channel.thumbnail_url} alt="" referrerPolicy="no-referrer"/> : <div className="channel-blank"><Icon name="play" size={13}/></div>;
@@ -44,6 +44,24 @@ function AddChannelModal({ close }: { close: () => void }) {
   </Modal>;
 }
 
+const PUSH: Record<Channel["push_status"], { label: string; tone: Tone }> = {
+  subscribed: { label: "Subscribed", tone: "success" },
+  pending: { label: "Pending", tone: "warning" },
+  expired: { label: "Expired", tone: "danger" },
+  failed: { label: "Failed", tone: "danger" },
+  unavailable: { label: "Polling only", tone: "neutral" },
+  off: { label: "Off", tone: "neutral" },
+};
+
+function PushStatus({ channel }: { channel: Channel }) {
+  const status = PUSH[channel.push_status];
+  const detail = channel.push_status === "failed" ? channel.push_error
+    : channel.push_status === "unavailable" ? "Needs a public HTTPS address (PUBLIC_BASE_URL)"
+    : channel.push_expires_at ? `${channel.push_status === "expired" ? "Expired" : "Renews before"} ${dayTime(channel.push_expires_at)}`
+    : channel.push_status === "pending" ? "Waiting for YouTube to confirm" : null;
+  return <div title={detail ?? undefined}><Badge tone={status.tone}>{status.label}</Badge>{detail && <div className="cell-sub">{detail}</div>}</div>;
+}
+
 export default function Channels() {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -63,15 +81,16 @@ export default function Channels() {
   const askRemove = (c: Channel) => { if (window.confirm(`Stop monitoring ${c.display_name}? Its published history is kept.`)) remove.mutate(c.id); };
 
   return <><PageHeader title="Channels" description="The YouTube channels being watched. Every new short-form upload is republished to TikTok."><Button icon="plus" variant="primary" onClick={() => setAdding(true)}>Add channel</Button></PageHeader>
-    {list.data && !list.data.push_available && <p className="note-row">Instant push notifications need a public HTTPS address, so on this install new uploads are found by checking each channel every few minutes (Settings → Pipeline rules → Polling interval).</p>}
-    <Card className="table-card"><div className="table-wrap"><table><thead><tr><th>Channel</th><th>Last upload</th><th>Published</th><th>Skipped</th><th>TikTok account</th><th>Last checked</th><th>Active</th><th/></tr></thead><tbody>
+    {list.data && !list.data.push_available && <p className="note-row">YouTube can only push notifications to a public HTTPS address (PUBLIC_BASE_URL in .env). On this install it is not public, so new uploads are found by checking each channel every few minutes instead.</p>}
+    <Card className="table-card"><div className="table-wrap"><table><thead><tr><th>Channel</th><th>Last upload</th><th>Published</th><th>Skipped</th><th>TikTok account</th><th>Push status</th><th>Last checked</th><th>Active</th><th/></tr></thead><tbody>
       {items.map(c => <tr key={c.id}>
         <td><div className="channel-cell"><ChannelAvatar channel={c}/><div><strong>{c.display_name}</strong><span>{c.handle ?? c.youtube_channel_id}{c.override_count ? ` · ${c.override_count} override${c.override_count === 1 ? "" : "s"}` : ""}</span></div></div></td>
         <td>{c.last_upload_at ? relativeTime(c.last_upload_at, { suffix: true }) : "—"}</td>
         <td>{c.videos_published}</td><td>{c.videos_skipped}</td>
         <td><select className="cell-select" value={c.default_tiktok_account?.id ?? ""} onChange={e => update.mutate({ id: c.id, body: { default_tiktok_account_id: e.target.value ? Number(e.target.value) : null } })}><option value="">Least-busy account</option>{(accounts.data?.items ?? []).map(a => <option key={a.id} value={a.id}>@{a.username}</option>)}</select></td>
+        <td><PushStatus channel={c}/></td>
         <td>{c.last_error ? <span className="cell-error" title={c.last_error}>{c.last_error}</span> : c.last_checked_at ? relativeTime(c.last_checked_at, { suffix: true }) : "Not yet"}</td>
-        <td><Toggle checked={c.active} label={`Monitor ${c.display_name}`} onChange={() => update.mutate({ id: c.id, body: { active: !c.active } })}/></td>
+        <td><Toggle checked={c.active} disabled={update.isPending} label={`Monitor ${c.display_name}`} onChange={() => { if (!update.isPending) update.mutate({ id: c.id, body: { active: !c.active } }); }}/></td>
         <td><Menu items={[{ label: "Check now", icon: "refresh", disabled: !c.active, onSelect: () => check.mutate(c) }, { label: "Open on YouTube", icon: "link", onSelect: () => window.open(c.url, "_blank", "noopener") }, { label: "Remove", icon: "close", danger: true, onSelect: () => askRemove(c) }]} trigger={t => <Button variant="ghost" icon="more" onClick={t}/>}/></td>
       </tr>)}</tbody></table></div>
       {list.isLoading && <Spinner/>}

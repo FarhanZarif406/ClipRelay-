@@ -52,7 +52,7 @@ export function JobDrawer({ jobId, close }: { jobId: number; close: () => void }
           <div><span>Privacy</span>{editable ? <select className="edit input" value={edit.privacy} onChange={e => setEdit({ ...edit, privacy: e.target.value })}><option value="">Account default</option><option value="PUBLIC_TO_EVERYONE">Public</option><option value="MUTUAL_FOLLOW_FRIENDS">Friends</option><option value="FOLLOWER_OF_CREATOR">Followers</option><option value="SELF_ONLY">Only me</option></select> : <strong>{job.privacy_level ?? "Account default"}</strong>}</div>
           <div><span>Compliance checks</span><strong>{job.check_count}{job.next_check_at && job.status === "monitoring" ? ` · next ${dayTime(job.next_check_at)}` : ""}</strong></div>
           {job.tiktok_post_id && <div><span>TikTok post</span><strong>{job.tiktok_post_id}</strong></div>}
-          {job.video.detected_language && <div><span>Language</span><strong>{job.video.detected_language.toUpperCase()}{job.video.language_confidence != null ? ` · ${(job.video.language_confidence * 100).toFixed(1)}%` : ""}</strong></div>}</div>
+</div>
       </div>
       <div className="drawer-section"><div className="section-label">PROCESS TIMELINE</div><div className="timeline">{job.events?.map(ev => <div className={`timeline-item ${ev.status}`} key={ev.id}><i><Icon name={ev.status === "failed" || ev.status === "violated" || ev.status === "cancelled" ? "close" : "check"} size={11}/></i><div><strong>{ev.message}</strong><span>{dayTime(ev.created_at)}</span></div></div>)}</div></div>
       <div className="drawer-actions">

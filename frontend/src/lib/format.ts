@@ -62,15 +62,6 @@ export const ACCOUNT_STATUS: Record<string, { label: string; tone: Tone }> = {
   revoked: { label: "Disconnected", tone: "neutral" },
 };
 
-export const LANGUAGES: Record<string, string> = {
-  hi: "Hindi", ur: "Urdu", en: "English", es: "Spanish", pt: "Portuguese", ja: "Japanese", ar: "Arabic", bn: "Bengali",
-  fr: "French", de: "German", it: "Italian", tr: "Turkish", ru: "Russian", zh: "Chinese", ko: "Korean", id: "Indonesian", pa: "Punjabi",
-};
-
-export const languageName = (code: string | null | undefined) => (code ? LANGUAGES[code] ?? code.toUpperCase() : "—");
-
-export const DAYS = ["M", "T", "W", "T", "F", "S", "S"];
-
 export function greeting(): string {
   const h = new Date().getHours();
   return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
@@ -82,10 +73,8 @@ export function initialsOf(name: string): string {
 }
 
 export const SKIP_REASON: Record<string, string> = {
-  not_a_short: "Not a Short (long video)",
-  too_long: "Too long",
+  "long-form": "Long-form",
   too_short: "Too short",
   skipped_channel_cap: "Channel daily cap",
   skipped_account_cap: "TikTok account daily cap",
-  language: "Language",
 };

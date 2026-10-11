@@ -1,6 +1,7 @@
 """Model → JSON shapes consumed by the React frontend."""
 
 from app.models import ActivityLog, CaptionStatus, Channel, Job, TikTokAccount, Video, Violation
+from app.services.detection import push_status
 
 
 def initials(handle: str) -> str:
@@ -52,7 +53,9 @@ def channel(c: Channel, stats: dict | None = None, overrides: int = 0) -> dict:
         "url": f"https://www.youtube.com/channel/{c.youtube_channel_id}",
         "active": c.active,
         "default_tiktok_account": tiktok_ref(c.default_tiktok_account),
-        "pubsub_subscription_expires_at": c.pubsub_subscription_expires_at,
+        "push_status": push_status(c),
+        "push_expires_at": c.pubsub_subscription_expires_at,
+        "push_error": c.pubsub_error,
         "last_checked_at": c.last_checked_at,
         "last_upload_at": c.last_upload_at,
         "last_error": c.last_error,
@@ -80,8 +83,6 @@ def video(v: Video) -> dict:
         "original_caption": v.original_caption,
         "original_tags": v.original_tags or [],
         "duration_sec": v.duration_sec,
-        "detected_language": v.detected_language,
-        "language_confidence": v.language_confidence,
         "status": v.status,
         "rejection_reason": v.rejection_reason,
         "created_at": v.created_at,
@@ -103,6 +104,7 @@ def job(j: Job, *, detail: bool = False) -> dict:
         "caption_fallback": j.caption_status == CaptionStatus.FALLBACK,
         "publish_mode": j.publish_mode,
         "reject_reason": j.reject_reason,
+        "waiting_for_account": j.status == "ready" and (j.tiktok_account is None or j.tiktok_account.status not in ("active", "expiring")),
         "tiktok_url": f"https://www.tiktok.com/@{j.tiktok_account.username}/video/{j.tiktok_post_id}" if j.tiktok_post_id and j.tiktok_account else None,
         "privacy_level": j.privacy_level,
         "tiktok_post_id": j.tiktok_post_id,

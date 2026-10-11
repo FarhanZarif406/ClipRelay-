@@ -19,6 +19,10 @@ STATUS_GROUPS = {
     "pending": JobStatus.PENDING,
     "published": JobStatus.PUBLISHED | {JobStatus.VIOLATED},
     "review": {JobStatus.AWAITING_APPROVAL},
+    "failed": {JobStatus.FAILED},
+    "waiting": {JobStatus.READY, JobStatus.UPLOADING},  # approved or automatic, not on TikTok yet
+    # Everything past the review step: the Published page shows these.
+    "outbox": JobStatus.PUBLISHED | {JobStatus.VIOLATED, JobStatus.FAILED, JobStatus.READY, JobStatus.UPLOADING},
 }
 
 
@@ -68,7 +72,7 @@ def list_jobs(
             conditions.append(Job.id == int(term))
         stmt = stmt.outerjoin(TikTokAccount, Job.tiktok_account_id == TikTokAccount.id).where(or_(*conditions))
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
-    ordering = {"newest": Job.id.desc(), "oldest": Job.id.asc(), "posted": Job.posted_at.desc()}[order]
+    ordering = {"newest": Job.id.desc(), "oldest": Job.id.asc(), "posted": func.coalesce(Job.posted_at, Job.updated_at).desc()}[order]
     jobs = db.scalars(stmt.order_by(ordering).offset((page - 1) * page_size).limit(page_size)).unique().all()
     return {"items": [serializers.job(j) for j in jobs], "total": total}
 
@@ -158,23 +162,6 @@ def cancel(job_id: int, db: DB, _: CurrentUser):
     activity.record(db, "Publisher", f"Job #{job.id} cancelled", event="job_cancelled", job_id=job.id)
     db.commit()
     return serializers.job(job, detail=True)
-
-
-@router.post("/jobs/process-next")
-def process_next(db: DB, _: CurrentUser):
-    job = db.scalar(
-        select(Job).where(Job.status == JobStatus.READY, Job.tiktok_account_id.is_not(None)).order_by(Job.id).limit(1)
-    )
-    if not job:
-        job = db.scalar(select(Job).where(Job.status == JobStatus.FETCHED).order_by(Job.id).limit(1))
-        if not job:
-            raise HTTPException(404, "Nothing in the queue is ready to process")
-        dispatch.start_job(job.id)
-        return {"job_id": job.id, "action": "process"}
-    job.next_check_at = None
-    db.commit()
-    dispatch.upload_job(job.id, True)
-    return {"job_id": job.id, "action": "upload"}
 
 
 @router.get("/videos")

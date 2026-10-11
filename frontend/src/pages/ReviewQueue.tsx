@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { auth, jobs, tiktok } from "@/api/endpoints";
+import { auth, jobs, rules, tiktok } from "@/api/endpoints";
 import { apiUrl } from "@/api/client";
 import type { Job } from "@/api/types";
 import { useErrorToast, useToast } from "@/components/Toast";
-import { Badge, Button, Card, Empty, PageHeader, Spinner, VideoThumb } from "@/components/ui";
+import { Badge, Button, Card, Empty, PageHeader, Spinner, Toggle, VideoThumb } from "@/components/ui";
 import { duration, relativeTime } from "@/lib/format";
 
 const tagText = (tags: string[]) => tags.map(t => `#${t}`).join(" ");
@@ -17,6 +17,14 @@ export default function ReviewQueue() {
   const list = useQuery({ queryKey: ["jobs", "review"], queryFn: () => jobs.list({ status: "review", order: "oldest", page_size: 100 }), refetchInterval: 15_000 });
   const accounts = useQuery({ queryKey: ["tiktok"], queryFn: tiktok.list });
   const media = useQuery({ queryKey: ["media-token"], queryFn: auth.mediaToken, staleTime: 60 * 60_000 });
+  // The one approval switch for the whole app; it is read when each video finishes its edit and caption.
+  const ruleValues = useQuery({ queryKey: ["rules"], queryFn: rules.get });
+  const approval = ruleValues.data ? !!ruleValues.data.values.approval_required : true;
+  const setApproval = useMutation({
+    mutationFn: (value: boolean) => rules.save({ approval_required: value }),
+    onSuccess: (d, value) => { queryClient.setQueryData(["rules"], d); toast({ title: value ? "Approval required" : "Auto-publish on", message: value ? "New videos wait here for Approve or Reject." : "New videos are published without stopping here." }); },
+    onError,
+  });
   const items = list.data?.items ?? [];
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [handled, setHandled] = useState<number[]>([]);
@@ -55,7 +63,7 @@ export default function ReviewQueue() {
       if (dirty) await jobs.update(j.id, { rewritten_caption: caption, rewritten_tags: parseTags(tags), tiktok_account_id: accountId ? Number(accountId) : null });
       return jobs.approve(j.id);
     },
-    onSuccess: j => { toast({ title: "Approved", message: `Publishing to ${j.tiktok_account ? `@${j.tiktok_account.username}` : "TikTok"}.` }); done(j.id); },
+    onSuccess: j => { toast(j.tiktok_account ? { title: "Approved", message: `Publishing to @${j.tiktok_account.username}.` } : { title: "Approved — waiting for account", message: "It is sent as soon as a TikTok account is connected." }); done(j.id); },
     onError,
   });
   const reject = useMutation({ mutationFn: (j: Job) => jobs.reject(j.id, reason.trim()), onSuccess: j => { toast({ title: "Rejected" }); done(j.id); }, onError });
@@ -88,9 +96,9 @@ export default function ReviewQueue() {
 
   const src = job && job.video.has_file && media.data ? apiUrl(`/videos/${job.video.id}/file`, { token: media.data.token }) : null;
 
-  return <><PageHeader title="Review Queue" description="Watch the edited video, fix the caption, and approve or reject. Nothing is published until you approve."><Badge tone={queue.length ? "warning" : "success"}>{queue.length} waiting</Badge></PageHeader>
+  return <><PageHeader title="Review Queue" description={approval ? "Watch the edited video, fix the caption, and approve or reject. Nothing is published until you approve." : "Approval is off: new videos are published automatically and do not stop here."}><div className="pause-control"><span>Require approval</span><Toggle checked={approval} disabled={!ruleValues.data || setApproval.isPending} label="Require approval" onChange={() => { if (!setApproval.isPending) setApproval.mutate(!approval); }}/></div><Badge tone={queue.length ? "warning" : "success"}>{queue.length} waiting</Badge></PageHeader>
     {list.isLoading && <Spinner/>}
-    {!list.isLoading && !job && <Card><Empty icon="check" title="Nothing to review">New videos appear here once they are downloaded, edited and captioned. With approval switched off in Settings, videos are published without stopping here.</Empty></Card>}
+    {!list.isLoading && !job && <Card><Empty icon="check" title="Nothing to review">{approval ? "New short videos appear here once they are downloaded, edited and captioned." : "Require approval is off, so new videos go straight to publishing. Turn it on above to check each video first."}</Empty></Card>}
     {job && <div className="review-layout">
       <Card className="review-list">{queue.map(j => <button key={j.id} className={j.id === job.id ? "active" : ""} onClick={() => setCurrentId(j.id)}><VideoThumb index={j.id} image={j.video.thumbnail_url}/><div><strong>{j.video.original_title || "Untitled"}</strong><span>{j.video.channel?.display_name ?? "—"} · {relativeTime(j.created_at, { suffix: true })}</span></div></button>)}</Card>
       <Card className="review-main">
@@ -103,16 +111,16 @@ export default function ReviewQueue() {
             <span>Source channel</span><strong>{job.video.channel?.display_name ?? "—"}</strong>
             <span>Original title</span><div style={{ whiteSpace: "normal" }}>{job.video.original_title}</div>
             <span>YouTube</span><div>{job.video.permalink ? <a href={job.video.permalink} target="_blank" rel="noreferrer">Open the original video</a> : "—"} · {duration(job.video.duration_sec)}</div>
-            <span>Post to</span><div><select className="cell-select" value={accountId} onChange={e => setAccountId(e.target.value)}><option value="">No account</option>{(accounts.data?.items ?? []).map(a => <option key={a.id} value={a.id}>@{a.username}</option>)}</select></div>
+            <span>Post to</span><div><select className="cell-select" value={accountId} onChange={e => setAccountId(e.target.value)}><option value="">No account yet (waits)</option>{(accounts.data?.items ?? []).map(a => <option key={a.id} value={a.id}>@{a.username}</option>)}</select></div>
           </div>
           {job.caption_fallback && <div className="fallback-note"><strong>Caption fallback.</strong> The AI model failed for this video, so the original YouTube title and the default hashtags are shown. Edit them before publishing.</div>}
           <div className="field"><label>Caption</label><textarea ref={captionRef} value={caption} maxLength={2200} onChange={e => setCaption(e.target.value)}/><small>{caption.length} / 2200</small></div>
           <div className="field"><label>Hashtags</label><input value={tags} onChange={e => setTags(e.target.value)} placeholder="#fyp #shorts"/><small>{parseTags(tags).length} hashtags</small></div>
           {!rejecting && <div className="review-actions">
-            <Button variant="primary" icon="check" disabled={busy || !accountId} onClick={() => approve.mutate(job)}>{dirty ? "Save edits and publish" : "Approve and publish"}<kbd>A</kbd></Button>
+            <Button variant="primary" icon="check" disabled={busy} onClick={() => approve.mutate(job)}>{dirty ? "Save edits and publish" : "Approve and publish"}<kbd>A</kbd></Button>
             <Button disabled={busy} onClick={() => captionRef.current?.focus()}>Edit caption<kbd>E</kbd></Button>
             <Button variant="danger" disabled={busy} onClick={() => { setRejecting(true); setTimeout(() => reasonRef.current?.focus(), 0); }}>Reject<kbd>R</kbd></Button>
-            {!accountId && <span className="cell-error">Choose a TikTok account first.</span>}
+            {!accountId && <span className="cell-sub">No TikTok account yet: an approved video waits as “Waiting for account”.</span>}
           </div>}
           {rejecting && <div className="reject-box"><div className="field"><label>Reason for rejecting</label><textarea ref={reasonRef} value={reason} maxLength={1000} onChange={e => setReason(e.target.value)} placeholder="Why is this video not published?"/></div>
             <div className="review-actions"><Button variant="danger" disabled={busy || !reason.trim()} onClick={() => reject.mutate(job)}>Reject video</Button><Button disabled={busy} onClick={() => setRejecting(false)}>Back</Button></div></div>}

@@ -1,12 +1,11 @@
 """LLM client with one adapter per API family.
 
 Providers are configured in Settings → AI models (`llm_providers` table); when none exist, the LLM_* values in
-.env are used. `complete()` and `detect_language()` keep their original signatures and resolve the default
+.env are used. `complete()` keeps its original signature and resolves the default
 provider unless `provider_id` is given.
 """
 
 import json
-import re
 from dataclasses import dataclass
 
 from app.integrations.http import ApiError, AuthError, request
@@ -166,18 +165,3 @@ def complete(prompt: str, *, system: str = SYSTEM_PROMPT, max_tokens: int | None
     if cfg is None or not cfg.api_key:
         raise ApiError("No AI model is configured — add one in Settings → AI models")
     return complete_with(cfg, prompt, system=system, max_tokens=max_tokens)
-
-
-def detect_language(text: str, provider_id: int | None = None) -> tuple[str, float]:
-    """Return (ISO 639-1 code, confidence 0-1) for the given text."""
-    prompt = (
-        "Identify the language of the following text. Hindi written in Latin script counts as Hindi, "
-        'Urdu written in Latin script counts as Urdu. Respond with JSON only: {"language": "<ISO 639-1>", "confidence": <0-1>}.\n\n'
-        f"Text:\n{text[:4000]}"
-    )
-    raw = complete(prompt, system="You are a precise language identification tool.", max_tokens=60, provider_id=provider_id)
-    match = re.search(r"\{.*\}", raw, re.S)
-    if not match:
-        raise ApiError(f"Unparseable language detection response: {raw[:120]}")
-    data = json.loads(match.group(0))
-    return str(data.get("language", "und")).lower()[:8], float(data.get("confidence", 0))

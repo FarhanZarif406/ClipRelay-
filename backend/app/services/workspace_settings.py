@@ -8,20 +8,7 @@ from sqlalchemy.orm import Session
 from app.models import AppSetting
 
 DEFAULTS: dict[str, dict[str, Any]] = {
-    "policy": {
-        "automations_paused": False,
-        "name": "Default publishing pipeline",
-        "active_window_start": "00:00",
-        "active_window_end": "23:59",
-        "active_days": [0, 1, 2, 3, 4, 5, 6],  # Monday = 0
-        "language_gate_enabled": False,
-        "allowed_languages": ["hi", "ur"],
-        "hourly_cap": 4,
-        "random_delay_min_minutes": 0,
-        "random_delay_max_minutes": 0,
-        "timezone": "UTC",
-        "tiktok_app_audited": False,
-    },
+    "policy": {"tiktok_app_audited": False},
     "audit": {
         "check_hours": [1, 6, 12, 24],
         "auto_remove": True,
@@ -42,13 +29,14 @@ def get(db: Session, key: str) -> dict[str, Any]:
     row = db.get(AppSetting, key)
     value = deepcopy(DEFAULTS.get(key, {}))
     if row and isinstance(row.value, dict):
-        value.update(row.value)
+        # Keys that no longer exist (old schedule rules, for example) are ignored, not echoed back.
+        value.update({k: v for k, v in row.value.items() if k in value or key not in DEFAULTS})
     return value
 
 
 def update(db: Session, key: str, changes: dict[str, Any]) -> dict[str, Any]:
     value = get(db, key)
-    value.update({k: v for k, v in changes.items() if v is not None})
+    value.update({k: v for k, v in changes.items() if v is not None and (k in value or key not in DEFAULTS)})
     row = db.get(AppSetting, key)
     if row:
         row.value = value

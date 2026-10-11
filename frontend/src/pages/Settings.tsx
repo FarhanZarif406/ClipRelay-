@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { credentials, settings, users } from "@/api/endpoints";
 import type { NotificationSettings } from "@/api/types";
@@ -108,7 +108,13 @@ export default function Settings() {
   const [params] = useSearchParams();
   const [tab, setTab] = useState<Tab>(params.get("tab") === "keys" ? "API keys" : "Pipeline rules");
   return <><PageHeader title="Settings" description="Pipeline rules, channel overrides, TikTok accounts, integrations and team access."/><div className="settings-layout"><div className="settings-nav">{TABS.map(x => <button className={tab === x ? "active" : ""} key={x} onClick={() => setTab(x)}>{x}</button>)}</div><div className="settings-content">
-    {tab === "Pipeline rules" && <GlobalRules/>}
+    {tab === "Pipeline rules" && <>
+      <Card><div className="card-title">Set in one place</div><div className="card-caption">These are not repeated here, so there is only one place to change each of them.</div>
+        <div className="api-row"><div><strong>Speed, flip and audio</strong><span>The edit every video gets</span></div><Link className="button secondary" to="/editing">Open Editing Rules</Link></div>
+        <div className="api-row"><div><strong>Caption prompt</strong><span>What the AI model is asked to write</span></div><Link className="button secondary" to="/prompts">Open Prompt Studio</Link></div>
+        <div className="api-row"><div><strong>Require approval</strong><span>Review each video, or publish automatically</span></div><Link className="button secondary" to="/review">Open Review Queue</Link></div></Card>
+      <GlobalRules groups={["Detection", "Publishing", "Caption", "Storage"]} hideKeys={["approval_required"]} caption="Global defaults. Nothing is hardcoded: a change applies to the next video, with no restart. A channel can override most of them under “Channel overrides”."/>
+    </>}
     {tab === "Channel overrides" && <ChannelOverrides/>}
     {tab === "TikTok accounts" && <TikTokSummary/>}
     {tab === "Change history" && <RuleHistory/>}

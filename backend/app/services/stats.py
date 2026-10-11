@@ -1,12 +1,16 @@
-"""Aggregations for the Dashboard, Daily Report, sidebar badges and account cards."""
+"""Aggregations for the Dashboard, Daily Report, sidebar badges and account cards.
+
+Every "today" here is a day in the cap-reset timezone (Settings, Asia/Karachi by default) — the same day
+the daily caps count against — so the Dashboard, the Daily Report and the caps always agree.
+"""
 
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
 from app.models import (
     ActivityLog,
     Channel,
@@ -17,23 +21,35 @@ from app.models import (
     Video,
     VideoStatus,
     Violation,
-    utcnow,
 )
-from app.services import serializers, workspace_settings
-from app.services.pipeline import start_of_day
+from app.services import rules, serializers, workspace_settings
+from app.services.pipeline import cap_day_start
 
 
 def _count(db: Session, stmt) -> int:
     return db.scalar(stmt) or 0
 
 
-def _daily_series(timestamps: list[datetime], end_day: datetime, days: int) -> list[int]:
-    counts = Counter(ts.date() for ts in timestamps if ts)
-    return [counts.get((end_day - timedelta(days=days - 1 - i)).date(), 0) for i in range(days)]
+def timezone_name(db: Session) -> str:
+    return rules.global_values(db)["cap_reset_timezone"]
 
 
-def account_stats(db: Session, day: datetime | None = None) -> dict[int, dict]:
-    start = start_of_day(day)
+def day_start(db: Session, day: date | None = None) -> datetime:
+    """Midnight (as a UTC instant) of `day`, or of today, in the workspace timezone."""
+    zone = ZoneInfo(timezone_name(db))
+    if day is None:
+        return cap_day_start(zone.key)
+    return datetime(day.year, day.month, day.day, tzinfo=zone).astimezone(ZoneInfo("UTC"))
+
+
+def _daily_series(timestamps: list[datetime], end_day: datetime, days: int, zone: ZoneInfo) -> list[int]:
+    counts = Counter(ts.astimezone(zone).date() for ts in timestamps if ts)
+    last = end_day.astimezone(zone).date()
+    return [counts.get(last - timedelta(days=days - 1 - i), 0) for i in range(days)]
+
+
+def account_stats(db: Session, start: datetime | None = None) -> dict[int, dict]:
+    start = start or day_start(db)
     end = start + timedelta(days=1)
     out: dict[int, dict] = {}
 
@@ -50,26 +66,21 @@ def account_stats(db: Session, day: datetime | None = None) -> dict[int, dict]:
 
 
 def nav(db: Session) -> dict:
-    now = utcnow()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    next_month = (month_start + timedelta(days=32)).replace(day=1)
     return {
         "pending_jobs": _count(db, select(func.count(Job.id)).where(Job.status.in_(JobStatus.PENDING))),
         "unacknowledged_violations": _count(db, select(func.count(Violation.id)).where(Violation.acknowledged.is_(False))),
-        "monthly_jobs": _count(db, select(func.count(Job.id)).where(Job.created_at >= month_start)),
-        "monthly_quota": get_settings().monthly_job_quota,
-        "reset_in_days": (next_month - now).days + 1,
         "onboarding_completed": workspace_settings.get(db, "onboarding")["completed"],
-        "tiktok_accounts": _count(db, select(func.count(TikTokAccount.id))),
+        "tiktok_accounts": _count(db, select(func.count(TikTokAccount.id)).where(TikTokAccount.status != TikTokStatus.REVOKED)),
         "review_jobs": _count(db, select(func.count(Job.id)).where(Job.status == JobStatus.AWAITING_APPROVAL)),
+        "failed_jobs": _count(db, select(func.count(Job.id)).where(Job.status == JobStatus.FAILED)),
         "skipped_videos": _count(db, select(func.count(Video.id)).where(Video.status == VideoStatus.SKIPPED)),
         "channels": _count(db, select(func.count(Channel.id))),
     }
 
 
 def summary(db: Session) -> dict:
-    now = utcnow()
-    today = start_of_day(now)
+    zone = ZoneInfo(timezone_name(db))
+    today = day_start(db)
     yesterday = today - timedelta(days=1)
     spark_start = today - timedelta(days=9)
 
@@ -87,6 +98,9 @@ def summary(db: Session) -> dict:
             return None if a == 0 else 100
         return round((a - b) / b * 100)
 
+    def series(ts):
+        return _daily_series(ts, today, 10, zone)
+
     fetched, fetched_y = today_yesterday(fetched_ts)
     published, published_y = today_yesterday(posted_ts)
     failed, failed_y = today_yesterday(failed_ts)
@@ -95,11 +109,11 @@ def summary(db: Session) -> dict:
     processing = _count(db, select(func.count(Job.id)).where(Job.status.in_(JobStatus.PROCESSING | {JobStatus.UPLOADING})))
 
     kpis = [
-        {"key": "fetched", "label": "Videos fetched", "value": fetched, "delta": delta(fetched, fetched_y), "tone": "primary", "series": _daily_series(fetched_ts, today, 10)},
-        {"key": "published", "label": "Published", "value": published, "delta": delta(published, published_y), "tone": "success", "series": _daily_series(posted_ts, today, 10)},
-        {"key": "pending", "label": "Pending", "value": pending, "meta": f"{processing} processing", "tone": "warning", "series": _daily_series(pending_ts, today, 10)},
-        {"key": "failed", "label": "Failed", "value": failed, "delta": delta(failed, failed_y), "tone": "danger", "series": _daily_series(failed_ts, today, 10)},
-        {"key": "removed", "label": "Removed by audit", "value": removed, "meta": f"{(removed / published * 100) if published else 0:.1f}% rate", "tone": "neutral", "series": _daily_series(violation_ts, today, 10)},
+        {"key": "fetched", "label": "Videos detected", "value": fetched, "delta": delta(fetched, fetched_y), "tone": "primary", "series": series(fetched_ts)},
+        {"key": "published", "label": "Published", "value": published, "delta": delta(published, published_y), "tone": "success", "series": series(posted_ts)},
+        {"key": "pending", "label": "Pending", "value": pending, "meta": f"{processing} processing", "tone": "warning", "series": series(pending_ts)},
+        {"key": "failed", "label": "Failed", "value": failed, "delta": delta(failed, failed_y), "tone": "danger", "series": series(failed_ts)},
+        {"key": "removed", "label": "Removed by audit", "value": removed, "meta": f"{(removed / published * 100) if published else 0:.1f}% rate", "tone": "neutral", "series": series(violation_ts)},
     ]
 
     statuses = Counter(db.scalars(select(Job.status).where(Job.created_at >= today)))
@@ -110,19 +124,18 @@ def summary(db: Session) -> dict:
         "removed": statuses[JobStatus.VIOLATED],
     }
 
-    policy = workspace_settings.get(db, "policy")
-
     accounts = db.scalars(select(TikTokAccount).order_by(TikTokAccount.id)).all()
-    per_account = account_stats(db)
+    per_account = account_stats(db, today)
     attention = [
         {"username": a.username, "status": a.status, "refresh_expires_at": a.refresh_expires_at}
         for a in accounts
         if a.status in (TikTokStatus.EXPIRING, TikTokStatus.EXPIRED, TikTokStatus.REVOKED)
     ]
 
-    rejected = db.scalars(select(Video).where(Video.status == VideoStatus.SKIPPED).order_by(Video.id.desc()).limit(5)).all()
+    skipped = db.scalars(select(Video).where(Video.status == VideoStatus.SKIPPED).order_by(Video.id.desc()).limit(5)).unique().all()
     accepted_today = _count(db, select(func.count(Video.id)).where(Video.created_at >= today, Video.status == VideoStatus.ACCEPTED))
-    rejected_today = _count(db, select(func.count(Video.id)).where(Video.created_at >= today, Video.status == VideoStatus.SKIPPED))
+    skipped_today = _count(db, select(func.count(Video.id)).where(Video.created_at >= today, Video.status == VideoStatus.SKIPPED))
+    values = rules.global_values(db)
 
     return {
         "kpis": kpis,
@@ -130,13 +143,12 @@ def summary(db: Session) -> dict:
         "attention": attention,
         "unacknowledged_violations": _count(db, select(func.count(Violation.id)).where(Violation.acknowledged.is_(False))),
         "recent_activity": [serializers.log(e) for e in db.scalars(select(ActivityLog).order_by(ActivityLog.id.desc()).limit(4))],
-        "automations_paused": policy["automations_paused"],
+        "timezone": zone.key,
         "rejections": {
-            "items": [serializers.video(v) for v in rejected],
-            "removed_today": rejected_today,
-            "acceptance_rate": round(accepted_today / (accepted_today + rejected_today) * 100, 1) if (accepted_today + rejected_today) else None,
-            "language_gate_enabled": policy["language_gate_enabled"],
-            "allowed_languages": policy["allowed_languages"],
+            "items": [serializers.video(v) for v in skipped],
+            "removed_today": skipped_today,
+            "acceptance_rate": round(accepted_today / (accepted_today + skipped_today) * 100, 1) if (accepted_today + skipped_today) else None,
+            "max_duration_seconds": values["max_duration_seconds"],
         },
         "accounts": [
             {**serializers.tiktok_ref(a), "posts_today": per_account.get(a.id, {}).get("posts_today", 0), "lifetime_posts": per_account.get(a.id, {}).get("lifetime_posts", 0)}
@@ -146,30 +158,28 @@ def summary(db: Session) -> dict:
 
 
 def performance(db: Session, days: int) -> dict:
-    today = start_of_day()
+    zone = ZoneInfo(timezone_name(db))
+    today = day_start(db)
     start = today - timedelta(days=days - 1)
     posted = list(db.scalars(select(Job.posted_at).where(Job.posted_at >= start)))
-    series = _daily_series(posted, today, days)
-    labels = [(start + timedelta(days=i)).strftime("%a %d") for i in range(days)]
-    return {"labels": labels, "values": series}
+    first = today.astimezone(zone).date() - timedelta(days=days - 1)
+    return {"labels": [(first + timedelta(days=i)).strftime("%a %d") for i in range(days)], "values": _daily_series(posted, today, days, zone)}
 
 
-def daily_report(db: Session, day: datetime) -> dict:
-    start = start_of_day(day)
+def daily_report(db: Session, day: date | None = None) -> dict:
+    zone = ZoneInfo(timezone_name(db))
+    start = day_start(db, day)
     end = start + timedelta(days=1)
     accounts = db.scalars(select(TikTokAccount).order_by(TikTokAccount.id)).all()
     per_account = account_stats(db, start)
 
-    posted = list(db.scalars(select(Job.posted_at).where(Job.posted_at >= start, Job.posted_at < end)))
-    failed = list(db.scalars(select(Job.updated_at).where(Job.status == JobStatus.FAILED, Job.updated_at >= start, Job.updated_at < end)))
+    posted = [t.astimezone(zone) for t in db.scalars(select(Job.posted_at).where(Job.posted_at >= start, Job.posted_at < end))]
+    failed = [t.astimezone(zone) for t in db.scalars(select(Job.updated_at).where(Job.status == JobStatus.FAILED, Job.updated_at >= start, Job.updated_at < end))]
     hourly = [
         {"hour": h * 2, "published": sum(1 for t in posted if h * 2 <= t.hour < h * 2 + 2), "failed": sum(1 for t in failed if h * 2 <= t.hour < h * 2 + 2)}
         for h in range(12)
     ]
-    languages = Counter(
-        db.scalars(select(Video.detected_language).where(Video.created_at >= start, Video.created_at < end, Video.status == VideoStatus.ACCEPTED))
-    )
-    filtered = _count(db, select(func.count(Video.id)).where(Video.created_at >= start, Video.created_at < end, Video.status == VideoStatus.SKIPPED))
+    in_day = (Video.created_at >= start, Video.created_at < end)
     rows = []
     for a in accounts:
         stats = per_account.get(a.id, {})
@@ -182,14 +192,14 @@ def daily_report(db: Session, day: datetime) -> dict:
             }
         )
     return {
-        "date": start.date().isoformat(),
+        "date": start.astimezone(zone).date().isoformat(),
+        "timezone": zone.key,
         "uploaded": len(posted),
         "failed": len(failed),
         "accounts": rows,
         "active_accounts": sum(1 for a in accounts if a.status in (TikTokStatus.ACTIVE, TikTokStatus.EXPIRING)),
         "lifetime_uploads": sum(r["lifetime_posts"] for r in rows),
-        "accepted": sum(languages.values()),
-        "accepted_by_language": {k or "n/a": v for k, v in languages.items()},
-        "filtered_out": filtered,
+        "accepted": _count(db, select(func.count(Video.id)).where(*in_day, Video.status == VideoStatus.ACCEPTED)),
+        "filtered_out": _count(db, select(func.count(Video.id)).where(*in_day, Video.status == VideoStatus.SKIPPED)),
         "hourly": hourly,
     }

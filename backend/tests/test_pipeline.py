@@ -6,7 +6,7 @@ import respx
 from sqlalchemy import select
 
 from app.models import ActivityLog, CaptionStatus, Job, JobStatus, Video, VideoStatus, Violation, utcnow
-from app.services import media, pipeline, rules, workspace_settings
+from app.services import media, pipeline, rules
 from app.services.storage import get_storage
 from tests.helpers import ANTHROPIC, CREATOR, TT, UPLOAD_URL, claude, tt_err, tt_ok
 
@@ -42,13 +42,10 @@ def test_rewrite_uses_template(db, tiktok_account, template):
 
 
 @respx.mock
-def test_caption_prompt_from_settings_is_one_call(db, tiktok_account, template):
+def test_approval_switch_decides_review_or_publish(db, tiktok_account, template):
     job = _make_job(db, tiktok_account, status=JobStatus.REWRITING, caption="pending")
-    rules.set_values(db, {"caption_prompt": "Rewrite {title} from {channel} with {hashtag_count} hashtags."})
-    route = respx.post(ANTHROPIC).mock(return_value=claude('Here: {"caption": "Sun, sand, no crowds #beach", "hashtags": ["#Crete", "travel"]}'))
+    respx.post(ANTHROPIC).mock(return_value=claude("text"))
     assert pipeline.rewrite_job(db, job.id) == JobStatus.AWAITING_APPROVAL  # approval is on by default
-    assert route.call_count == 1 and "Hidden beaches in Crete" in route.calls[0].request.content.decode()
-    assert job.rewritten_caption == "Sun, sand, no crowds" and job.rewritten_tags == ["crete", "travel"]
     assert pipeline.upload_job(db, job.id) == "skipped"
     pipeline.approve_job(db, job)
     assert job.status == JobStatus.READY
@@ -262,15 +259,21 @@ def test_scheduler_tick_leases_due_jobs(db, tiktok_account):
     job.status, job.next_check_at = JobStatus.CLEAN, None
     db.commit()
     assert [job_id for job_id, _delay in pipeline.scheduler_tick(db)["uploads"]] == [ready.id]
-    workspace_settings.update(db, "policy", {"automations_paused": True})
-    ready.next_check_at = None
-    assert pipeline.scheduler_tick(db)["uploads"] == []  # paused automations do not upload
 
 
-def test_active_window():
-    policy = {"timezone": "UTC", "active_days": [0, 1, 2, 3, 4, 5, 6], "active_window_start": "09:00", "active_window_end": "22:00"}
-    base = utcnow().replace(hour=12, minute=0)
-    assert pipeline.within_window(policy, base)
-    assert not pipeline.within_window(policy, base.replace(hour=23))
-    overnight = {**policy, "active_window_start": "22:00", "active_window_end": "06:00"}
-    assert pipeline.within_window(overnight, base.replace(hour=23))
+def test_jobs_wait_for_an_account_and_go_out_when_one_connects(db, tiktok_account):
+    job = _make_job(db, tiktok_account, status=JobStatus.READY)
+    job.tiktok_account_id = None
+    tiktok_account.status = "revoked"
+    db.commit()
+    assert pipeline.upload_job(db, job.id) == "deferred"
+    assert job.status == JobStatus.READY and job.error == pipeline.WAITING_FOR_ACCOUNT  # waits; it is not failed
+    job.next_check_at = None
+    assert pipeline.scheduler_tick(db)["uploads"] == []
+
+    tiktok_account.status = "active"  # an account is connected
+    job.next_check_at = None
+    db.commit()
+    assert pipeline.scheduler_tick(db)["uploads"] == [(job.id, 0)]
+    assert job.tiktok_account_id == tiktok_account.id and job.error is None
+
