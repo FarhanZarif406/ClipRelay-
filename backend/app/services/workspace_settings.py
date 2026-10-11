@@ -14,16 +14,12 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "active_window_start": "00:00",
         "active_window_end": "23:59",
         "active_days": [0, 1, 2, 3, 4, 5, 6],  # Monday = 0
-        "max_duration_sec": 60,
         "language_gate_enabled": False,
         "allowed_languages": ["hi", "ur"],
         "hourly_cap": 4,
         "random_delay_min_minutes": 0,
         "random_delay_max_minutes": 0,
         "timezone": "UTC",
-        "unique_video_per_account": True,
-        "default_interval_minutes": 60,
-        "max_videos_per_run": 25,
         "tiktok_app_audited": False,
     },
     "audit": {

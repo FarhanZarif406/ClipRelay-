@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from app.schemas.sources import PRIVACY_LEVELS
+from app.schemas.tiktok import PRIVACY_LEVELS
 
 
 class JobUpdate(BaseModel):
@@ -9,3 +9,7 @@ class JobUpdate(BaseModel):
     rewritten_tags: list[str] | None = None
     privacy_level: PRIVACY_LEVELS | None = None
     tiktok_account_id: int | None = None
+
+
+class RejectIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=1000)

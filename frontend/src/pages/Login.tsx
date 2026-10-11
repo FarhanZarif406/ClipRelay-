@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Navigate, useLocation } from "react-router-dom";
+import { Link, Navigate, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { auth } from "@/api/endpoints";
 import { Icon } from "@/components/Icon";
@@ -15,6 +15,8 @@ export default function Login() {
   const [form, setForm] = useState({ email: "", password: "", name: "", workspace_name: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Remembered on this device after the first sign-in, so the tick is not needed every time.
+  const [accepted, setAccepted] = useState(() => { try { return localStorage.getItem("cliprelay.terms") === "1"; } catch { return false; } });
   const current = mode ?? (setup.data && !setup.data.has_users ? "register" : "login");
 
   if (user) return <Navigate to={(location.state as { from?: string } | null)?.from ?? "/"} replace/>;
@@ -24,8 +26,9 @@ export default function Login() {
     setError(null);
     setBusy(true);
     try {
-      if (current === "login") await login(form.email, form.password);
-      else await register({ ...form, workspace_name: form.workspace_name || "My Workspace" });
+      try { localStorage.setItem("cliprelay.terms", "1"); } catch { /* storage unavailable */ }
+      if (current === "login") await login(form.email, form.password, accepted);
+      else await register({ ...form, workspace_name: form.workspace_name || "My Workspace", accept_terms: accepted });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -42,7 +45,8 @@ export default function Login() {
       {current === "register" && <div className="field-row"><Field label="Your name"><input value={form.name} onChange={set("name")} autoComplete="name"/></Field><Field label="Workspace"><input value={form.workspace_name} onChange={set("workspace_name")} placeholder="Northstar Studio"/></Field></div>}
       <Field label="Email"><input type="email" required value={form.email} onChange={set("email")} autoComplete="email" autoFocus/></Field>
       <Field label="Password" hint={current === "register" ? "At least 8 characters." : undefined}><input type="password" required minLength={current === "register" ? 8 : 1} value={form.password} onChange={set("password")} autoComplete={current === "login" ? "current-password" : "new-password"}/></Field>
-      <Button type="submit" variant="primary" className="full" disabled={busy}>{busy ? "Please wait…" : current === "login" ? "Sign in" : "Create account"}</Button>
+      <label className="terms-check"><input type="checkbox" required checked={accepted} onChange={e => setAccepted(e.target.checked)}/><span>I accept the <Link to="/terms" target="_blank">Terms of Use</Link> and the <Link to="/privacy" target="_blank">Privacy Policy</Link>.</span></label>
+      <Button type="submit" variant="primary" className="full" disabled={busy || !accepted}>{busy ? "Please wait…" : current === "login" ? "Sign in" : "Create account"}</Button>
       {error && <div className="form-error">{error}</div>}
     </form>
     {setup.data?.registration_open && <div className="login-switch">{current === "login" ? <>No account yet? <button type="button" onClick={() => setMode("register")}>Create one</button></> : <>Already have an account? <button type="button" onClick={() => setMode("login")}>Sign in</button></>}</div>}

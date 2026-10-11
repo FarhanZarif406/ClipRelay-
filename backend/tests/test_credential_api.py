@@ -1,11 +1,10 @@
 import httpx
 import respx
 
-from app.models import InstagramSource, TikTokAccount
+from app.models import TikTokAccount
 from app.services import credentials
 from app.services.credential_checks import TIKTOK_TOKEN_URL
 
-IG_SECRET = "0123456789abcdef0123456789abcdef"
 
 
 def _card(client, headers, group):
@@ -60,15 +59,8 @@ def test_save_validates_and_falls_back_on_remove(client, auth):
     assert logs and all("new-secret" not in entry["message"] for entry in logs)
 
 
-def test_instagram_saved_as_unverified_and_format_checked(client, auth):
-    bad = client.post("/api/credentials/instagram/validate", headers=auth, json={"values": {"app_id": "abc", "app_secret": IG_SECRET}}).json()
-    assert bad["ok"] is False
-    r = client.put("/api/credentials/instagram", headers=auth, json={"values": {"app_id": "123456789", "app_secret": IG_SECRET}}).json()
-    assert r["ok"] is None and r["card"]["state"] == "unverified"
-
-
 @respx.mock
-def test_changing_app_with_connected_accounts_requires_reconnect(client, auth, db, source, tiktok_account):
+def test_changing_app_with_connected_accounts_requires_reconnect(client, auth, db, tiktok_account):
     respx.post(TIKTOK_TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": "clt.x"}))
     body = {"values": {"client_key": "other-app", "client_secret": "other-secret"}}
     r = client.put("/api/credentials/tiktok", headers=auth, json=body)
@@ -79,15 +71,11 @@ def test_changing_app_with_connected_accounts_requires_reconnect(client, auth, d
     db.expire_all()
     assert db.get(TikTokAccount, tiktok_account.id).status == "expired"
 
-    r = client.put("/api/credentials/instagram", headers=auth, json={"values": {"app_id": "999999", "app_secret": IG_SECRET}, "confirm_reconnect": True})
-    assert r.status_code == 200
-    db.expire_all()
-    assert db.get(InstagramSource, source.id).needs_reconnect is True
 
-
-def test_transcription_card_is_gone(client, auth):
+def test_transcription_and_instagram_cards_are_gone(client, auth):
     groups = [c["group"] for c in client.get("/api/credentials", headers=auth).json()]
-    assert "transcription" not in groups
+    assert "transcription" not in groups and "instagram" not in groups
+    assert client.put("/api/credentials/instagram", headers=auth, json={"values": {"app_id": "1"}}).status_code == 404
     assert client.put("/api/credentials/transcription", headers=auth, json={"values": {"api_key": "sk-x"}}).status_code == 404
 
 
@@ -139,3 +127,17 @@ def test_smtp_card_validation_and_test_email(client, auth, monkeypatch, db):
     FakeSMTP.fail_login = True
     bad = client.post("/api/credentials/smtp/validate", headers=auth, json={}).json()
     assert bad["ok"] is False and "app password" in bad["message"]
+
+
+@respx.mock
+def test_youtube_api_key_is_saved_in_the_app(client, auth):
+    from app.integrations import youtube
+
+    assert youtube.api_key() == ""
+    route = respx.get("https://www.googleapis.com/youtube/v3/channels").mock(side_effect=[httpx.Response(400, json={"error": {"message": "API key not valid"}}), httpx.Response(200, json={"items": []})])
+    bad = client.post("/api/credentials/youtube/validate", headers=auth, json={"values": {"api_key": "nope"}}).json()
+    assert bad["ok"] is False and "API key not valid" in bad["message"]
+    saved = client.put("/api/credentials/youtube", headers=auth, json={"values": {"api_key": "AIza-real-key"}}).json()
+    assert saved["ok"] is True and route.call_count == 2
+    assert youtube.api_key() == "AIza-real-key"  # lookups now use the Data API
+    assert "AIza-real-key" not in client.get("/api/credentials", headers=auth).text  # the secret never leaves the server

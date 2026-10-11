@@ -37,7 +37,7 @@ export function JobDrawer({ jobId, close }: { jobId: number; close: () => void }
   return <div className="drawer-overlay" onMouseDown={close}><aside className="drawer" onMouseDown={e => e.stopPropagation()}>
     <div className="drawer-head"><div>{status && <Badge tone={status.tone}>{status.label}</Badge>}<div className="card-title">Job #CR-{String(jobId).padStart(5, "0")}</div></div><Button variant="ghost" icon="close" onClick={close}/></div>
     {job && <>
-      <div className="video-preview" style={job.video.thumbnail_url ? { backgroundImage: `url(${job.video.thumbnail_url})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}>{job.video.permalink ? <a className="play-big" href={job.video.permalink} target="_blank" rel="noreferrer" aria-label="Open on Instagram"><Icon name="play" size={24}/></a> : <div className="play-big"><Icon name="play" size={24}/></div>}<span>{duration(job.video.duration_sec)}</span></div>
+      <div className="video-preview" style={job.video.thumbnail_url ? { backgroundImage: `url(${job.video.thumbnail_url})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}>{job.video.permalink ? <a className="play-big" href={job.video.permalink} target="_blank" rel="noreferrer" aria-label="Open original video"><Icon name="play" size={24}/></a> : <div className="play-big"><Icon name="play" size={24}/></div>}<span>{duration(job.video.duration_sec)}</span></div>
       {job.error && <div className="error-note">{job.error}</div>}
       {job.violation_reason && <div className="error-note"><strong>Violation:</strong> {job.violation_reason}</div>}
       <div className="drawer-section"><div className="section-label">CONTENT TRANSFORMATION</div>
@@ -47,7 +47,7 @@ export function JobDrawer({ jobId, close }: { jobId: number; close: () => void }
         </div></div>
       </div>
       <div className="drawer-section"><div className="section-label">PUBLISHING</div>
-        <div className="drawer-meta"><div><span>Source</span><strong>@{job.source?.username}</strong></div>
+        <div className="drawer-meta">
           <div><span>Target</span>{editable && !job.tiktok_post_id ? <select className="edit input" value={edit.account} onChange={e => setEdit({ ...edit, account: e.target.value })}><option value="">Unassigned</option>{accounts.data?.items.map(a => <option key={a.id} value={a.id}>@{a.username}</option>)}</select> : <strong>{job.tiktok_account ? `@${job.tiktok_account.username}` : "Unassigned"}</strong>}</div>
           <div><span>Privacy</span>{editable ? <select className="edit input" value={edit.privacy} onChange={e => setEdit({ ...edit, privacy: e.target.value })}><option value="">Account default</option><option value="PUBLIC_TO_EVERYONE">Public</option><option value="MUTUAL_FOLLOW_FRIENDS">Friends</option><option value="FOLLOWER_OF_CREATOR">Followers</option><option value="SELF_ONLY">Only me</option></select> : <strong>{job.privacy_level ?? "Account default"}</strong>}</div>
           <div><span>Compliance checks</span><strong>{job.check_count}{job.next_check_at && job.status === "monitoring" ? ` · next ${dayTime(job.next_check_at)}` : ""}</strong></div>

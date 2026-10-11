@@ -1,14 +1,12 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { dashboard, sources } from "@/api/endpoints";
+import { useQuery } from "@tanstack/react-query";
+import { dashboard } from "@/api/endpoints";
 import type { ActivityLog, Kpi, Summary } from "@/api/types";
 import { Icon, type IconName } from "@/components/Icon";
-import { useErrorToast, useToast } from "@/components/Toast";
 import { Avatar, Badge, Button, Card, Empty, MiniBars, PageHeader, VideoThumb } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
-import { useCountdown } from "@/hooks/useCountdown";
-import { greeting, intervalLabel, languageName, longAgo, relativeTime } from "@/lib/format";
+import { greeting, languageName, longAgo, relativeTime } from "@/lib/format";
 
 function kpiMeta(k: Kpi) {
   if (k.meta) return k.meta;
@@ -17,9 +15,9 @@ function kpiMeta(k: Kpi) {
 }
 
 const EVENT_TITLES: Record<string, string> = {
-  published: "Video published", rewritten: "Caption rewritten", video_rejected: "Video removed by filter", job_failed: "Upload failed",
-  source_checked: "Source checked", violation: "Violation detected", token_expired: "Token expired", run_all: "Automation started",
-  tiktok_connected: "TikTok account connected", instagram_connected: "Instagram account connected", rate_limited: "Rate limit reached",
+  published: "Video published", rewritten: "Caption rewritten", video_skipped: "Video skipped", video_detected: "New upload detected", downloaded: "Video downloaded", rendered: "Video rendered", caption_fallback: "Caption fallback used", channel_added: "Channel added", job_failed: "Upload failed",
+  violation: "Violation detected", token_expired: "Token expired",
+  tiktok_connected: "TikTok account connected", rate_limited: "Rate limit reached",
 };
 
 function activityVisual(entry: ActivityLog): [IconName, string] {
@@ -27,7 +25,6 @@ function activityVisual(entry: ActivityLog): [IconName, string] {
   if (entry.level === "warning") return ["shield", "warning"];
   if (entry.event === "published") return ["check", "success"];
   if (entry.service === "AI rewrite") return ["sparkles", "primary"];
-  if (entry.service === "Instagram") return ["instagram", "neutral"];
   if (entry.service === "OAuth") return ["link", "primary"];
   return ["clock", "neutral"];
 }
@@ -71,37 +68,15 @@ function JobStatusCard({ summary }: { summary: Summary }) {
   </Card>;
 }
 
-function NextRun({ summary }: { summary: Summary }) {
-  const navigate = useNavigate();
-  const nr = summary.next_run;
-  const { hours, minutes, seconds } = useCountdown(nr.paused ? null : nr.at);
-  return <Card className="schedule-card">
-    <div className="card-title">Next scheduled run</div><div className="countdown"><div><strong>{hours}</strong><span>HRS</span></div><i>:</i><div><strong>{minutes}</strong><span>MIN</span></div><i>:</i><div><strong>{seconds}</strong><span>SEC</span></div></div>
-    <div className="schedule-detail"><span><Icon name="clock" size={16}/> {nr.interval_minutes ? `Every ${intervalLabel(nr.interval_minutes)}` : "No active sources"}</span><Badge tone={nr.paused || !nr.active_sources ? "neutral" : "success"}>{nr.paused ? "Paused" : nr.active_sources ? "Active" : "Idle"}</Badge></div>
-    <div className="source-stack"><span>Scanning</span><div>{nr.sources.map(s => <Avatar key={s.id} label={s.initials} color={s.color}/>)}</div><strong>{nr.active_sources} source{nr.active_sources === 1 ? "" : "s"}</strong></div>
-    <Button className="full" onClick={() => navigate("/rules")}>View automation rule</Button>
-  </Card>;
-}
-
 export default function Dashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const toast = useToast();
-  const onError = useErrorToast();
-  const queryClient = useQueryClient();
   const [dismissed, setDismissed] = useState(false);
   const { data: summary } = useQuery({ queryKey: ["dashboard", "summary"], queryFn: dashboard.summary, refetchInterval: 30_000 });
-  const runAll = useMutation({
-    mutationFn: sources.runAll,
-    onSuccess: r => { toast({ title: "Automation started", message: `Scanning ${r.queued.length} Instagram sources now.` }); queryClient.invalidateQueries(); },
-    onError,
-  });
   const firstName = (user?.name || "").split(" ")[0];
 
   return <>
-    <PageHeader title={`${greeting()}${firstName ? `, ${firstName}` : ""}`} description="Here’s what your content network is doing today.">
-      <Button icon="play" variant="primary" onClick={() => runAll.mutate()} disabled={runAll.isPending}>Run now</Button>
-    </PageHeader>
+    <PageHeader title={`${greeting()}${firstName ? `, ${firstName}` : ""}`} description="Here’s what your content network is doing today."/>
     {summary && summary.attention.length > 0 && !dismissed && <div className="alert-banner"><div className="alert-icon"><Icon name="alert"/></div><div><strong>{summary.attention.length} TikTok token{summary.attention.length === 1 ? " needs" : "s need"} attention</strong><span>{summary.attention.map(a => a.status === "expiring" ? `@${a.username} expires ${relativeTime(a.refresh_expires_at)}` : `@${a.username} has expired`).join(" · ")}</span></div><button onClick={() => navigate("/tiktok")}>Review accounts <Icon name="arrow" size={15}/></button><button className="icon-button" onClick={() => setDismissed(true)}><Icon name="close" size={16}/></button></div>}
     {summary && summary.unacknowledged_violations > 0 && <div className="violation-list"><div className="violation-alert"><div className="alert-icon"><Icon name="shield"/></div><div><strong>{summary.unacknowledged_violations} video{summary.unacknowledged_violations === 1 ? " was" : "s were"} flagged by TikTok</strong><span>Review the violations and confirm removal in the Compliance Audit.</span></div><Button variant="danger" onClick={() => navigate("/audit")}>Review</Button></div></div>}
     <div className="kpi-grid">
@@ -112,21 +87,20 @@ export default function Dashboard() {
       {summary && <JobStatusCard summary={summary}/>}
     </div>
     <div className="bottom-grid">
-      <Card>
+      <Card className="full-row">
         <div className="card-header"><div><div className="card-title">Recent activity</div><div className="card-caption">Live updates from your automations</div></div><Button variant="ghost" onClick={() => navigate("/logs")}>View all <Icon name="arrow" size={14}/></Button></div>
         <div className="activity-list">
-          {summary?.recent_activity.length === 0 && <Empty icon="clock" title="No activity yet">Connect a source and run the automation to see live events.</Empty>}
+          {summary?.recent_activity.length === 0 && <Empty icon="clock" title="No activity yet">Events appear here as videos are processed and published.</Empty>}
           {summary?.recent_activity.map(entry => { const [icon, tone] = activityVisual(entry); return <div className="activity" key={entry.id}><div className={`activity-icon ${tone}`}><Icon name={icon} size={16}/></div><div><strong>{EVENT_TITLES[entry.event] ?? entry.service}</strong><span>{entry.message}</span></div><time>{relativeTime(entry.created_at)}</time></div>; })}
         </div>
       </Card>
-      {summary && <NextRun summary={summary}/>}
     </div>
     {summary && <Card className="language-removals">
-      <div className="card-header"><div><div className="card-title">{summary.rejections.language_gate_enabled ? "Removed by language filter" : "Removed by filters"}</div><div className="card-caption">{summary.rejections.language_gate_enabled ? `Each fetched video's title and caption are checked first. Only ${summary.rejections.allowed_languages.map(languageName).join(" and ")} content continues to rewriting and publishing.` : "Every fetched video is checked with ffprobe. Only videos under 60 seconds continue to rewriting and publishing."}</div></div><div className="language-summary"><div><strong>{summary.rejections.removed_today}</strong><span>Removed today</span></div><div><strong>{summary.rejections.acceptance_rate === null ? "—" : `${summary.rejections.acceptance_rate}%`}</strong><span>Acceptance rate</span></div><Badge tone="success">{summary.rejections.language_gate_enabled ? `${summary.rejections.allowed_languages.map(languageName).join(" + ")} only` : "Under 60s only"}</Badge></div></div>
+      <div className="card-header"><div><div className="card-title">{summary.rejections.language_gate_enabled ? "Removed by language filter" : "Removed by filters"}</div><div className="card-caption">{summary.rejections.language_gate_enabled ? `Each incoming video's title and caption are checked first. Only ${summary.rejections.allowed_languages.map(languageName).join(" and ")} content continues to rewriting and publishing.` : "Every incoming video is checked with ffprobe. Only videos under 60 seconds continue to rewriting and publishing."}</div></div><div className="language-summary"><div><strong>{summary.rejections.removed_today}</strong><span>Removed today</span></div><div><strong>{summary.rejections.acceptance_rate === null ? "—" : `${summary.rejections.acceptance_rate}%`}</strong><span>Acceptance rate</span></div><Badge tone="success">{summary.rejections.language_gate_enabled ? `${summary.rejections.allowed_languages.map(languageName).join(" + ")} only` : "Under 60s only"}</Badge></div></div>
       <div className="language-table">
-        <div className="language-table-head"><span>Video</span><span>Source</span><span>Detected language</span><span>Language confidence</span><span>Removed</span><span>Reason</span></div>
+        <div className="language-table-head"><span>Video</span><span>Detected language</span><span>Language confidence</span><span>Removed</span><span>Reason</span></div>
         {summary.rejections.items.length === 0 && <Empty icon="check" title="Nothing removed yet"/>}
-        {summary.rejections.items.map((video, index) => { const conf = video.language_confidence != null ? `${(video.language_confidence * 100).toFixed(1)}%` : "—"; return <div className="language-row" key={video.id}><div><VideoThumb index={index + 1} image={video.thumbnail_url} label={String(video.id).padStart(2, "0").slice(-2)} size={12}/><strong>{video.original_title || video.original_caption || video.ig_media_id}</strong></div><span>@{video.source?.username}</span><Badge tone="warning">{video.detected_language ? languageName(video.detected_language) : video.duration_sec ? `${video.duration_sec.toFixed(0)}s` : "—"}</Badge><span className="confidence"><i style={{ width: conf }}/>{conf}</span><span>{longAgo(video.created_at)}</span><span className="reason"><Icon name="close" size={13}/>{video.rejection_reason}</span></div>; })}
+        {summary.rejections.items.map((video, index) => { const conf = video.language_confidence != null ? `${(video.language_confidence * 100).toFixed(1)}%` : "—"; return <div className="language-row" key={video.id}><div><VideoThumb index={index + 1} image={video.thumbnail_url} label={String(video.id).padStart(2, "0").slice(-2)} size={12}/><strong>{video.original_title || video.original_caption || video.youtube_video_id || `Video ${video.id}`}</strong></div><Badge tone="warning">{video.detected_language ? languageName(video.detected_language) : video.duration_sec ? `${video.duration_sec.toFixed(0)}s` : "—"}</Badge><span className="confidence"><i style={{ width: conf }}/>{conf}</span><span>{longAgo(video.created_at)}</span><span className="reason"><Icon name="close" size={13}/>{video.rejection_reason}</span></div>; })}
       </div>
     </Card>}
     {summary && <Card className="account-totals-card">

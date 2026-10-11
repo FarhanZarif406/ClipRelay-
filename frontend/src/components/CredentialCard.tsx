@@ -107,7 +107,7 @@ export function CredentialCard({ card, isOwner, children, presets }: { card: Car
     </Modal>}
     {confirm && <Modal title="Connected accounts must reconnect" caption={confirm.message} onClose={() => setConfirm(null)}
       footer={<><Button onClick={() => setConfirm(null)}>Cancel</Button><Button variant="danger" onClick={() => confirm.kind === "save" ? save.mutate(true) : remove.mutate(true)} disabled={save.isPending || remove.isPending}>{confirm.kind === "save" ? "Save and require reconnect" : "Remove and require reconnect"}</Button></>}>
-      <div className="form-note">Tokens issued under the old app stop matching the configured app. Affected accounts are marked <strong>needs reconnect</strong> and skipped until someone signs in again from Instagram Sources or TikTok Accounts.</div>
+      <div className="form-note">Tokens issued under the old app stop matching the configured app. Affected accounts are marked <strong>needs reconnect</strong> and skipped until someone signs in again from TikTok Accounts.</div>
     </Modal>}
   </Card>;
 }

@@ -26,13 +26,6 @@ export function duration(seconds: number | null | undefined): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-export function intervalLabel(minutes: number | null | undefined): string {
-  if (!minutes) return "—";
-  if (minutes % 1440 === 0) return `${minutes / 1440} day${minutes === 1440 ? "" : "s"}`;
-  if (minutes % 60 === 0) return `${minutes / 60} hour${minutes === 60 ? "" : "s"}`;
-  return `${minutes} minutes`;
-}
-
 export function clock(iso: string): string {
   const d = new Date(iso);
   return `${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}.${String(d.getMilliseconds()).padStart(3, "0")}`;
@@ -47,8 +40,10 @@ export function dayTime(iso: string): string {
 }
 
 export const JOB_STATUS: Record<JobStatus, { label: string; tone: Tone }> = {
-  fetched: { label: "Fetched", tone: "neutral" },
-  rewriting: { label: "Rewriting", tone: "primary" },
+  fetched: { label: "Detected", tone: "neutral" },
+  downloading: { label: "Downloading", tone: "primary" },
+  rendering: { label: "Rendering", tone: "primary" },
+  rewriting: { label: "Writing caption", tone: "primary" },
   awaiting_approval: { label: "Needs approval", tone: "warning" },
   ready: { label: "Ready", tone: "primary" },
   uploading: { label: "Uploading", tone: "primary" },
@@ -85,3 +80,11 @@ export function initialsOf(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? parts[0]?.[1] ?? "")).toUpperCase() || "?";
 }
+
+export const SKIP_REASON: Record<string, string> = {
+  too_long: "Too long",
+  too_short: "Too short",
+  skipped_channel_cap: "Channel daily cap",
+  skipped_account_cap: "TikTok account daily cap",
+  language: "Language",
+};

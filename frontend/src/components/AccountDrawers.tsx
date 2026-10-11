@@ -30,21 +30,21 @@ export function AccountHealthDrawer({ account, close }: { account: TikTokAccount
 }
 
 export function AccountSettingsModal({ account, close }: { account: TikTokAccount; close: () => void }) {
-  const [cap, setCap] = useState(String(account.daily_cap));
+  const [cap, setCap] = useState(account.daily_cap_override ? String(account.daily_cap_override) : "");
   const [privacy, setPrivacy] = useState(account.default_privacy);
   const [color, setColor] = useState(account.color);
   const queryClient = useQueryClient();
   const toast = useToast();
   const onError = useErrorToast();
   const save = useMutation({
-    mutationFn: () => tiktok.update(account.id, { daily_cap: Number(cap), default_privacy: privacy, color }),
+    mutationFn: () => tiktok.update(account.id, { daily_cap: cap.trim() ? Number(cap) : null, default_privacy: privacy, color }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["tiktok"] }); toast({ title: "Account updated" }); close(); },
     onError,
   });
   return <Modal title={`@${account.username}`} caption="Publishing limits and defaults for this TikTok account." onClose={close}
-    footer={<><Button onClick={close}>Cancel</Button><Button variant="primary" disabled={save.isPending || !(Number(cap) >= 1 && Number(cap) <= 100)} onClick={() => save.mutate()}>Save</Button></>}>
+    footer={<><Button onClick={close}>Cancel</Button><Button variant="primary" disabled={save.isPending || !(cap.trim() === "" || (Number(cap) >= 1 && Number(cap) <= 100))} onClick={() => save.mutate()}>Save</Button></>}>
     <div className="field-row">
-      <Field label="Daily post cap" hint="TikTok limits how often a creator can post; keep this conservative."><input type="number" min={1} max={100} value={cap} onChange={e => setCap(e.target.value)}/></Field>
+      <Field label="Daily post cap" hint="Leave empty to follow the global rule (Settings → Pipeline rules)."><input type="number" min={1} max={100} value={cap} placeholder={`${account.daily_cap} (global rule)`} onChange={e => setCap(e.target.value)}/></Field>
       <Field label="Avatar color"><select value={color} onChange={e => setColor(e.target.value)}>{["violet", "blue", "orange", "pink", "green"].map(c => <option key={c} value={c}>{c}</option>)}</select></Field>
     </div>
     <Field label="Default privacy" hint="Must be one of the options TikTok returns for this creator; unaudited apps can only post privately (SELF_ONLY).">

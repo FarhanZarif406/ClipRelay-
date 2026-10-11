@@ -1,8 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import false as sa_false
-from sqlalchemy import Boolean, Column, Float, ForeignKey, Index, Integer, String, Table, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -10,8 +9,10 @@ from app.models.base import JSONType, TimestampMixin, UTCDateTime, utcnow
 
 
 class JobStatus:
-    FETCHED = "fetched"
-    REWRITING = "rewriting"
+    FETCHED = "fetched"  # detected on YouTube, waiting for the download
+    DOWNLOADING = "downloading"
+    RENDERING = "rendering"
+    REWRITING = "rewriting"  # rendered, waiting for the caption
     AWAITING_APPROVAL = "awaiting_approval"
     READY = "ready"
     UPLOADING = "uploading"
@@ -23,14 +24,29 @@ class JobStatus:
     CANCELLED = "cancelled"
 
     TERMINAL = {CLEAN, VIOLATED, FAILED, CANCELLED}
-    PENDING = {FETCHED, REWRITING, AWAITING_APPROVAL, READY, UPLOADING}
+    PROCESSING = {FETCHED, DOWNLOADING, RENDERING, REWRITING}
+    PENDING = PROCESSING | {AWAITING_APPROVAL, READY, UPLOADING}
     PUBLISHED = {POSTED, MONITORING, CLEAN}
 
 
 class VideoStatus:
     FETCHED = "fetched"
     ACCEPTED = "accepted"
-    REJECTED = "rejected"
+    SKIPPED = "skipped"  # held with a reason; can be processed by hand later
+
+
+class SkipReason:
+    TOO_LONG = "too_long"
+    TOO_SHORT = "too_short"
+    CHANNEL_CAP = "skipped_channel_cap"
+    ACCOUNT_CAP = "skipped_account_cap"
+    LANGUAGE = "language"
+
+
+class CaptionStatus:
+    PENDING = "pending"
+    DONE = "done"
+    FALLBACK = "caption_fallback"  # the model failed; the original title and default hashtags are used
 
 
 class TikTokStatus:
@@ -49,6 +65,7 @@ class User(Base, TimestampMixin):
     workspace_name: Mapped[str] = mapped_column(String(120), default="My Workspace")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     role: Mapped[str] = mapped_column(String(16), default="member", server_default="member")  # owner | member
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
     @property
     def is_owner(self) -> bool:
@@ -75,40 +92,33 @@ class AppSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
 
-source_tiktok_links = Table(
-    "source_tiktok_links",
-    Base.metadata,
-    Column("source_id", ForeignKey("instagram_sources.id", ondelete="CASCADE"), primary_key=True),
-    Column("tiktok_account_id", ForeignKey("tiktok_accounts.id", ondelete="CASCADE"), primary_key=True),
-)
+class RuleSetting(Base):
+    """One pipeline rule (speed, flip, caps, …). `channel_id` NULL is the global default, otherwise a channel override."""
 
-
-class InstagramSource(Base, TimestampMixin):
-    __tablename__ = "instagram_sources"
+    __tablename__ = "pipeline_settings"
+    __table_args__ = (UniqueConstraint("key", "channel_id", name="uq_pipeline_settings_key_channel"),)
     id: Mapped[int] = mapped_column(primary_key=True)
-    ig_user_id: Mapped[str] = mapped_column(String(64), unique=True)
-    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    name: Mapped[str | None] = mapped_column(String(255))
-    profile_picture_url: Mapped[str | None] = mapped_column(Text)
-    color: Mapped[str] = mapped_column(String(16), default="violet")
-    access_token_enc: Mapped[str | None] = mapped_column(Text)
-    token_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
-    token_refreshed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
-    is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    refresh_interval_minutes: Mapped[int] = mapped_column(Integer, default=60)
-    next_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), index=True)
-    last_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
-    last_run_status: Mapped[str | None] = mapped_column(String(32))
-    last_error: Mapped[str | None] = mapped_column(Text)
-    approval_mode: Mapped[str] = mapped_column(String(16), default="auto")  # auto | manual
-    prompt_template_id: Mapped[int | None] = mapped_column(ForeignKey("prompt_templates.id", ondelete="SET NULL"))
-    videos_found: Mapped[int] = mapped_column(Integer, default=0)
-    needs_reconnect: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())
+    key: Mapped[str] = mapped_column(String(80), index=True)
+    value: Mapped[Any] = mapped_column(JSONType)
+    scope: Mapped[str] = mapped_column(String(16), default="global")  # global | channel
+    channel_id: Mapped[int | None] = mapped_column(ForeignKey("channels.id", ondelete="CASCADE"), index=True)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
-    tiktok_accounts: Mapped[list["TikTokAccount"]] = relationship(
-        secondary=source_tiktok_links, back_populates="sources", lazy="selectin"
-    )
-    prompt_template: Mapped["PromptTemplate | None"] = relationship(lazy="joined")
+
+class RuleChange(Base):
+    """Audit trail: who changed which rule, from what to what, and when."""
+
+    __tablename__ = "setting_changes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(80))
+    channel_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    channel_name: Mapped[str | None] = mapped_column(String(255))
+    old_value: Mapped[Any] = mapped_column(JSONType, nullable=True)
+    new_value: Mapped[Any] = mapped_column(JSONType, nullable=True)
+    changed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    changed_by_email: Mapped[str | None] = mapped_column(String(255))
+    changed_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
 
 
 class TikTokAccount(Base, TimestampMixin):
@@ -125,14 +135,10 @@ class TikTokAccount(Base, TimestampMixin):
     refresh_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     scopes: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), default=TikTokStatus.ACTIVE)
-    daily_cap: Mapped[int] = mapped_column(Integer, default=15)
+    daily_cap: Mapped[int | None] = mapped_column(Integer)  # NULL = use the uploads_per_tiktok_account_per_day rule
     default_privacy: Mapped[str] = mapped_column(String(40), default="PUBLIC_TO_EVERYONE")
     last_error: Mapped[str | None] = mapped_column(Text)
     last_posted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
-
-    sources: Mapped[list[InstagramSource]] = relationship(
-        secondary=source_tiktok_links, back_populates="tiktok_accounts", lazy="selectin"
-    )
 
 
 class PromptTemplate(Base, TimestampMixin):
@@ -176,12 +182,36 @@ class PromptTemplateVersion(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
+class Channel(Base, TimestampMixin):
+    """A monitored YouTube channel."""
+
+    __tablename__ = "channels"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    youtube_channel_id: Mapped[str] = mapped_column(String(64), unique=True)
+    handle: Mapped[str | None] = mapped_column(String(128))
+    display_name: Mapped[str] = mapped_column(String(255), default="")
+    thumbnail_url: Mapped[str | None] = mapped_column(Text)
+    default_tiktok_account_id: Mapped[int | None] = mapped_column(ForeignKey("tiktok_accounts.id", ondelete="SET NULL"))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    ownership_confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())  # only set when an operator ticked a confirmation
+    monitoring_since: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)  # only uploads after this are republished
+    added_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    pubsub_subscription_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    next_poll_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_upload_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    default_tiktok_account: Mapped[TikTokAccount | None] = relationship(lazy="joined")
+
+
 class Video(Base):
     __tablename__ = "videos"
-    __table_args__ = (UniqueConstraint("source_id", "ig_media_id", name="uq_video_source_media"),)
     id: Mapped[int] = mapped_column(primary_key=True)
-    source_id: Mapped[int] = mapped_column(ForeignKey("instagram_sources.id", ondelete="CASCADE"), index=True)
-    ig_media_id: Mapped[str] = mapped_column(String(64))
+    channel_id: Mapped[int | None] = mapped_column(ForeignKey("channels.id", ondelete="SET NULL"), index=True)
+    # Unique on purpose: YouTube notifies again whenever a title or description is edited, and the
+    # constraint makes every repeat harmless — the insert fails and no second job is ever created.
+    youtube_video_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     permalink: Mapped[str | None] = mapped_column(Text)
     media_url: Mapped[str | None] = mapped_column(Text)
     thumbnail_url: Mapped[str | None] = mapped_column(Text)
@@ -192,15 +222,19 @@ class Video(Base):
     duration_sec: Mapped[float | None] = mapped_column(Float)
     width: Mapped[int | None] = mapped_column(Integer)
     height: Mapped[int | None] = mapped_column(Integer)
-    storage_key: Mapped[str | None] = mapped_column(Text)
+    source_file_path: Mapped[str | None] = mapped_column(Text)  # storage key of the downloaded original
+    rendered_file_path: Mapped[str | None] = mapped_column(Text)  # storage key of the edited file sent to TikTok
+    files_deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     size_bytes: Mapped[int | None] = mapped_column(Integer)
     detected_language: Mapped[str | None] = mapped_column(String(32))
     language_confidence: Mapped[float | None] = mapped_column(Float)
     status: Mapped[str] = mapped_column(String(16), default=VideoStatus.FETCHED, index=True)
-    rejection_reason: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
+    skip_reason: Mapped[str | None] = mapped_column(String(40))  # SkipReason code
+    rejection_reason: Mapped[str | None] = mapped_column(Text)  # the same reason, written out for people
+    forced: Mapped[bool] = mapped_column(Boolean, default=False)  # "Process anyway": duration and cap checks are bypassed
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)  # discovered at
 
-    source: Mapped[InstagramSource] = relationship(lazy="joined")
+    channel: Mapped[Channel | None] = relationship(lazy="joined")
 
 
 class Job(Base, TimestampMixin):
@@ -218,6 +252,9 @@ class Job(Base, TimestampMixin):
     rewritten_title: Mapped[str | None] = mapped_column(Text)
     rewritten_caption: Mapped[str | None] = mapped_column(Text)
     rewritten_tags: Mapped[list] = mapped_column(JSONType, default=list)
+    caption_status: Mapped[str] = mapped_column(String(20), default=CaptionStatus.PENDING)
+    publish_mode: Mapped[str | None] = mapped_column(String(16))  # inbox | direct, set when the upload starts
+    reject_reason: Mapped[str | None] = mapped_column(Text)
     privacy_level: Mapped[str | None] = mapped_column(String(40))
     tiktok_publish_id: Mapped[str | None] = mapped_column(String(128))
     tiktok_post_id: Mapped[str | None] = mapped_column(String(128))

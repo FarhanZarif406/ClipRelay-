@@ -85,8 +85,6 @@ tbody tr.clickable { cursor: pointer; }
 .test-result { font-size: 8px; color: var(--muted); max-width: 220px; text-align: right; }
 .test-result.ok { color: var(--success); } .test-result.fail { color: var(--danger); }
 
-.source-schedules { margin-top: 12px; }
-.source-schedules .card-header { padding: 17px 17px 12px; }
 .prompt-name-input { border: 0; background: transparent; color: var(--text); font-weight: 650; font-size: 13px; letter-spacing: -.25px; outline: 0; width: 100%; padding: 0; }
 .prompt-desc-input { border: 0; background: transparent; color: var(--muted); font-size: 10px; outline: 0; width: 100%; padding: 0; margin-top: 5px; }
 .preview-text.editable { width: 100%; resize: vertical; min-height: 80px; outline: 0; font-family: inherit; }
@@ -133,3 +131,88 @@ select.inline-input option, .field select option { background: var(--surface-2);
 @media (max-width: 560px) { .credential-fields { grid-template-columns: 1fr; } }
 .editor-foot select.model-select { max-width: 220px; color: var(--text); border-bottom: 1px dashed var(--border-strong); }
 .editor-foot select.model-select { max-width: 220px; color: var(--text); border-bottom: 1px dashed var(--border-strong); }
+
+/* Dashboard */
+.bottom-grid > .full-row { grid-column: 1 / -1; }
+
+/* Sign in: terms acceptance, and the Terms / Privacy pages */
+.terms-check { display: flex; gap: 8px; align-items: flex-start; font-size: 10px; color: var(--muted); margin: 4px 0 14px; cursor: pointer; line-height: 1.5; }
+.terms-check input { margin-top: 2px; accent-color: var(--primary); }
+.terms-check a, .legal-page a { color: var(--primary); }
+.legal-links { display: flex; gap: 12px; padding: 8px 10px 0; font-size: 9px; }
+.legal-links a { color: var(--muted); text-decoration: none; }
+.legal-links a:hover { color: var(--text); }
+.legal-page { max-width: 720px; margin: 0 auto; padding: 40px 20px 80px; font-size: 12px; line-height: 1.8; color: var(--text); }
+.legal-page h1 { font-size: 22px; margin: 18px 0 4px; }
+.legal-page h2 { font-size: 13px; margin: 24px 0 6px; }
+.legal-page p, .legal-page li { color: var(--muted); }
+.legal-page .draft-note { border: 1px solid var(--border); background: var(--surface-2); border-radius: 9px; padding: 10px 12px; font-size: 10px; margin: 14px 0; }
+
+/* Channels */
+.channel-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.channel-cell img, .channel-cell .channel-blank { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; background: var(--surface-3); flex: none; display: grid; place-items: center; color: var(--muted); }
+.channel-cell strong, .channel-cell span { display: block; font-size: 10px; }
+.channel-cell span { color: var(--muted); font-size: 9px; }
+.channel-confirm { display: flex; gap: 12px; align-items: center; border: 1px solid var(--border); background: var(--surface-2); border-radius: 10px; padding: 12px; margin: 14px 0; }
+.channel-confirm img { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; }
+.channel-confirm strong, .channel-confirm span { display: block; font-size: 11px; }
+.channel-confirm span { color: var(--muted); font-size: 9px; margin-top: 2px; }
+.lookup-row { display: flex; gap: 8px; }
+.lookup-row input { flex: 1; }
+.cell-select { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-radius: 7px; padding: 5px 7px; font-size: 10px; max-width: 170px; }
+.cell-select option { background: var(--surface-2); color: var(--text); }
+.note-row { font-size: 10px; color: var(--muted); margin: 0 0 12px; line-height: 1.6; }
+.cell-error { color: var(--danger); font-size: 9px; white-space: normal; max-width: 220px; }
+
+/* Review queue */
+.review-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 12px; align-items: start; }
+.review-list { padding: 6px; max-height: calc(100vh - 190px); overflow: auto; }
+.review-list button { display: flex; gap: 9px; align-items: center; width: 100%; text-align: left; border: 0; background: transparent; color: inherit; padding: 8px; border-radius: 8px; cursor: pointer; }
+.review-list button.active { background: var(--surface-3); }
+.review-list button strong, .review-list button span { display: block; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 170px; }
+.review-list button span { color: var(--muted); font-size: 9px; margin-top: 2px; }
+.review-main { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 18px; padding: 18px; }
+.review-player { width: 100%; aspect-ratio: 9 / 16; background: #000; border-radius: 12px; object-fit: contain; }
+.review-player.placeholder { display: grid; place-items: center; color: var(--muted); font-size: 10px; text-align: center; padding: 20px; }
+.review-form textarea, .rule-row textarea, .reject-box textarea { width: 100%; min-height: 110px; resize: vertical; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; color: var(--text); padding: 10px; font-size: 11px; line-height: 1.7; outline: 0; }
+.review-form textarea:focus, .rule-row textarea:focus, .reject-box textarea:focus { border-color: var(--primary); }
+.review-meta { display: grid; grid-template-columns: 110px 1fr; gap: 6px 10px; font-size: 10px; margin-bottom: 14px; }
+.review-meta span { color: var(--muted); }
+.review-meta a { color: var(--primary); text-decoration: none; }
+.review-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; align-items: center; }
+.review-actions kbd, .shortcut-hints kbd { border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; font-size: 9px; color: var(--muted); background: var(--surface-2); margin-left: 5px; }
+.shortcut-hints { font-size: 9px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.shortcut-hints kbd { margin: 0 4px 0 0; }
+.fallback-note { border: 1px solid var(--warning, #d39b2a); border-radius: 9px; padding: 9px 11px; font-size: 10px; margin-bottom: 12px; line-height: 1.6; }
+.reject-box { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; }
+.reject-box textarea { min-height: 70px; }
+@media (max-width: 900px) { .review-layout, .review-main { grid-template-columns: 1fr; } .review-list { max-height: 220px; } .review-player { max-width: 280px; margin: 0 auto; } }
+
+/* Settings: pipeline rules */
+.rule-group { margin-top: 18px; }
+.rule-group > h4 { font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
+.rule-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 11px 0; border-bottom: 1px solid var(--border); }
+.rule-row.wide { grid-template-columns: 1fr; }
+.rule-row strong, .rule-row small { display: block; font-size: 10px; }
+.rule-row small { color: var(--muted); font-size: 9px; margin-top: 3px; line-height: 1.5; }
+.rule-control { display: flex; align-items: center; gap: 8px; }
+.rule-control input[type="number"], .rule-control input[type="text"], .rule-control select { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-radius: 7px; padding: 6px 8px; font-size: 10px; width: 150px; }
+.rule-control input[type="number"] { width: 84px; }
+.rule-control select option { background: var(--surface-2); color: var(--text); }
+.rule-control .inherit { font-size: 9px; color: var(--muted); white-space: nowrap; }
+.history-table td { white-space: normal; }
+.history-table code { font-size: 9px; }
+
+/* Integrations and Editing rules pages */
+.narrow-page { max-width: 760px; display: flex; flex-direction: column; gap: 14px; }
+.howto { font-size: 10px; color: var(--muted); line-height: 1.8; margin: 10px 0 0; padding-left: 18px; }
+.howto a { color: var(--primary); }
+.howto code { font-size: 9px; }
+.section-label { font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 10px 0 -4px; }
+.edit-preview { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+.edit-preview div { border: 1px solid var(--border); background: var(--surface-2); border-radius: 10px; padding: 12px; }
+.edit-preview span { display: block; font-size: 9px; color: var(--muted); }
+.edit-preview strong { display: block; font-size: 15px; margin-top: 4px; }
+@media (max-width: 560px) { .edit-preview { grid-template-columns: 1fr; } }
+
+.narrow-page > .card { padding: 20px; }

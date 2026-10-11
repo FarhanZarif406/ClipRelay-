@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
+    accept_terms: bool = False  # ticked on the sign-in screen; the time is stored on the user
 
 
 class UserCreate(BaseModel):
@@ -17,6 +18,7 @@ class UserCreate(BaseModel):
 
 class RegisterIn(UserCreate):
     workspace_name: str = Field(default="My Workspace", max_length=120)
+    accept_terms: bool = False
 
 
 class UserOut(BaseModel):
@@ -27,6 +29,7 @@ class UserOut(BaseModel):
     workspace_name: str
     role: str
     created_at: datetime
+    terms_accepted_at: datetime | None = None
 
 
 class RoleIn(BaseModel):

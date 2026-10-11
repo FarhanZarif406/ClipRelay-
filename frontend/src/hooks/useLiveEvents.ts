@@ -18,7 +18,7 @@ export function useLiveEvents(enabled: boolean) {
 
     const flush = () => {
       pending = undefined;
-      ["dashboard", "nav", "jobs", "job", "audit", "logs", "sources", "tiktok", "report"].forEach(key =>
+      ["dashboard", "nav", "jobs", "job", "audit", "logs", "tiktok", "report"].forEach(key =>
         queryClient.invalidateQueries({ queryKey: [key] }));
     };
 

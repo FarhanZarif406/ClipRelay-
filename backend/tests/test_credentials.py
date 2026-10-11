@@ -28,10 +28,10 @@ def test_removal_falls_back_to_env(db):
 
 
 def test_cache_busts_on_write(db):
-    assert credentials.get("instagram.app_id") == "ig-app"  # warms the cache
-    credentials.set_value(db, "instagram.app_id", "123456", user_id=None)
+    assert credentials.get("tiktok.client_key") == "tt-key"  # warms the cache
+    credentials.set_value(db, "tiktok.client_key", "123456", user_id=None)
     db.commit()
-    assert credentials.get("instagram.app_id") == "123456"  # set_value busts the local cache
+    assert credentials.get("tiktok.client_key") == "123456"  # set_value busts the local cache
 
 
 def test_group_status(db):

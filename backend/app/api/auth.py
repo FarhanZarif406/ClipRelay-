@@ -3,7 +3,7 @@ from sqlalchemy import func, select
 
 from app.api.deps import DB, CurrentUser
 from app.config import get_settings
-from app.models import User
+from app.models import User, utcnow
 from app.schemas import LoginIn, RegisterIn, TokenOut, UserOut
 from app.security import create_access_token, hash_password, verify_password
 from app.services import activity
@@ -16,6 +16,9 @@ def login(body: LoginIn, db: DB):
     user = db.scalar(select(User).where(func.lower(User.email) == body.email.lower()))
     if not user or not user.is_active or not verify_password(body.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password")
+    if body.accept_terms and user.terms_accepted_at is None:
+        user.terms_accepted_at = utcnow()
+        db.commit()
     return TokenOut(access_token=create_access_token(str(user.id)), user=UserOut.model_validate(user))
 
 
@@ -36,6 +39,7 @@ def register(body: RegisterIn, db: DB):
     user = User(
         email=body.email.lower(), password_hash=hash_password(body.password), name=body.name,
         workspace_name=body.workspace_name, role="member" if has_users else "owner",
+        terms_accepted_at=utcnow() if body.accept_terms else None,
     )
     db.add(user)
     db.flush()
@@ -47,3 +51,9 @@ def register(body: RegisterIn, db: DB):
 @router.get("/me", response_model=UserOut)
 def me(user: CurrentUser):
     return user
+
+
+@router.get("/media-token")
+def media_token(user: CurrentUser):
+    """A short-lived token for <video> tags, which cannot send the Authorization header."""
+    return {"token": create_access_token(str(user.id), expires_minutes=120, purpose="media")}

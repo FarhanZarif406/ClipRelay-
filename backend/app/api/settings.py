@@ -1,18 +1,19 @@
 import os
+import shutil
 import subprocess
 import tempfile
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import DB, CurrentUser, OwnerUser
 from app.config import get_settings
-from app.integrations import instagram, llm, tiktok
+from app.integrations import llm, tiktok, youtube
 from app.integrations.http import ApiError
-from app.models import InstagramSource, TikTokAccount, TikTokStatus
+from app.models import TikTokAccount, TikTokStatus
 from app.schemas import AuditIn, NotificationsIn, PolicyIn
-from app.security import decrypt
-from app.services import activity, credentials, mailer, notify, workspace_settings
+from app.services import activity, credentials, mailer, media, notify, rules, workspace_settings
 from app.services.storage import get_storage
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -23,6 +24,35 @@ def _save(db, key: str, body) -> dict:
     activity.record(db, "Settings", f"{key.capitalize()} settings updated", event=f"{key}_updated", payload=body.model_dump(exclude_none=True))
     db.commit()
     return value
+
+
+class RulesIn(BaseModel):
+    values: dict[str, bool | int | float | str | None]
+
+
+@router.get("/rules")
+def get_rules(db: DB, _: CurrentUser):
+    """The pipeline rules: what each one is, and its current global value."""
+    return {"definitions": rules.describe(), "values": rules.global_values(db)}
+
+
+@router.put("/rules")
+def put_rules(body: RulesIn, db: DB, user: CurrentUser):
+    """Change global rules. They apply to the next job; a null value resets a rule to its default."""
+    try:
+        changes = rules.set_values(db, body.values, user=user)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if changes:
+        activity.record(db, "Settings", f"{user.email} changed {', '.join(c.key for c in changes)}", event="rules_updated")
+    db.commit()
+    return {"definitions": rules.describe(), "values": rules.global_values(db)}
+
+
+@router.get("/rules/history")
+def rules_history(db: DB, _: CurrentUser, channel_id: int | None = None, limit: int = 50):
+    """Who changed which rule, and when."""
+    return rules.history(db, channel_id=channel_id, limit=min(max(limit, 1), 200))
 
 
 @router.get("/policy")
@@ -88,6 +118,40 @@ def complete_onboarding(db: DB, _: CurrentUser):
     return value
 
 
+def _ytdlp_version() -> str:
+    try:
+        import yt_dlp
+
+        return yt_dlp.version.__version__
+    except ImportError:
+        return ""
+
+
+def _test_editor() -> str:
+    """Make a two-second clip and run the real edit on it (speed-up, flip, sound), so the whole editor is proven."""
+    exe = media.ffmpeg_exe()
+    version = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=10, check=True).stdout.split("\n", 1)[0]
+    fd, src = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
+    out = None
+    try:
+        subprocess.run(
+            [exe, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=360x640:rate=30:duration=2", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", src],
+            capture_output=True, text=True, timeout=60, check=True,
+        )
+        out = media.render(src, speed=1.08, flip=True, keep_audio=True)
+        result = media.probe(out)
+    except media.RenderError as exc:
+        raise RuntimeError(f"FFmpeg is installed but the edit failed: {exc}") from exc
+    finally:
+        for path in (src, out):
+            if path and os.path.exists(path):
+                os.remove(path)
+    words = version.split()
+    return f"FFmpeg {words[2] if len(words) > 2 else ''} edited a test clip: 2.00s → {result.duration:.2f}s at 1.08x, flipped, sound kept"
+
+
 def _mask(value: str, prefix: int = 6) -> str:
     if not value:
         return "Not configured"
@@ -98,20 +162,20 @@ def _mask(value: str, prefix: int = 6) -> str:
 def integrations(user: CurrentUser):
     """Status of every integration. Masked values are only included for owners."""
     s = get_settings()
-    ig_id, tt_key = credentials.get("instagram.app_id"), credentials.get("tiktok.client_key")
+    tt_key = credentials.get("tiktok.client_key")
     llm_cfg = llm.resolve()
     rows = [
         ("llm", f"AI model · {llm_cfg.label or llm_cfg.provider} · {llm_cfg.model}" if llm_cfg else "AI model", llm_cfg.api_key if llm_cfg else "", ("env" if llm_cfg and llm_cfg.id is None else "app") if llm_cfg else None),
-        ("instagram", "Instagram Graph API", ig_id and credentials.get("instagram.app_secret") and ig_id, credentials.source("instagram.app_id")),
         ("tiktok", "TikTok Content Posting API", tt_key and credentials.get("tiktok.client_secret") and tt_key, credentials.source("tiktok.client_key")),
         ("storage", f"Storage · {s.storage_backend}", s.s3_bucket if s.storage_backend == "s3" else os.path.abspath(s.storage_local_path), "env"),
-        ("ffmpeg", "FFmpeg / ffprobe", s.ffprobe_path, "env"),
+        ("ytdlp", "Downloader · yt-dlp" + (f" {_ytdlp_version()}" if _ytdlp_version() else ""), _ytdlp_version() and "Installed with the backend (Python package)", "env"),
+        ("ffmpeg", "Editor · FFmpeg", shutil.which(media.ffmpeg_exe()) or (media.ffmpeg_exe() if os.path.isfile(media.ffmpeg_exe()) else ""), "env"),
     ]
     out = []
     for key, name, value, origin in rows:
         item = {"key": key, "name": name, "configured": bool(value), "source": origin if value else None}
         if user.is_owner:
-            item["masked"] = value if key in ("storage", "ffmpeg") else _mask(value or "")
+            item["masked"] = (value or "Not installed") if key in ("storage", "ffmpeg", "ytdlp") else _mask(value or "")
         else:
             item["masked"] = "Configured" if value else "Needs setup"
         out.append(item)
@@ -120,20 +184,10 @@ def integrations(user: CurrentUser):
 
 @router.post("/integrations/{key}/test")
 def test_integration(key: str, db: DB, _: OwnerUser):
-    s = get_settings()
     try:
         if key == "llm":
             reply = llm.complete("Reply with the single word OK.", max_tokens=5)
             message = f"{llm.resolve().model} replied: {reply[:20]}"
-        elif key == "instagram":
-            if not credentials.get("instagram.app_id"):
-                raise ApiError("Instagram App ID is not set")
-            source = db.scalar(select(InstagramSource).where(InstagramSource.access_token_enc.is_not(None)).limit(1))
-            if not source:
-                message = "App credentials set · connect an account to verify tokens"
-            else:
-                profile = instagram.get_profile(decrypt(source.access_token_enc) or "")
-                message = f"Token valid for @{profile.get('username')}"
         elif key == "tiktok":
             if not credentials.get("tiktok.client_key"):
                 raise ApiError("TikTok client key is not set")
@@ -159,11 +213,13 @@ def test_integration(key: str, db: DB, _: OwnerUser):
                 storage.delete(".healthcheck")
             message = "Storage is writable"
         elif key == "ffmpeg":
-            out = subprocess.run([s.ffprobe_path, "-version"], capture_output=True, text=True, timeout=10, check=True).stdout
-            message = out.split("\n", 1)[0][:80]
+            message = _test_editor()
+        elif key == "ytdlp":
+            meta = youtube._video_from_ytdlp("jNQXAC9IVRw")  # the first video ever uploaded to YouTube
+            message = f"yt-dlp {_ytdlp_version()} read a YouTube video: “{meta.title}” ({meta.duration_seconds:.0f}s)"
         else:
             raise HTTPException(404, "Unknown integration")
-    except (ApiError, OSError, subprocess.SubprocessError, RuntimeError) as exc:
+    except (ApiError, OSError, subprocess.SubprocessError, RuntimeError, media.ProbeError) as exc:
         return {"ok": False, "message": str(exc)[:300]}
     except Exception as exc:  # e.g. boto errors
         return {"ok": False, "message": f"{type(exc).__name__}: {str(exc)[:250]}"}

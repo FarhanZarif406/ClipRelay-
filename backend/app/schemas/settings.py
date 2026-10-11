@@ -9,16 +9,12 @@ class PolicyIn(BaseModel):
     active_window_start: str | None = Field(default=None, pattern=HHMM)
     active_window_end: str | None = Field(default=None, pattern=HHMM)
     active_days: list[int] | None = None
-    max_duration_sec: int | None = Field(default=None, ge=5, le=60)
     language_gate_enabled: bool | None = None
     allowed_languages: list[str] | None = None
     hourly_cap: int | None = Field(default=None, ge=1, le=60)
     random_delay_min_minutes: int | None = Field(default=None, ge=0, le=240)
     random_delay_max_minutes: int | None = Field(default=None, ge=0, le=240)
     timezone: str | None = None
-    unique_video_per_account: bool | None = None
-    default_interval_minutes: int | None = Field(default=None, ge=5, le=10080)
-    max_videos_per_run: int | None = Field(default=None, ge=1, le=100)
     tiktok_app_audited: bool | None = None
 
     @field_validator("active_days")

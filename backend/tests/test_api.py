@@ -18,9 +18,9 @@ def test_dashboard_and_report_empty(client, auth):
     assert nav["monthly_quota"] == 1000
 
 
-def test_dashboard_counts(client, auth, db, source, tiktok_account):
-    video = Video(source_id=source.id, ig_media_id="1", status=VideoStatus.ACCEPTED)
-    rejected = Video(source_id=source.id, ig_media_id="2", status=VideoStatus.REJECTED, rejection_reason="Duration 70.0s is not under 60s")
+def test_dashboard_counts(client, auth, db, tiktok_account):
+    video = Video(youtube_video_id="1", status=VideoStatus.ACCEPTED)
+    rejected = Video(youtube_video_id="2", status=VideoStatus.SKIPPED, rejection_reason="Duration 70.0s is not under 60s")
     db.add_all([video, rejected])
     db.flush()
     job = Job(video_id=video.id, tiktok_account_id=tiktok_account.id, status=JobStatus.VIOLATED, posted_at=utcnow())
@@ -33,35 +33,13 @@ def test_dashboard_counts(client, auth, db, source, tiktok_account):
     assert kpis == {"fetched": 2, "published": 1, "pending": 0, "failed": 0, "removed": 1}
     assert summary["rejections"]["items"][0]["rejection_reason"].startswith("Duration")
     assert summary["accounts"][0]["posts_today"] == 1
-    assert client.get("/api/dashboard/nav", headers=auth).json()["unacknowledged_violations"] == 1
-
-
-def test_sources_crud_and_bulk(client, auth, db, source, tiktok_account):
-    source.is_active = False
-    db.commit()
-    r = client.post("/api/sources/bulk", headers=auth, json={"entries": ["@slowtravel", "@someone_else", "bad name!"]})
-    body = r.json()
-    assert body["activated"] == ["slowtravel"]
-    assert body["not_authorized"] == ["@someone_else"] and body["invalid"] == ["bad name!"]
-    assert body["authorize_url"].startswith("https://www.instagram.com/oauth/authorize")
-
-    r = client.patch(f"/api/sources/{source.id}", headers=auth, json={"refresh_interval_minutes": 15, "approval_mode": "manual"})
-    assert r.json()["refresh_interval_minutes"] == 15 and r.json()["approval_mode"] == "manual"
-    assert client.patch(f"/api/sources/{source.id}", headers=auth, json={"refresh_interval_minutes": 1}).status_code == 422
-
-    listing = client.get("/api/sources?q=slow", headers=auth).json()
-    assert listing["total"] == 1 and listing["items"][0]["tiktok_accounts"][0]["username"] == "northbound"
-
-    assert client.post(f"/api/sources/{source.id}/run", headers=auth).status_code == 202
-    assert dispatch.sent[-1] == ("run_source", (source.id, True))
-
-    assert client.post("/api/sources/bulk-update", headers=auth, json={"ids": [source.id], "action": "pause"}).json() == {"updated": 1}
-    assert client.get("/api/sources?status=paused", headers=auth).json()["total"] == 1
+    assert "next_run" not in summary and summary["automations_paused"] is False
+    assert "source" not in summary["rejections"]["items"][0]
+    nav = client.get("/api/dashboard/nav", headers=auth).json()
+    assert nav["unacknowledged_violations"] == 1 and nav["tiktok_accounts"] == 1 and "active_sources" not in nav
 
 
 def test_oauth_start_urls(client, auth):
-    ig = client.get("/api/instagram/oauth/start", headers=auth).json()["url"]
-    assert "client_id=ig-app" in ig and "redirect_uri=http%3A%2F%2Fapi.test%2Fapi%2Finstagram%2Foauth%2Fcallback" in ig
     tt = client.get("/api/tiktok/oauth/start", headers=auth).json()["url"]
     assert tt.startswith("https://www.tiktok.com/v2/auth/authorize/") and "client_key=tt-key" in tt
 
@@ -71,8 +49,8 @@ def test_oauth_callback_rejects_bad_state(client):
     assert r.status_code == 307 and "error=" in r.headers["location"]
 
 
-def test_tiktok_disconnect_cancels_pending(client, auth, db, source, tiktok_account):
-    video = Video(source_id=source.id, ig_media_id="1", status=VideoStatus.ACCEPTED)
+def test_tiktok_disconnect_cancels_pending(client, auth, db, tiktok_account):
+    video = Video(youtube_video_id="1", status=VideoStatus.ACCEPTED)
     db.add(video)
     db.flush()
     job = Job(video_id=video.id, tiktok_account_id=tiktok_account.id, status=JobStatus.READY)
@@ -107,8 +85,8 @@ def test_prompt_studio_flow(client, auth):
     assert client.delete(f"/api/prompts/{prompt['id']}", headers=auth).status_code == 400  # default can't be deleted
 
 
-def test_job_approve_edit_cancel(client, auth, db, source, tiktok_account):
-    video = Video(source_id=source.id, ig_media_id="1", status=VideoStatus.ACCEPTED, original_caption="Original")
+def test_job_approve_edit_cancel(client, auth, db, tiktok_account):
+    video = Video(youtube_video_id="1", status=VideoStatus.ACCEPTED, original_caption="Original")
     db.add(video)
     db.flush()
     job = Job(video_id=video.id, tiktok_account_id=tiktok_account.id, status=JobStatus.AWAITING_APPROVAL, approval_required=True)
@@ -129,17 +107,17 @@ def test_job_approve_edit_cancel(client, auth, db, source, tiktok_account):
 
 
 def test_settings_validation(client, auth):
-    assert client.put("/api/settings/policy", headers=auth, json={"max_duration_sec": 90}).status_code == 422
+    assert client.put("/api/settings/policy", headers=auth, json={"hourly_cap": 0}).status_code == 422
     assert client.put("/api/settings/policy", headers=auth, json={"timezone": "Mars/Base"}).status_code == 422
     r = client.put("/api/settings/policy", headers=auth, json={"active_window_start": "09:00", "hourly_cap": 6, "active_days": [0, 1, 2]})
     assert r.json()["hourly_cap"] == 6 and r.json()["active_days"] == [0, 1, 2]
     r = client.put("/api/settings/audit", headers=auth, json={"check_hours": [24, 1, 6]})
     assert r.json()["check_hours"] == [1, 6, 24]
-    assert {i["key"] for i in client.get("/api/settings/integrations", headers=auth).json()} >= {"llm", "tiktok", "instagram", "storage"}
+    assert {i["key"] for i in client.get("/api/settings/integrations", headers=auth).json()} == {"llm", "tiktok", "storage", "ffmpeg", "ytdlp"}
 
 
-def test_audit_and_violation_ack(client, auth, db, source, tiktok_account):
-    video = Video(source_id=source.id, ig_media_id="1", status=VideoStatus.ACCEPTED, original_title="Beach")
+def test_audit_and_violation_ack(client, auth, db, tiktok_account):
+    video = Video(youtube_video_id="1", status=VideoStatus.ACCEPTED, original_title="Beach")
     db.add(video)
     db.flush()
     job = Job(video_id=video.id, tiktok_account_id=tiktok_account.id, status=JobStatus.MONITORING, posted_at=utcnow() - timedelta(hours=7))
@@ -158,47 +136,33 @@ def test_audit_and_violation_ack(client, auth, db, source, tiktok_account):
     assert health["violation_count"] == 1
 
 
-def test_logs_filter_and_csv(client, auth):
-    client.post("/api/runs", headers=auth)
-    logs = client.get("/api/logs?service=Scheduler", headers=auth).json()
-    assert logs["total"] == 1 and "Scheduler" in logs["services"]
-    assert "Automation started" in client.get("/api/logs.csv", headers=auth).text
+def test_logs_filter_and_csv(client, auth, db):
+    from app.services import activity
 
-
-def _ig_oauth_mocks(account_type: str):
-    import httpx
-
-    from app.integrations import instagram
-
-    respx.post(instagram.TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": "short", "user_id": 42}))
-    respx.get("https://graph.instagram.com/access_token").mock(return_value=httpx.Response(200, json={"access_token": "long", "expires_in": 5184000}))
-    respx.get(url__startswith="https://graph.instagram.com/v21.0/me").mock(
-        return_value=httpx.Response(200, json={"user_id": "42", "username": "someone", "account_type": account_type})
-    )
-
-
-@respx.mock
-def test_instagram_callback_rejects_personal_account(client, db):
-    from app.models import InstagramSource
-    from app.security import create_oauth_state
-
-    _ig_oauth_mocks("PERSONAL")
-    state = create_oauth_state("instagram", 1)
-    r = client.get(f"/api/instagram/oauth/callback?code=abc&state={state}", follow_redirects=False)
-    assert r.status_code == 307 and "Business+or+Creator" in r.headers["location"]
-    assert db.query(InstagramSource).count() == 0
-
-
-@respx.mock
-def test_instagram_callback_accepts_creator_and_clears_reconnect(client, db):
-    from app.models import InstagramSource
-    from app.security import create_oauth_state
-
-    db.add(InstagramSource(ig_user_id="42", username="someone", needs_reconnect=True, last_error="Reconnect required"))
+    activity.record(db, "Publisher", "Video published to @northbound", event="posted")
     db.commit()
-    _ig_oauth_mocks("MEDIA_CREATOR")
-    r = client.get(f"/api/instagram/oauth/callback?code=abc&state={create_oauth_state('instagram', 1)}", follow_redirects=False)
-    assert "connected=someone" in r.headers["location"]
-    db.expire_all()
-    source = db.query(InstagramSource).one()
-    assert source.needs_reconnect is False and source.last_error is None
+    logs = client.get("/api/logs?service=Publisher", headers=auth).json()
+    assert logs["total"] == 1 and "Publisher" in logs["services"]
+    assert "Video published" in client.get("/api/logs.csv", headers=auth).text
+
+
+def test_instagram_is_gone(client, auth, db, tiktok_account):
+    for method, path in [("get", "/api/sources"), ("post", "/api/sources/bulk"), ("post", "/api/runs"), ("get", "/api/fetch-runs"),
+                         ("get", "/api/fetched-videos"), ("get", "/api/instaloader/status"), ("get", "/api/instagram/oauth/start")]:
+        assert getattr(client, method)(path, headers=auth).status_code == 404, path
+    policy = client.get("/api/settings/policy", headers=auth).json()
+    assert "default_interval_minutes" not in policy and "max_videos_per_run" not in policy
+    assert "{source}" not in client.get("/api/prompts/meta", headers=auth).json()["variables"]
+
+    video = Video(youtube_video_id="1", status=VideoStatus.ACCEPTED, original_caption="Goa sunset")
+    db.add(video)
+    db.flush()
+    db.add(Job(video_id=video.id, tiktok_account_id=tiktok_account.id, status=JobStatus.READY, rewritten_title="Goa"))
+    db.commit()
+    listing = client.get("/api/jobs?q=sunset", headers=auth).json()
+    assert listing["total"] == 1 and "source" not in listing["items"][0] and "source" not in listing["items"][0]["video"]
+    assert client.get("/api/jobs?q=northbound", headers=auth).json()["total"] == 1  # still searchable by TikTok account
+    account = client.get("/api/tiktok-accounts", headers=auth).json()["items"][0]
+    assert "sources" not in account
+    route = client.get("/api/tiktok-accounts/routes-preview", headers=auth).json()[0]
+    assert route["title"] == "Goa" and "source" not in route

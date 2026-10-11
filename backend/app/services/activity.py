@@ -46,5 +46,6 @@ def job_event(db: Session, job: Job, status: str, message: str) -> None:
     """Change a job's status and append a timeline entry for the job drawer."""
     job.status = status
     db.add(JobEvent(job_id=job.id, status=status, message=message))
+    log.info("[pipeline] video=%s job=%s stage=%s %s", job.video_id, job.id, status, message)
     db.flush()
     publish("job", job_id=job.id, status=status)

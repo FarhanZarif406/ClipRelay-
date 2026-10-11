@@ -1,19 +1,24 @@
 from datetime import datetime, timedelta, timezone
 
+import jwt
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import func, or_, select
 
 from app.api.deps import DB, CurrentUser
 from app.integrations.http import ApiError
-from app.models import InstagramSource, Job, JobStatus, TikTokAccount, Video
-from app.schemas import JobUpdate
-from app.services import activity, dispatch, pipeline, serializers
+from app.models import Job, JobStatus, TikTokAccount, User, Video
+from app.schemas import JobUpdate, RejectIn
+from app.security import decode_token
+from app.services import activity, detection, dispatch, pipeline, serializers
+from app.services.storage import get_storage
 
 router = APIRouter(tags=["jobs"])
 
 STATUS_GROUPS = {
     "pending": JobStatus.PENDING,
-    "published": JobStatus.PUBLISHED,
+    "published": JobStatus.PUBLISHED | {JobStatus.VIOLATED},
+    "review": {JobStatus.AWAITING_APPROVAL},
 }
 
 
@@ -30,8 +35,9 @@ def list_jobs(
     _: CurrentUser,
     q: str | None = None,
     status: str | None = None,
-    source_id: int | None = None,
     tiktok_account_id: int | None = None,
+    channel_id: int | None = None,
+    order: str = Query("newest", pattern="^(newest|oldest|posted)$"),
     period: str | None = Query(None, pattern="^(today|7d|30d)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
@@ -40,10 +46,10 @@ def list_jobs(
     if status:
         statuses = STATUS_GROUPS.get(status, {status})
         stmt = stmt.where(Job.status.in_(statuses))
-    if source_id:
-        stmt = stmt.where(Video.source_id == source_id)
     if tiktok_account_id:
         stmt = stmt.where(Job.tiktok_account_id == tiktok_account_id)
+    if channel_id:
+        stmt = stmt.where(Video.channel_id == channel_id)
     if period:
         now = datetime.now(timezone.utc)
         start = {"today": now.replace(hour=0, minute=0, second=0, microsecond=0), "7d": now - timedelta(days=7), "30d": now - timedelta(days=30)}[period]
@@ -53,20 +59,17 @@ def list_jobs(
         like = f"%{term}%"
         conditions = [
             Video.original_caption.ilike(like),
+            Video.original_title.ilike(like),
             Job.rewritten_caption.ilike(like),
             Job.rewritten_title.ilike(like),
-            InstagramSource.username.ilike(like),
             TikTokAccount.username.ilike(like),
         ]
         if term.isdigit():
             conditions.append(Job.id == int(term))
-        stmt = (
-            stmt.outerjoin(InstagramSource, Video.source_id == InstagramSource.id)
-            .outerjoin(TikTokAccount, Job.tiktok_account_id == TikTokAccount.id)
-            .where(or_(*conditions))
-        )
+        stmt = stmt.outerjoin(TikTokAccount, Job.tiktok_account_id == TikTokAccount.id).where(or_(*conditions))
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
-    jobs = db.scalars(stmt.order_by(Job.id.desc()).offset((page - 1) * page_size).limit(page_size)).unique().all()
+    ordering = {"newest": Job.id.desc(), "oldest": Job.id.asc(), "posted": Job.posted_at.desc()}[order]
+    jobs = db.scalars(stmt.order_by(ordering).offset((page - 1) * page_size).limit(page_size)).unique().all()
     return {"items": [serializers.job(j) for j in jobs], "total": total}
 
 
@@ -78,7 +81,7 @@ def get_job(job_id: int, db: DB, _: CurrentUser):
 @router.patch("/jobs/{job_id}")
 def edit_job(job_id: int, body: JobUpdate, db: DB, _: CurrentUser):
     job = _get(db, job_id)
-    if job.status not in (JobStatus.AWAITING_APPROVAL, JobStatus.READY, JobStatus.FAILED, JobStatus.FETCHED):
+    if job.status not in JobStatus.PROCESSING | {JobStatus.AWAITING_APPROVAL, JobStatus.READY, JobStatus.FAILED}:
         raise HTTPException(409, f"Job can't be edited while {job.status}")
     data = body.model_dump(exclude_unset=True)
     if "tiktok_account_id" in data:
@@ -125,7 +128,23 @@ def retry(job_id: int, db: DB, _: CurrentUser):
         raise HTTPException(502, f"Could not verify TikTok status before retrying: {exc}") from exc
     activity.record(db, "Publisher", f"Job #{job.id} retried", event="job_retried", job_id=job.id)
     db.commit()
-    {JobStatus.FETCHED: dispatch.rewrite_job, JobStatus.READY: dispatch.upload_job, JobStatus.MONITORING: dispatch.check_job}[status](job.id)
+    {
+        JobStatus.FETCHED: dispatch.start_job, JobStatus.REWRITING: dispatch.rewrite_job,
+        JobStatus.READY: dispatch.upload_job, JobStatus.MONITORING: dispatch.check_job,
+    }[status](job.id)
+    return serializers.job(job, detail=True)
+
+
+@router.post("/jobs/{job_id}/reject")
+def reject(job_id: int, body: RejectIn, db: DB, user: CurrentUser):
+    """Review queue: this video is not published. The reason is kept with the job."""
+    job = _get(db, job_id)
+    try:
+        pipeline.reject_job(db, job, body.reason)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    activity.record(db, "Publisher", f"Job #{job.id} rejected by {user.email}: {job.reject_reason[:120]}", event="job_rejected", job_id=job.id)
+    db.commit()
     return serializers.job(job, detail=True)
 
 
@@ -150,8 +169,8 @@ def process_next(db: DB, _: CurrentUser):
         job = db.scalar(select(Job).where(Job.status == JobStatus.FETCHED).order_by(Job.id).limit(1))
         if not job:
             raise HTTPException(404, "Nothing in the queue is ready to process")
-        dispatch.rewrite_job(job.id)
-        return {"job_id": job.id, "action": "rewrite"}
+        dispatch.start_job(job.id)
+        return {"job_id": job.id, "action": "process"}
     job.next_check_at = None
     db.commit()
     dispatch.upload_job(job.id, True)
@@ -159,8 +178,48 @@ def process_next(db: DB, _: CurrentUser):
 
 
 @router.get("/videos")
-def list_videos(db: DB, _: CurrentUser, status: str | None = None, limit: int = Query(20, ge=1, le=200)):
+def list_videos(db: DB, _: CurrentUser, status: str | None = None, channel_id: int | None = None, limit: int = Query(20, ge=1, le=500)):
     stmt = select(Video)
     if status:
         stmt = stmt.where(Video.status == status)
-    return [serializers.video(v) for v in db.scalars(stmt.order_by(Video.id.desc()).limit(limit))]
+    if channel_id:
+        stmt = stmt.where(Video.channel_id == channel_id)
+    return [serializers.video(v) for v in db.scalars(stmt.order_by(Video.id.desc()).limit(limit)).unique()]
+
+
+@router.post("/videos/{video_id}/process")
+def process_anyway(video_id: int, db: DB, user: CurrentUser):
+    """Skipped screen: put a held video into the pipeline by hand."""
+    video = db.get(Video, video_id)
+    if not video:
+        raise HTTPException(404, "Video not found")
+    try:
+        job = detection.process_anyway(db, video)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    db.commit()
+    dispatch.start_job(job.id)
+    return serializers.job(job, detail=True)
+
+
+@router.get("/videos/{video_id}/file", include_in_schema=False)
+def video_file(video_id: int, token: str, db: DB):
+    """The rendered file, for inline playback in the review queue (token from /auth/media-token)."""
+    try:
+        payload = decode_token(token)
+        user = db.get(User, int(payload["sub"])) if payload.get("purpose") == "media" else None
+    except (jwt.PyJWTError, KeyError, ValueError):
+        user = None
+    if not user or not user.is_active:
+        raise HTTPException(401, "Invalid or expired media token")
+    video = db.get(Video, video_id)
+    if not video or not video.rendered_file_path:
+        raise HTTPException(404, "The rendered file is not available")
+    storage = get_storage()
+    path = storage.local_path(video.rendered_file_path)
+    if path:
+        return FileResponse(path, media_type="video/mp4")
+    url = storage.url(video.rendered_file_path)
+    if not url:
+        raise HTTPException(404, "The rendered file is not available")
+    return RedirectResponse(url)

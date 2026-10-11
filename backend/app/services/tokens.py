@@ -1,38 +1,18 @@
-"""Encrypted token storage + automatic refresh for Instagram and TikTok."""
+"""Encrypted token storage + automatic refresh for TikTok."""
 
 from datetime import timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.integrations import instagram, tiktok
+from app.integrations import tiktok
 from app.integrations.http import ApiError, AuthError
-from app.models import InstagramSource, TikTokAccount, TikTokStatus, utcnow
+from app.models import TikTokAccount, TikTokStatus, utcnow
 from app.security import decrypt, encrypt
 from app.services import activity, notify
 
-IG_REFRESH_WINDOW = timedelta(days=7)
 TT_REFRESH_WINDOW = timedelta(minutes=30)
 TT_EXPIRING_WINDOW = timedelta(days=3)
-
-
-def instagram_token(db: Session, source: InstagramSource) -> str:
-    """Return a valid Instagram token, refreshing the 60-day long-lived token when it's close to expiry."""
-    if source.needs_reconnect:
-        raise AuthError(f"@{source.username} must reconnect — the Instagram app credentials changed")
-    token = decrypt(source.access_token_enc)
-    if not token:
-        raise AuthError(f"@{source.username} has no Instagram token — reconnect it")
-    now = utcnow()
-    old_enough = not source.token_refreshed_at or now - source.token_refreshed_at > timedelta(hours=24)
-    if source.token_expires_at and source.token_expires_at - now < IG_REFRESH_WINDOW and old_enough:
-        result = instagram.refresh_token(token)
-        source.access_token_enc = encrypt(result.access_token)
-        source.token_expires_at = result.expires_at
-        source.token_refreshed_at = now
-        activity.record(db, "OAuth", f"Instagram token refreshed for @{source.username}", event="token_refreshed")
-        token = result.access_token
-    return token
 
 
 def store_tiktok_tokens(account: TikTokAccount, tokens: tiktok.TokenSet) -> None:
@@ -82,14 +62,5 @@ def refresh_all(db: Session) -> dict:
             if account.refresh_expires_at and account.refresh_expires_at - now < TT_EXPIRING_WINDOW:
                 account.status = TikTokStatus.EXPIRING
         except ApiError:
-            failed += 1
-    for source in db.scalars(select(InstagramSource).where(InstagramSource.access_token_enc.is_not(None))):
-        try:
-            if source.token_expires_at and source.token_expires_at <= now:
-                source.last_error = "Instagram token expired — reconnect this account"
-                continue
-            instagram_token(db, source)
-        except ApiError as exc:
-            source.last_error = str(exc)
             failed += 1
     return {"refreshed": refreshed, "failed": failed}

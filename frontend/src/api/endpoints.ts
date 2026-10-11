@@ -1,13 +1,14 @@
 import { api } from "./client";
 import type {
-  ActivityLog, AuditItem, AuditSettings, CredentialCard, CredentialResult, DailyReport, LLMProvider, LLMProviderList, LLMProviderName, Integration, Job, Nav, NotificationSettings, Page, Policy, Prompt,
-  Source, Summary, TikTokAccount, User, Video, Violation,
+  ActivityLog, AuditItem, AuditSettings, Channel, ChannelCard, ChannelRules, CredentialCard, CredentialResult, DailyReport, LLMProvider, LLMProviderList, LLMProviderName, Integration, Job, Nav, NotificationSettings, Page, Policy, Prompt,
+  RuleChange, RuleDef, RuleValue, RuleValues, Summary, TikTokAccount, User, Video, Violation,
 } from "./types";
 
 export const auth = {
   setup: () => api<{ has_users: boolean; registration_open: boolean }>("/auth/setup"),
-  login: (email: string, password: string) => api<{ access_token: string; user: User }>("/auth/login", { method: "POST", body: { email, password } }),
-  register: (body: { email: string; password: string; name: string; workspace_name: string }) =>
+  login: (email: string, password: string, accept_terms = false) => api<{ access_token: string; user: User }>("/auth/login", { method: "POST", body: { email, password, accept_terms } }),
+  mediaToken: () => api<{ token: string }>("/auth/media-token"),
+  register: (body: { email: string; password: string; name: string; workspace_name: string; accept_terms?: boolean }) =>
     api<{ access_token: string; user: User }>("/auth/register", { method: "POST", body }),
   me: () => api<User>("/auth/me"),
 };
@@ -19,31 +20,15 @@ export const dashboard = {
   daily: (day?: string) => api<DailyReport>("/reports/daily", { query: { day } }),
 };
 
-export const sources = {
-  list: (query: { q?: string; status?: string; page?: number; page_size?: number }) =>
-    api<Page<Source> & { connected: number; capacity: number }>("/sources", { query }),
-  bulkAdd: (entries: string[]) =>
-    api<{ activated: string[]; already_active: string[]; not_authorized: string[]; invalid: string[]; authorize_url: string | null }>(
-      "/sources/bulk", { method: "POST", body: { entries } }),
-  update: (id: number, body: Partial<{ is_active: boolean; refresh_interval_minutes: number; approval_mode: string; prompt_template_id: number; clear_prompt_template: boolean; tiktok_account_ids: number[] }>) =>
-    api<Source>(`/sources/${id}`, { method: "PATCH", body }),
-  bulkUpdate: (ids: number[], action: "pause" | "resume" | "delete" | "assign", tiktok_account_ids?: number[]) =>
-    api<{ updated: number }>("/sources/bulk-update", { method: "POST", body: { ids, action, tiktok_account_ids } }),
-  remove: (id: number) => api<void>(`/sources/${id}`, { method: "DELETE" }),
-  run: (id: number) => api<{ queued: number[] }>(`/sources/${id}/run`, { method: "POST" }),
-  runAll: () => api<{ queued: number[] }>("/runs", { method: "POST" }),
-  oauthStart: () => api<{ url: string }>("/instagram/oauth/start"),
-};
-
 export const tiktok = {
   list: () => api<{ items: TikTokAccount[]; capacity: number }>("/tiktok-accounts"),
-  update: (id: number, body: Partial<{ daily_cap: number; default_privacy: string; color: string }>) =>
+  update: (id: number, body: Partial<{ daily_cap: number | null; default_privacy: string; color: string }>) =>
     api<TikTokAccount>(`/tiktok-accounts/${id}`, { method: "PATCH", body }),
   disconnect: (id: number) => api<void>(`/tiktok-accounts/${id}`, { method: "DELETE" }),
   health: (id: number) =>
     api<{ account: TikTokAccount; published: number; failed: number; violation_count: number; compliance_rate: number; health: string; violations: Violation[] }>(
       `/tiktok-accounts/${id}/health`),
-  routes: () => api<{ job_id: number; title: string; source: { username: string } | null; video_id: number; tiktok_account: TikTokAccount; status: string }[]>(
+  routes: () => api<{ job_id: number; title: string; video_id: number; tiktok_account: TikTokAccount; status: string }[]>(
     "/tiktok-accounts/routes-preview"),
   oauthStart: () => api<{ url: string }>("/tiktok/oauth/start"),
 };
@@ -63,7 +48,7 @@ export const prompts = {
     api<{ title: string; caption: string; tags: string[] }>("/prompts/test", { method: "POST", body }),
 };
 
-export type JobQuery = { q?: string; status?: string; source_id?: number; tiktok_account_id?: number; period?: string; page?: number; page_size?: number };
+export type JobQuery = { q?: string; status?: string; tiktok_account_id?: number; channel_id?: number; order?: "newest" | "oldest" | "posted"; period?: string; page?: number; page_size?: number };
 
 export const jobs = {
   list: (query: JobQuery) => api<Page<Job>>("/jobs", { query }),
@@ -73,8 +58,27 @@ export const jobs = {
   approve: (id: number) => api<Job>(`/jobs/${id}/approve`, { method: "POST" }),
   retry: (id: number) => api<Job>(`/jobs/${id}/retry`, { method: "POST" }),
   cancel: (id: number) => api<Job>(`/jobs/${id}/cancel`, { method: "POST" }),
+  reject: (id: number, reason: string) => api<Job>(`/jobs/${id}/reject`, { method: "POST", body: { reason } }),
+  processAnyway: (videoId: number) => api<Job>(`/videos/${videoId}/process`, { method: "POST" }),
   processNext: () => api<{ job_id: number; action: string }>("/jobs/process-next", { method: "POST" }),
-  videos: (status?: string, limit = 20) => api<Video[]>("/videos", { query: { status, limit } }),
+  videos: (status?: string, limit = 20, channel_id?: number) => api<Video[]>("/videos", { query: { status, limit, channel_id } }),
+};
+
+export const channels = {
+  list: () => api<{ items: Channel[]; push_available: boolean }>("/channels"),
+  resolve: (query: string) => api<ChannelCard>("/channels/resolve", { method: "POST", body: { query } }),
+  create: (body: { query: string; default_tiktok_account_id: number | null }) => api<Channel>("/channels", { method: "POST", body }),
+  update: (id: number, body: Partial<{ active: boolean; default_tiktok_account_id: number | null }>) => api<Channel>(`/channels/${id}`, { method: "PATCH", body }),
+  remove: (id: number) => api<void>(`/channels/${id}`, { method: "DELETE" }),
+  check: (id: number) => api<{ found: number; queued: number; skipped: number; error: string | null }>(`/channels/${id}/check`, { method: "POST" }),
+  rules: (id: number) => api<ChannelRules>(`/channels/${id}/rules`),
+  saveRules: (id: number, values: Record<string, RuleValue | null>) => api<ChannelRules>(`/channels/${id}/rules`, { method: "PUT", body: { values } }),
+};
+
+export const rules = {
+  get: () => api<{ definitions: RuleDef[]; values: RuleValues }>("/settings/rules"),
+  save: (values: Record<string, RuleValue | null>) => api<{ definitions: RuleDef[]; values: RuleValues }>("/settings/rules", { method: "PUT", body: { values } }),
+  history: (channel_id?: number) => api<RuleChange[]>("/settings/rules/history", { query: { channel_id, limit: 100 } }),
 };
 
 export const audit = {

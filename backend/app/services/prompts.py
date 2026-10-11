@@ -1,5 +1,6 @@
 """Prompt template rendering + rewriting."""
 
+import json
 import re
 
 from sqlalchemy import select
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.integrations import llm
 from app.models import PromptTemplate
 
-VARIABLES = ["{title}", "{caption}", "{tags}", "{source}", "{niche}"]
+VARIABLES = ["{title}", "{caption}", "{description}", "{tags}", "{channel}", "{hashtag_count}", "{niche}"]
 ALIASES = {"original_title": "title", "original_caption": "caption", "original_tags": "tags"}
 VAR_RE = re.compile(r"\{(\w+)\}")
 
@@ -31,7 +32,7 @@ def render(template: str, values: dict[str, str]) -> str:
 
 def parse_hashtags(text: str) -> list[str]:
     tags = re.findall(r"#?([\wऀ-ॿ؀-ۿ]+)", text or "")
-    return list(dict.fromkeys(t.lower() for t in tags if t))[:10]
+    return list(dict.fromkeys(t.lower() for t in tags if t))[:15]
 
 
 def resolve_template(db: Session, template_id: int | None) -> PromptTemplate | None:
@@ -44,10 +45,13 @@ def resolve_template(db: Session, template_id: int | None) -> PromptTemplate | N
 
 def rewrite(
     *, title_prompt: str, caption_prompt: str, hashtags_prompt: str, title: str, caption: str, tags: list[str],
-    source: str = "", niche: str = "", provider_id: int | None = None,
+    channel: str = "", niche: str = "", hashtag_count: int = 8, provider_id: int | None = None,
 ) -> dict:
     """Run each non-empty template field through the LLM. Empty fields keep the original value."""
-    values = {"title": title, "caption": caption, "tags": " ".join(f"#{t}" for t in tags), "source": source, "niche": niche}
+    values = {
+        "title": title, "caption": caption, "description": caption, "tags": " ".join(f"#{t}" for t in tags),
+        "channel": channel, "niche": niche, "hashtag_count": str(hashtag_count),
+    }
     result = {"title": title, "caption": caption, "tags": list(tags)}
     if title_prompt.strip():
         result["title"] = llm.complete(render(title_prompt, values), provider_id=provider_id).strip().strip('"')[:150]
@@ -56,3 +60,35 @@ def rewrite(
     if hashtags_prompt.strip():
         result["tags"] = parse_hashtags(llm.complete(render(hashtags_prompt, values), provider_id=provider_id))
     return result
+
+
+TIKTOK_CAPTION_LIMIT = 2200
+JSON_FORMAT = (
+    "\n\nRespond with JSON only, in this exact shape: "
+    '{"caption": "<the TikTok caption, without hashtags>", "hashtags": ["tag1", "tag2"]}'
+)
+
+
+def rewrite_single(prompt: str, *, title: str, description: str, tags: list[str], channel: str, hashtag_count: int, provider_id: int | None = None) -> dict:
+    """One model call that returns the caption and the hashtags together (the Settings caption prompt)."""
+    values = {
+        "title": title, "description": description[:3000], "caption": description[:3000],
+        "tags": " ".join(f"#{t}" for t in tags), "channel": channel, "hashtag_count": str(hashtag_count), "niche": "",
+    }
+    context = f"\n\nYouTube title: {title}\nChannel: {channel}\nExisting tags: {values['tags']}\nDescription: {values['description']}"
+    request_text = render(prompt, values)
+    if "{title}" not in prompt and "{description}" not in prompt:
+        request_text += context  # a prompt without variables still needs to see the video's details
+    request_text += f"\n\nWrite one caption under {TIKTOK_CAPTION_LIMIT} characters and exactly {hashtag_count} hashtags."
+    raw = llm.complete(request_text + JSON_FORMAT, provider_id=provider_id)
+    match = re.search(r"\{.*\}", raw, re.S)
+    if not match:
+        raise ValueError(f"The model did not return JSON: {raw[:120]}")
+    data = json.loads(match.group(0))
+    caption = str(data.get("caption") or "").strip()
+    if not caption:
+        raise ValueError("The model returned an empty caption")
+    found = data.get("hashtags") or []
+    hashtags = parse_hashtags(" ".join(str(tag) for tag in found) if isinstance(found, list) else str(found))
+    caption = re.sub(r"\s*#[\w\u0900-\u097f\u0600-\u06ff]+", "", caption).strip() or caption
+    return {"title": "", "caption": caption[:TIKTOK_CAPTION_LIMIT], "tags": hashtags[:hashtag_count]}

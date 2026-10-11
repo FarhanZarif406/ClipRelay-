@@ -1,8 +1,6 @@
 """Validation for stored credentials. Each validator returns (ok, message):
 ok=True valid · ok=False invalid · ok=None can't be verified yet (stays unverified)."""
 
-import re
-
 from app.integrations.http import ApiError, request
 
 TIKTOK_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/"
@@ -17,18 +15,6 @@ def _error_text(response) -> str:
     if isinstance(err, dict):
         return err.get("message") or err.get("code") or str(err)
     return body.get("error_description") or (err if isinstance(err, str) else None) or f"HTTP {response.status_code}"
-
-
-def check_instagram(values: dict[str, str]) -> tuple[bool | None, str]:
-    app_id, secret = values.get("app_id", ""), values.get("app_secret", "")
-    if not app_id or not secret:
-        return False, "App ID and App secret are both required"
-    if not re.fullmatch(r"\d{6,25}", app_id):
-        return False, "The Instagram App ID should be numeric (copy it from Instagram → API setup with Instagram login)"
-    if not re.fullmatch(r"[0-9a-fA-F]{32}", secret):
-        return False, "The Instagram App secret should be 32 hexadecimal characters"
-    # Meta offers no client-credentials check for Instagram Login; the next successful OAuth callback confirms it.
-    return None, "Format looks right — it will be confirmed on the next successful Instagram sign-in"
 
 
 def check_tiktok(values: dict[str, str]) -> tuple[bool | None, str]:
@@ -55,7 +41,23 @@ def check_tiktok(values: dict[str, str]) -> tuple[bool | None, str]:
     return False, f"TikTok rejected the credentials: {_error_text(response)}"
 
 
-VALIDATORS = {"instagram": check_instagram, "tiktok": check_tiktok}
+def check_youtube(values: dict[str, str]) -> tuple[bool | None, str]:
+    key = values.get("api_key", "")
+    if not key:
+        return False, "Paste a YouTube Data API key"
+    try:
+        response = request(
+            "GET", "https://www.googleapis.com/youtube/v3/channels",
+            params={"part": "id", "id": "UCBR8-60-B28hp2BmDPdntcQ", "key": key}, retries=2, timeout=15,
+        )
+    except ApiError as exc:
+        return False, str(exc)
+    if response.status_code == 200:
+        return True, "YouTube accepted the API key"
+    return False, f"YouTube rejected the API key: {_error_text(response)}"
+
+
+VALIDATORS = {"tiktok": check_tiktok, "youtube": check_youtube}
 
 
 def check_smtp(values: dict[str, str]) -> tuple[bool | None, str]:
@@ -81,10 +83,7 @@ VALIDATORS["smtp"] = check_smtp
 
 
 def run_daily(db) -> dict:
-    """Re-validate stored credentials and AI models; alert ("Token problems") when one stops working.
-
-    Instagram can only be verified through OAuth, so it is skipped here.
-    """
+    """Re-validate stored credentials and AI models; alert ("Token problems") when one stops working."""
     from sqlalchemy import select
 
     from app.integrations import llm
@@ -93,8 +92,6 @@ def run_daily(db) -> dict:
 
     summary = {"checked": 0, "failed": []}
     for group, validator in VALIDATORS.items():
-        if group == "instagram":
-            continue
         saved = credentials.rows(db, group)
         if not saved:
             continue

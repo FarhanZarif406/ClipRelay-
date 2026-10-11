@@ -13,15 +13,16 @@ celery_app.conf.update(
     timezone="UTC",
     task_routes={
         "app.workers.tasks.upload_job": {"queue": "uploads"},
-        "app.workers.tasks.run_source": {"queue": "fetch"},
     },
     task_default_queue="default",
-    # Beat only fires the lightweight tick; per-source intervals, upload delays and violation-check
+    # Beat only fires the lightweight tick; channel polls, retries, upload delays and violation-check
     # times are read from PostgreSQL on every tick, so changing them in the UI needs no restart.
     beat_schedule={
         "scheduler-tick": {"task": "app.workers.tasks.tick", "schedule": float(settings.scheduler_tick_seconds)},
         "refresh-tokens": {"task": "app.workers.tasks.refresh_tokens", "schedule": 15 * 60.0},
         "validate-credentials": {"task": "app.workers.tasks.validate_credentials", "schedule": 24 * 60 * 60.0},
+        "renew-subscriptions": {"task": "app.workers.tasks.renew_subscriptions", "schedule": 24 * 60 * 60.0},
+        "cleanup-files": {"task": "app.workers.tasks.cleanup_files", "schedule": 24 * 60 * 60.0},
     },
 )
 

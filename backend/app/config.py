@@ -22,16 +22,14 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://cliprelay:cliprelay@localhost:5432/cliprelay"
     redis_url: str = "redis://localhost:6379/0"
 
-    # Instagram (Instagram API with Instagram Login)
-    instagram_app_id: str = ""
-    instagram_app_secret: str = ""
-    instagram_api_version: str = "v21.0"
-    instagram_scopes: str = "instagram_business_basic"
-
     # TikTok (Login Kit + Content Posting API)
     tiktok_client_key: str = ""
     tiktok_client_secret: str = ""
-    tiktok_scopes: str = "user.info.basic,video.publish,video.list"
+    tiktok_scopes: str = "user.info.basic,video.upload,video.publish,video.list"  # video.upload = inbox mode
+
+    # YouTube
+    youtube_api_key: str = ""  # optional: YouTube Data API key; without it lookups use the public pages and yt-dlp
+    video_source_adapter: str = "yt_dlp"  # how original files are obtained (see app/services/sources.py)
 
     # LLM
     llm_provider: Literal["anthropic", "openai"] = "anthropic"
@@ -58,17 +56,16 @@ class Settings(BaseSettings):
     s3_secret_access_key: str = ""
 
     # Media
-    ffprobe_path: str = "ffprobe"
     ffmpeg_path: str = "ffmpeg"
-    max_video_duration_sec: float = 60.0
 
     # Limits from the design
     max_tiktok_accounts: int = 20
-    max_instagram_sources: int = 7000
     monthly_job_quota: int = 1000
 
     # Scheduler
     scheduler_tick_seconds: int = 30
+    # Run the scheduler and the pipeline inside the API process instead of Celery (no Redis needed). For local use.
+    inline_worker: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:

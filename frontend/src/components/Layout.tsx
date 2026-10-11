@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { audit, dashboard, sources } from "@/api/endpoints";
+import { useQuery } from "@tanstack/react-query";
+import { audit, dashboard } from "@/api/endpoints";
 import { useAuth } from "@/hooks/useAuth";
 import { useDismiss } from "@/hooks/useDismiss";
 import { useLiveEvents } from "@/hooks/useLiveEvents";
@@ -9,13 +9,17 @@ import { useTheme } from "@/hooks/useTheme";
 import { initialsOf } from "@/lib/format";
 import { Icon, type IconName } from "./Icon";
 import { Onboarding } from "./Onboarding";
-import { useErrorToast, useToast } from "./Toast";
-import { Avatar, Badge, Button } from "./ui";
+import { Avatar, Badge } from "./ui";
 
 const navigation: { label: string; icon: IconName; to: string }[] = [
   { label: "Dashboard", icon: "grid", to: "/" },
+  { label: "Channels", icon: "play", to: "/channels" },
+  { label: "Review Queue", icon: "check", to: "/review" },
+  { label: "Published", icon: "arrow", to: "/published" },
+  { label: "Skipped", icon: "filter", to: "/skipped" },
+  { label: "Editing Rules", icon: "code", to: "/editing" },
+  { label: "Integrations", icon: "link", to: "/integrations" },
   { label: "Daily Report", icon: "logs", to: "/report" },
-  { label: "Instagram Sources", icon: "instagram", to: "/sources" },
   { label: "TikTok Accounts", icon: "tiktok", to: "/tiktok" },
   { label: "Automation Rules", icon: "rules", to: "/rules" },
   { label: "Prompt Studio", icon: "sparkles", to: "/prompts" },
@@ -42,9 +46,6 @@ export function Layout() {
   useDismiss(profileRef, profileOpen, useCallback(() => setProfileOpen(false), []));
   const navigate = useNavigate();
   const location = useLocation();
-  const toast = useToast();
-  const onError = useErrorToast();
-  const queryClient = useQueryClient();
 
   useLiveEvents(!!user);
   const nav = useQuery({ queryKey: ["nav"], queryFn: dashboard.nav, refetchInterval: 30_000 });
@@ -52,7 +53,7 @@ export function Layout() {
 
   useEffect(() => { setMenu(false); setNotifications(false); setProfileOpen(false); window.scrollTo(0, 0); }, [location.pathname]);
   useEffect(() => {
-    if (nav.data && !nav.data.onboarding_completed && nav.data.active_sources === 0 && !sessionStorage.getItem("cliprelay.onboarding.seen")) {
+    if (nav.data && !nav.data.onboarding_completed && nav.data.tiktok_accounts === 0 && !sessionStorage.getItem("cliprelay.onboarding.seen")) {
       sessionStorage.setItem("cliprelay.onboarding.seen", "1");
       setOnboarding(true);
     }
@@ -63,27 +64,19 @@ export function Layout() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const runAll = useMutation({
-    mutationFn: sources.runAll,
-    onSuccess: res => {
-      toast({ title: "Automation started", message: `Scanning ${res.queued.length} Instagram source${res.queued.length === 1 ? "" : "s"} now.` });
-      queryClient.invalidateQueries();
-    },
-    onError,
-  });
-
   const usage = nav.data ? Math.min(100, (nav.data.monthly_jobs / Math.max(1, nav.data.monthly_quota)) * 100) : 0;
   const name = user?.name || user?.email || "";
 
   return <div className="app-shell">
     <aside className={`sidebar ${menu ? "open" : ""}`}><div className="brand"><div className="brand-mark"><Icon name="play" size={15}/></div><span>ClipRelay</span><Badge tone="primary" dot={false}>BETA</Badge><button className="mobile-close" onClick={() => setMenu(false)}><Icon name="close"/></button></div>
-      <nav>{navigation.map(n => { const active = n.to === "/" ? location.pathname === "/" : location.pathname.startsWith(n.to); return <button key={n.to} className={active ? "active" : ""} aria-current={active ? "page" : undefined} onClick={() => navigate(n.to)}><Icon name={n.icon}/><span>{n.label}</span>{n.to === "/jobs" && !!nav.data?.pending_jobs && <b>{nav.data.pending_jobs}</b>}{n.to === "/audit" && !!nav.data?.unacknowledged_violations && <i/>}</button>; })}</nav>
+      <nav>{navigation.map(n => { const active = n.to === "/" ? location.pathname === "/" : location.pathname.startsWith(n.to); return <button key={n.to} className={active ? "active" : ""} aria-current={active ? "page" : undefined} onClick={() => navigate(n.to)}><Icon name={n.icon}/><span>{n.label}</span>{n.to === "/jobs" && !!nav.data?.pending_jobs && <b>{nav.data.pending_jobs}</b>}{n.to === "/review" && !!nav.data?.review_jobs && <b>{nav.data.review_jobs}</b>}{n.to === "/skipped" && !!nav.data?.skipped_videos && <b>{nav.data.skipped_videos}</b>}{n.to === "/audit" && !!nav.data?.unacknowledged_violations && <i/>}</button>; })}</nav>
       <div className="sidebar-bottom"><button className="usage" onClick={() => setOnboarding(true)}><span><Icon name="sparkles" size={15}/>Monthly usage</span><strong>{(nav.data?.monthly_jobs ?? 0).toLocaleString()} / {(nav.data?.monthly_quota ?? 0).toLocaleString()} jobs</strong><div><i style={{ width: `${usage}%` }}/></div><small>Reset in {nav.data?.reset_in_days ?? "–"} days</small></button>
-        <a className="help" href={DOCS_URL} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}><Icon name="alert" size={16}/><div><strong>Need help?</strong><span>View documentation</span></div><Icon name="chevron" size={14}/></a></div>
+        <a className="help" href={DOCS_URL} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}><Icon name="alert" size={16}/><div><strong>Need help?</strong><span>View documentation</span></div><Icon name="chevron" size={14}/></a>
+        <div className="legal-links"><a href="/terms" target="_blank" rel="noreferrer">Terms</a><a href="/privacy" target="_blank" rel="noreferrer">Privacy</a></div></div>
     </aside>
     <div className="workspace"><header className="topbar"><button className="menu-button" onClick={() => setMenu(true)}><Icon name="menu"/></button><div className="mobile-brand"><div className="brand-mark"><Icon name="play" size={13}/></div>ClipRelay</div>
-      <form className="global-search" onSubmit={e => { e.preventDefault(); navigate(`/jobs?q=${encodeURIComponent(search)}`); }}><Icon name="search" size={17}/><input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search jobs, pages, accounts…"/><kbd>⌘ K</kbd></form>
-      <div className="top-actions"><Button variant="primary" icon="play" onClick={() => runAll.mutate()} disabled={runAll.isPending}>Run now</Button>
+      <form className="global-search" onSubmit={e => { e.preventDefault(); navigate(`/jobs?q=${encodeURIComponent(search)}`); }}><Icon name="search" size={17}/><input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search jobs, accounts…"/><kbd>⌘ K</kbd></form>
+      <div className="top-actions">
         <div className="menu-anchor" ref={bellRef}><button className="icon-button notification" aria-label="Notifications" onClick={() => setNotifications(o => !o)}><Icon name="bell"/>{!!nav.data?.unacknowledged_violations && <i/>}</button>
           {notifications && <div className="menu-pop right" style={{ width: 300 }}>
             <div className="menu-head"><strong>Alerts</strong><span>{nav.data?.unacknowledged_violations ? `${nav.data.unacknowledged_violations} unacknowledged violation(s)` : "You're all caught up"}</span></div>

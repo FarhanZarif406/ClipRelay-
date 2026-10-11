@@ -1,6 +1,6 @@
 export type Tone = "success" | "warning" | "danger" | "primary" | "neutral";
 
-export type User = { id: number; email: string; name: string; workspace_name: string; role: "owner" | "member"; created_at: string };
+export type User = { id: number; email: string; name: string; workspace_name: string; role: "owner" | "member"; created_at: string; terms_accepted_at?: string | null };
 
 export type Ref = { id: number; username: string; color: string; initials: string; status?: string };
 
@@ -18,8 +18,13 @@ export type ActivityLog = {
 
 export type Video = {
   id: number;
-  ig_media_id: string;
+  youtube_video_id: string | null;
+  channel: ChannelRef | null;
   permalink: string | null;
+  has_file: boolean;
+  files_deleted_at: string | null;
+  skip_reason: string | null;
+  forced: boolean;
   thumbnail_url: string | null;
   posted_at: string | null;
   original_title: string;
@@ -28,14 +33,13 @@ export type Video = {
   duration_sec: number | null;
   detected_language: string | null;
   language_confidence: number | null;
-  status: "fetched" | "accepted" | "rejected";
+  status: "fetched" | "accepted" | "skipped";
   rejection_reason: string | null;
   created_at: string;
-  source: Ref | null;
 };
 
 export type JobStatus =
-  | "fetched" | "rewriting" | "awaiting_approval" | "ready" | "uploading" | "posted"
+  | "fetched" | "downloading" | "rendering" | "rewriting" | "awaiting_approval" | "ready" | "uploading" | "posted"
   | "monitoring" | "clean" | "violated" | "failed" | "cancelled";
 
 export type Job = {
@@ -48,6 +52,11 @@ export type Job = {
   rewritten_title: string | null;
   rewritten_caption: string | null;
   rewritten_tags: string[];
+  caption_status: "pending" | "done" | "caption_fallback";
+  caption_fallback: boolean;
+  publish_mode: "inbox" | "direct" | null;
+  reject_reason: string | null;
+  tiktok_url: string | null;
   privacy_level: string | null;
   tiktok_post_id: string | null;
   error: string | null;
@@ -57,7 +66,6 @@ export type Job = {
   monitor_until: string | null;
   prompt_template_id: number | null;
   video: Video;
-  source: Ref | null;
   tiktok_account: Ref | null;
   events?: { id: number; status: JobStatus; message: string; created_at: string }[];
 };
@@ -70,7 +78,7 @@ export type Summary = {
   attention: { username: string; status: string; refresh_expires_at: string | null }[];
   unacknowledged_violations: number;
   recent_activity: ActivityLog[];
-  next_run: { at: string | null; interval_minutes: number | null; paused: boolean; active_sources: number; sources: Ref[] };
+  automations_paused: boolean;
   rejections: { items: Video[]; removed_today: number; acceptance_rate: number | null; language_gate_enabled: boolean; allowed_languages: string[] };
   accounts: (Ref & { posts_today: number; lifetime_posts: number })[];
 };
@@ -82,26 +90,10 @@ export type Nav = {
   monthly_quota: number;
   reset_in_days: number;
   onboarding_completed: boolean;
-  active_sources: number;
   tiktok_accounts: number;
-};
-
-export type Source = Ref & {
-  name: string | null;
-  profile_picture_url: string | null;
-  is_active: boolean;
-  refresh_interval_minutes: number;
-  next_run_at: string | null;
-  last_checked_at: string | null;
-  last_run_status: string | null;
-  last_error: string | null;
-  approval_mode: "auto" | "manual";
-  prompt_template_id: number | null;
-  prompt_template_name: string | null;
-  videos_found: number;
-  token_expires_at: string | null;
-  needs_reconnect: boolean;
-  tiktok_accounts: Ref[];
+  review_jobs: number;
+  skipped_videos: number;
+  channels: number;
 };
 
 export type TikTokAccount = Ref & {
@@ -109,13 +101,13 @@ export type TikTokAccount = Ref & {
   display_name: string | null;
   avatar_url: string | null;
   daily_cap: number;
+  daily_cap_override: number | null;
   default_privacy: string;
   token_expires_at: string | null;
   refresh_expires_at: string | null;
   last_error: string | null;
   last_posted_at: string | null;
   created_at: string;
-  sources: Ref[];
   posts_today: number;
   failed_today: number;
   lifetime_posts: number;
@@ -154,16 +146,12 @@ export type Policy = {
   active_window_start: string;
   active_window_end: string;
   active_days: number[];
-  max_duration_sec: number;
   language_gate_enabled: boolean;
   allowed_languages: string[];
   hourly_cap: number;
   random_delay_min_minutes: number;
   random_delay_max_minutes: number;
   timezone: string;
-  unique_video_per_account: boolean;
-  default_interval_minutes: number;
-  max_videos_per_run: number;
   tiktok_app_audited: boolean;
 };
 
@@ -182,7 +170,7 @@ export type DailyReport = {
   date: string;
   uploaded: number;
   failed: number;
-  accounts: (Ref & { sources: number; posts_today: number; failed_today: number; lifetime_posts: number })[];
+  accounts: (Ref & { posts_today: number; failed_today: number; lifetime_posts: number })[];
   active_accounts: number;
   lifetime_uploads: number;
   accepted: number;
@@ -229,3 +217,30 @@ export type CredentialCard = {
 export type CredentialResult = { ok: boolean | null; message: string; card: CredentialCard };
 
 export type Page<T> = { items: T[]; total: number };
+
+export type ChannelRef = { id: number; display_name: string; handle: string | null; thumbnail_url: string | null };
+export type Channel = ChannelRef & {
+  youtube_channel_id: string;
+  url: string;
+  active: boolean;
+  default_tiktok_account: Ref | null;
+  pubsub_subscription_expires_at: string | null;
+  last_checked_at: string | null;
+  last_upload_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  videos_published: number;
+  videos_detected: number;
+  videos_skipped: number;
+  override_count: number;
+};
+export type ChannelCard = { youtube_channel_id: string; display_name: string; handle: string | null; thumbnail_url: string | null; url: string; already_added: boolean };
+
+export type RuleValue = boolean | number | string;
+export type RuleValues = Record<string, RuleValue>;
+export type RuleDef = {
+  key: string; kind: "float" | "int" | "bool" | "text" | "timezone" | "choice"; default: RuleValue; label: string; help: string; group: string;
+  min: number | null; max: number | null; choices: string[]; per_channel: boolean;
+};
+export type RuleChange = { id: number; key: string; label: string; channel_id: number | null; channel_name: string | null; old_value: RuleValue | null; new_value: RuleValue | null; changed_by: string | null; changed_at: string };
+export type ChannelRules = { overrides: RuleValues; effective: RuleValues; global: RuleValues };

@@ -24,7 +24,6 @@ The prototype used a `useState<Screen>` switch. The real app uses React Router:
 |---|---|---|---|
 | Dashboard | grid | `/` | — |
 | Daily Report | logs | `/report` | — |
-| Instagram Sources | instagram | `/sources` | — |
 | TikTok Accounts | tiktok | `/tiktok` | — |
 | Automation Rules | rules | `/rules` | — |
 | Prompt Studio | sparkles | `/prompts` | — |
@@ -35,23 +34,22 @@ The prototype used a `useState<Screen>` switch. The real app uses React Router:
 | *(new)* Login | — | `/login` | Not in design; built from existing `.modal`/`.card` tokens |
 
 Shell: fixed sidebar (248px; 216px <1150px; off-canvas drawer <820px with scrim + `mobile-close`),
-sticky topbar (menu button, mobile brand, global search with ⌘K, **Run now**, notifications bell
+sticky topbar (menu button, mobile brand, global search with ⌘K, notifications bell
 with red dot, theme toggle, profile button). Sidebar bottom: **Monthly usage** card (opens onboarding
 wizard) and **Need help?** link.
 
-Overlays: `AddModal` (add Instagram accounts), `JobDrawer` (job detail), `Onboarding` (4-step wizard), `toast`.
+Overlays: `JobDrawer` (job detail), `Onboarding` (3-step wizard), `toast`.
 
 ## 2. Per-screen inventory
 
 ### Dashboard
-- **PageHeader** "Good morning, Alex" + **Run now** (primary).
+- **PageHeader** "Good morning, Alex".
 - **Alert banner**: "2 TikTok tokens need attention", detail line, **Review accounts →**, close ✕.
 - **KPI grid (5)**: Videos fetched / Published / Pending / Failed / Removed by audit — value, meta delta vs yesterday, 10-bar sparkline, ⋯ icon.
 - **Publishing performance** chart: line+area SVG, y labels, 7 x labels, **7 days / 30 days** segmented control.
 - **Job status** donut (conic-gradient) + legend (Published/Pending/Failed/Removed) + total.
 - **Recent activity** list (icon, tone, title, description, relative time) + **View all →** (→ Logs).
-- **Next scheduled run**: HH:MM:SS countdown, interval ("Every 30 minutes"), Active badge, scanning avatars, "6 sources", **View automation rule**.
-- **Removed by language filter** table: Video thumb, title, Source, Detected language, Language confidence bar, Removed (relative), Reason. Summary: removed today, acceptance rate, "Hindi + Urdu only" badge.
+- **Removed by language filter** table: Video thumb, title, Detected language, Language confidence bar, Removed (relative), Reason. Summary: removed today, acceptance rate, "Hindi + Urdu only" badge.
 - **Total uploads by connected account** grid: avatar, handle, uploaded today, lifetime total + **Open daily report →**.
 
 Mock → real: all numbers from `GET /api/dashboard/summary`; chart from `GET /api/dashboard/performance?days=7|30`;
@@ -66,22 +64,22 @@ activity from `GET /api/logs?limit=4`; rejected videos from `GET /api/videos?sta
 
 Mock → real: `GET /api/reports/daily?date=YYYY-MM-DD`, `GET /api/reports/daily.csv`.
 
-### Instagram Sources
-- Header: "684 / 7,000 connected", **Add accounts**.
-- Capacity card: meter, slots available, **Bulk add up to 30**.
-- Toolbar: search, **Filters**, "N selected", bulk **Pause / Assign account / Delete**.
-- Table: checkbox (all/one), identity (avatar+handle), Last checked, Videos found, Status toggle (Active/Paused), Check interval, Linked TikTok pill, ⋯ row menu. Mobile card variant.
-- **AddModal**: method toggle (By username / By profile link), textarea (≤30 entries, counter, over-limit validation), summary (ready count, workspace slots), Cancel / **Connect N accounts**.
-
-Real behaviour (official Graph API only): sources are Instagram Business/Creator accounts authorized via
-**Instagram OAuth**. The modal activates authorized accounts by username/link; unauthorized usernames are
-reported back with a **Connect with Instagram** OAuth button. Row ⋯ menu: Run now, Edit (interval preset /
-custom, approval mode, prompt template, linked TikTok accounts), Delete. Per-source pause/resume = toggle.
+### YouTube pipeline screens (added after the original design)
+- **Sign in** — the terms and privacy acceptance tick sits on the sign-in form; `/terms` and `/privacy` stay readable
+  when signed in (links at the bottom of the sidebar).
+- **Channels** (`/channels`) — monitored channels: thumbnail, handle, last upload, published and skipped counts, default
+  TikTok account, last check, active toggle. **Add channel** takes a URL or handle and shows a
+  confirmation card. Row menu: Check now, Open on YouTube, Remove.
+- **Review Queue** (`/review`) — pending videos on the left; the rendered video (autoplay), editable caption and
+  hashtags, destination account, and Approve / Edit caption / Reject with a reason. Keys: A, E, R, J/K, Space.
+- **Published** (`/published`) — date, channel, TikTok account, caption, mode (inbox/direct), link to the TikTok post.
+- **Skipped** (`/skipped`) — held videos with the reason, and **Process anyway**.
+- **Settings** — new tabs: Pipeline rules (global), Channel overrides, TikTok accounts, Change history.
 
 ### TikTok Accounts
 - Header: "N / 20 linked", **Connect account** (→ TikTok Login Kit OAuth).
 - Capacity card + meter.
-- Account cards: avatar, ⋯, handle, status badge (Active/Expiring/Expired), Posts today `x / cap` meter, linked sources, **Disconnect** or **Reconnect**.
+- Account cards: avatar, ⋯, handle, status badge (Active/Expiring/Expired), Posts today `x / cap` meter, lifetime uploads, **Disconnect** or **Reconnect**.
 - "Connect another account" dashed card.
 - **Unique parallel publishing**: routes (unique video → destination), "Duplicate guard on" badge, same-video protection note.
 - OAuth card with 3-step indicator.
@@ -91,11 +89,10 @@ Real: `GET /api/tiktok-accounts`, OAuth start/callback, `DELETE`, `POST …/reco
 
 ### Automation Rules
 - Header: global pause toggle ("Automations live"/"All paused"), primary action.
-- Rule card: WHEN (interval, active window, weekdays), IF (source is…, duration under 60 sec), LANGUAGE GATE on title + caption (allowed languages), THEN (prompt, post to), settings grid (Daily cap, Hourly cap, Random delay, Timezone).
-- Schedule summary: clock face, active window, next run, estimated posts/day, **Edit schedule**.
+- Rule card: WHEN (active window, weekdays), IF (duration under 60 sec), LANGUAGE GATE on title + caption (allowed languages), THEN (prompt, post to), settings grid (Daily cap, Hourly cap, Random delay, Timezone).
+- Schedule summary: active hours per day, active window, status, estimated posts/day.
 
-Real: the rule card is the workspace **publishing policy** (`GET/PUT /api/settings/policy`); per-source
-schedules (preset 15m / 1h / 6h / custom, pause/resume, Run now) are listed below it via `/api/sources`.
+Real: the rule card is the workspace **publishing policy** (`GET/PUT /api/settings/policy`).
 
 ### Prompt Studio
 - Header: **Version history**, **Save prompt**.
@@ -103,12 +100,12 @@ schedules (preset 15m / 1h / 6h / custom, pause/resume, Run now) are listed belo
 - Editor: name/description, enable toggle, tabs Title/Caption/Hashtags, **Insert variable** chips, textarea, footer (word count · model), **Test prompt**.
 - Live preview: ORIGINAL → REWRITTEN + hashtags.
 
-Variables: `{title} {caption} {tags} {source} {niche}` (aliases `{original_title} {original_caption} {original_tags}`).
+Variables: `{title} {caption} {tags} {niche}` (aliases `{original_title} {original_caption} {original_tags}`).
 Real: `/api/prompts` CRUD, `/api/prompts/{id}/versions`, `/api/prompts/{id}/test`, `/api/prompts/{id}/default`.
 
 ### Jobs Queue
-- Header **Process next**; toolbar: search + filters (status, page, account, date).
-- Table: thumb, source, original caption, rewritten caption, duration, target, status badge, time, ⋯. Row click → **JobDrawer**.
+- Header **Process next**; toolbar: search + filters (status, account, date).
+- Table: thumb, original caption, rewritten caption, duration, target, status badge, time, ⋯. Row click → **JobDrawer**.
 - JobDrawer: status badge, job #, video preview, before/after, process timeline, **Cancel job / Retry job**.
 
 Real: `/api/jobs` (filters + pagination), `/api/jobs/{id}`, `POST /api/jobs/{id}/approve|retry|cancel`,
@@ -135,7 +132,7 @@ Real: `GET /api/settings/integrations`, `POST /api/settings/integrations/{name}/
 `GET/POST/DELETE /api/users`, theme stored in localStorage.
 
 ### Onboarding (opened from Monthly usage)
-4 steps: Add source → Connect TikTok → Set AI prompt → Choose schedule. Each step shows real current
+3 steps: Connect TikTok → Set AI prompt → Choose schedule. Each step shows real current
 state and links to the matching page. **Finish setup** stores `onboarding_completed`.
 
 ## 3. Design tokens (from `index.css`)
@@ -160,23 +157,17 @@ state and links to the matching page. **Finish setup** stores `onboarding_comple
 ```
 users                (id, email UQ, password_hash, name, workspace_name, is_active, created_at)
 settings             (key PK, value JSONB, updated_at)          -- workspace policy, audit, notifications, onboarding
-instagram_sources    (id, ig_user_id UQ, username UQ, name, profile_picture_url, color,
-                      access_token_enc, token_expires_at, token_refreshed_at,
-                      is_active, refresh_interval_minutes, next_run_at, last_checked_at, last_run_status, last_error,
-                      approval_mode[auto|manual], prompt_template_id FK, videos_found, created_at, updated_at)
 tiktok_accounts      (id, open_id UQ, username, display_name, avatar_url, color,
                       access_token_enc, refresh_token_enc, token_expires_at, refresh_expires_at, scopes,
                       status[active|expiring|expired|revoked], daily_cap, default_privacy, last_error,
                       created_at, updated_at)
-source_tiktok_links  (source_id FK, tiktok_account_id FK)  PK(source_id, tiktok_account_id)
 prompt_templates     (id, name, description, niche, title_prompt, caption_prompt, hashtags_prompt,
                       is_default, is_enabled, created_at, updated_at)
 prompt_template_versions (id, template_id FK, version, snapshot JSONB, created_at)
-videos               (id, source_id FK, ig_media_id, permalink, media_url, thumbnail_url, posted_at,
+videos               (id, external_id, permalink, media_url, thumbnail_url, posted_at,
                       original_title, original_caption, original_tags JSONB, duration_sec, width, height,
                       local_path, storage_key, detected_language, language_confidence,
                       status[fetched|accepted|rejected], rejection_reason, created_at)
-                      UQ(source_id, ig_media_id)
 jobs                 (id, video_id FK, tiktok_account_id FK NULL, prompt_template_id FK NULL,
                       status[fetched|rewriting|awaiting_approval|ready|uploading|posted|monitoring|clean|violated|failed|cancelled],
                       approval_required, rewritten_title, rewritten_caption, rewritten_tags JSONB, privacy_level,
@@ -195,7 +186,6 @@ activity_logs        (id, created_at, level, service, message, request_id, job_i
 | Auth | `POST /auth/login`, `POST /auth/register` (first user / when enabled), `GET /auth/me` |
 | Dashboard | `GET /dashboard/summary`, `GET /dashboard/performance?days=`, `GET /dashboard/nav` |
 | Reports | `GET /reports/daily`, `GET /reports/daily.csv` |
-| Instagram | `GET /instagram/oauth/start`, `GET /instagram/oauth/callback` (public), `GET /sources`, `POST /sources/bulk`, `PATCH /sources/{id}`, `POST /sources/bulk-update`, `DELETE /sources/{id}`, `POST /sources/{id}/run`, `POST /runs` (all active) |
 | TikTok | `GET /tiktok/oauth/start`, `GET /tiktok/oauth/callback` (public), `GET /tiktok-accounts`, `PATCH /tiktok-accounts/{id}`, `DELETE /tiktok-accounts/{id}`, `GET /tiktok-accounts/{id}/health`, `GET /tiktok-accounts/routes-preview` |
 | Prompts | `GET/POST /prompts`, `GET/PUT/DELETE /prompts/{id}`, `POST /prompts/{id}/default`, `GET /prompts/{id}/versions`, `POST /prompts/{id}/versions/{v}/restore`, `POST /prompts/test` |
 | Jobs | `GET /jobs`, `GET /jobs/{id}`, `PATCH /jobs/{id}`, `POST /jobs/{id}/approve`, `POST /jobs/{id}/retry`, `POST /jobs/{id}/cancel`, `POST /jobs/process-next` |

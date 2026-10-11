@@ -1,6 +1,6 @@
 """Model → JSON shapes consumed by the React frontend."""
 
-from app.models import ActivityLog, InstagramSource, Job, TikTokAccount, Video, Violation
+from app.models import ActivityLog, CaptionStatus, Channel, Job, TikTokAccount, Video, Violation
 
 
 def initials(handle: str) -> str:
@@ -17,47 +17,20 @@ def tiktok_ref(account: TikTokAccount | None) -> dict | None:
     return {"id": account.id, "username": account.username, "color": account.color, "initials": initials(account.username), "status": account.status}
 
 
-def source_ref(source: InstagramSource | None) -> dict | None:
-    if not source:
-        return None
-    return {"id": source.id, "username": source.username, "color": source.color, "initials": initials(source.username)}
-
-
-def source(s: InstagramSource) -> dict:
-    return {
-        **source_ref(s),
-        "name": s.name,
-        "profile_picture_url": s.profile_picture_url,
-        "is_active": s.is_active,
-        "refresh_interval_minutes": s.refresh_interval_minutes,
-        "next_run_at": s.next_run_at,
-        "last_checked_at": s.last_checked_at,
-        "last_run_status": s.last_run_status,
-        "last_error": s.last_error,
-        "approval_mode": s.approval_mode,
-        "prompt_template_id": s.prompt_template_id,
-        "prompt_template_name": s.prompt_template.name if s.prompt_template else None,
-        "videos_found": s.videos_found,
-        "needs_reconnect": s.needs_reconnect,
-        "token_expires_at": s.token_expires_at,
-        "tiktok_accounts": [tiktok_ref(a) for a in s.tiktok_accounts],
-    }
-
-
-def tiktok_account(a: TikTokAccount, stats: dict | None = None) -> dict:
+def tiktok_account(a: TikTokAccount, stats: dict | None = None, default_cap: int = 7) -> dict:
     stats = stats or {}
     return {
         **tiktok_ref(a),
         "display_name": a.display_name,
         "avatar_url": a.avatar_url,
-        "daily_cap": a.daily_cap,
+        "daily_cap": a.daily_cap or default_cap,
+        "daily_cap_override": a.daily_cap,  # None = follows the uploads_per_tiktok_account_per_day rule
         "default_privacy": a.default_privacy,
         "token_expires_at": a.token_expires_at,
         "refresh_expires_at": a.refresh_expires_at,
         "last_error": a.last_error,
         "last_posted_at": a.last_posted_at,
         "created_at": a.created_at,
-        "sources": [source_ref(s) for s in a.sources],
         "posts_today": stats.get("posts_today", 0),
         "failed_today": stats.get("failed_today", 0),
         "lifetime_posts": stats.get("lifetime_posts", 0),
@@ -65,11 +38,42 @@ def tiktok_account(a: TikTokAccount, stats: dict | None = None) -> dict:
     }
 
 
+def channel_ref(c: Channel | None) -> dict | None:
+    if not c:
+        return None
+    return {"id": c.id, "display_name": c.display_name, "handle": c.handle, "thumbnail_url": c.thumbnail_url}
+
+
+def channel(c: Channel, stats: dict | None = None, overrides: int = 0) -> dict:
+    stats = stats or {}
+    return {
+        **channel_ref(c),
+        "youtube_channel_id": c.youtube_channel_id,
+        "url": f"https://www.youtube.com/channel/{c.youtube_channel_id}",
+        "active": c.active,
+        "default_tiktok_account": tiktok_ref(c.default_tiktok_account),
+        "pubsub_subscription_expires_at": c.pubsub_subscription_expires_at,
+        "last_checked_at": c.last_checked_at,
+        "last_upload_at": c.last_upload_at,
+        "last_error": c.last_error,
+        "created_at": c.created_at,
+        "videos_published": stats.get("published", 0),
+        "videos_detected": stats.get("detected", 0) + stats.get("skipped", 0),
+        "videos_skipped": stats.get("skipped", 0),
+        "override_count": overrides,
+    }
+
+
 def video(v: Video) -> dict:
     return {
         "id": v.id,
-        "ig_media_id": v.ig_media_id,
+        "youtube_video_id": v.youtube_video_id,
+        "channel": channel_ref(v.channel),
         "permalink": v.permalink,
+        "has_file": bool(v.rendered_file_path),
+        "files_deleted_at": v.files_deleted_at,
+        "skip_reason": v.skip_reason,
+        "forced": v.forced,
         "thumbnail_url": v.thumbnail_url,
         "posted_at": v.posted_at,
         "original_title": v.original_title,
@@ -81,7 +85,6 @@ def video(v: Video) -> dict:
         "status": v.status,
         "rejection_reason": v.rejection_reason,
         "created_at": v.created_at,
-        "source": source_ref(v.source),
     }
 
 
@@ -96,6 +99,11 @@ def job(j: Job, *, detail: bool = False) -> dict:
         "rewritten_title": j.rewritten_title,
         "rewritten_caption": j.rewritten_caption,
         "rewritten_tags": j.rewritten_tags or [],
+        "caption_status": j.caption_status,
+        "caption_fallback": j.caption_status == CaptionStatus.FALLBACK,
+        "publish_mode": j.publish_mode,
+        "reject_reason": j.reject_reason,
+        "tiktok_url": f"https://www.tiktok.com/@{j.tiktok_account.username}/video/{j.tiktok_post_id}" if j.tiktok_post_id and j.tiktok_account else None,
         "privacy_level": j.privacy_level,
         "tiktok_post_id": j.tiktok_post_id,
         "error": j.error,
@@ -105,7 +113,6 @@ def job(j: Job, *, detail: bool = False) -> dict:
         "monitor_until": j.monitor_until,
         "prompt_template_id": j.prompt_template_id,
         "video": video(j.video),
-        "source": source_ref(j.video.source),
         "tiktok_account": tiktok_ref(j.tiktok_account),
     }
     if detail:

@@ -52,7 +52,7 @@ services:
 
   worker:
     <<: *backend
-    command: celery -A app.workers.celery_app worker -Q default,fetch,uploads --loglevel=INFO --concurrency=${WORKER_CONCURRENCY:-4}
+    command: celery -A app.workers.celery_app worker -Q default,uploads --loglevel=INFO --concurrency=${WORKER_CONCURRENCY:-4}
     depends_on:
       backend:
         condition: service_healthy

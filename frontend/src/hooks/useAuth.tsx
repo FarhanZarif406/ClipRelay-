@@ -7,8 +7,8 @@ import type { User } from "@/api/types";
 type AuthState = {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (body: { email: string; password: string; name: string; workspace_name: string }) => Promise<void>;
+  login: (email: string, password: string, acceptTerms?: boolean) => Promise<void>;
+  register: (body: { email: string; password: string; name: string; workspace_name: string; accept_terms?: boolean }) => Promise<void>;
   logout: () => void;
 };
 
@@ -30,13 +30,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("cliprelay:unauthorized", onUnauthorized);
   }, [queryClient]);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const res = await auth.login(email, password);
+  const login = useCallback(async (email: string, password: string, acceptTerms = false) => {
+    const res = await auth.login(email, password, acceptTerms);
     setToken(res.access_token);
     setUser(res.user);
   }, []);
 
-  const register = useCallback(async (body: { email: string; password: string; name: string; workspace_name: string }) => {
+  const register = useCallback(async (body: { email: string; password: string; name: string; workspace_name: string; accept_terms?: boolean }) => {
     const res = await auth.register(body);
     setToken(res.access_token);
     setUser(res.user);

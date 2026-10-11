@@ -194,6 +194,17 @@ def init_direct_post(token: str, *, title: str, privacy_level: str, video_size: 
     return _check(request("POST", f"{API}/post/publish/video/init/", headers=_auth(token), json=body, retries=2))["data"]
 
 
+def init_inbox_upload(token: str, *, video_size: int) -> dict:
+    """Upload-to-inbox: the video lands in the creator's TikTok inbox and they finish the post in the app.
+
+    Needs the `video.upload` scope. This is the mode to launch with: before TikTok's audit is approved,
+    direct posts are forced private and the API gives no signal that it is happening.
+    """
+    chunk_size, count = chunk_plan(video_size)
+    body = {"source_info": {"source": "FILE_UPLOAD", "video_size": video_size, "chunk_size": chunk_size, "total_chunk_count": count}}
+    return _check(request("POST", f"{API}/post/publish/inbox/video/init/", headers=_auth(token), json=body, retries=2))["data"]
+
+
 def upload_file(upload_url: str, path: str) -> None:
     size = os.path.getsize(path)
     chunk_size, count = chunk_plan(size)

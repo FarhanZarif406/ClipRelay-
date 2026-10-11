@@ -6,18 +6,18 @@ from sqlalchemy import func, select
 
 from app.api.deps import DB, CurrentUser, OwnerUser
 from app.config import get_settings
-from app.models import InstagramSource, TikTokAccount, TikTokStatus, User
+from app.models import TikTokAccount, TikTokStatus, User
 from app.services import activity, credential_checks, credentials
 
 router = APIRouter(prefix="/credentials", tags=["credentials"])
 
 CARDS = {
-    "instagram": {"title": "Instagram app", "redirect": "/api/instagram/oauth/callback", "docs": "https://github.com/FarhanZarif406/ClipRelay-#2-create-the-meta-instagram-app"},
     "tiktok": {"title": "TikTok app", "redirect": "/api/tiktok/oauth/callback", "docs": "https://github.com/FarhanZarif406/ClipRelay-#3-create-the-tiktok-app"},
+    "youtube": {"title": "YouTube Data API (optional)", "docs": "https://console.cloud.google.com/apis/library/youtube.googleapis.com"},
     "smtp": {"title": "Email (SMTP)", "docs": "https://github.com/FarhanZarif406/ClipRelay-#email-alerts"},
 }
 # Changing these means tokens issued under the old app no longer belong to the configured app.
-APP_IDENTITY = {"instagram": ["instagram.app_id", "instagram.app_secret"], "tiktok": ["tiktok.client_key", "tiktok.client_secret"]}
+APP_IDENTITY = {"tiktok": ["tiktok.client_key", "tiktok.client_secret"]}
 
 
 class SaveIn(BaseModel):
@@ -42,12 +42,10 @@ def _check_group(group: str) -> None:
 
 def _scopes(group: str) -> str | None:
     s = get_settings()
-    return {"instagram": s.instagram_scopes, "tiktok": s.tiktok_scopes}.get(group)
+    return {"tiktok": s.tiktok_scopes}.get(group)
 
 
 def _connected(db, group: str) -> int:
-    if group == "instagram":
-        return db.scalar(select(func.count(InstagramSource.id)).where(InstagramSource.access_token_enc.is_not(None))) or 0
     if group == "tiktok":
         return db.scalar(select(func.count(TikTokAccount.id)).where(TikTokAccount.status != TikTokStatus.REVOKED)) or 0
     return 0
@@ -55,12 +53,7 @@ def _connected(db, group: str) -> int:
 
 def _mark_reconnect(db, group: str) -> int:
     count = 0
-    if group == "instagram":
-        for source in db.scalars(select(InstagramSource).where(InstagramSource.access_token_enc.is_not(None))):
-            source.needs_reconnect = True
-            source.last_error = "Reconnect required: the Instagram app credentials changed"
-            count += 1
-    elif group == "tiktok":
+    if group == "tiktok":
         for account in db.scalars(select(TikTokAccount).where(TikTokAccount.status != TikTokStatus.REVOKED)):
             account.status = TikTokStatus.EXPIRED
             account.last_error = "Reconnect required: the TikTok app credentials changed"

@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { credentials, settings, users } from "@/api/endpoints";
 import type { NotificationSettings } from "@/api/types";
 import { AIModels } from "@/components/AIModels";
 import { CredentialCard } from "@/components/CredentialCard";
+import { ChannelOverrides, GlobalRules, RuleHistory, TikTokSummary } from "@/components/RulesEditor";
 import { Icon } from "@/components/Icon";
 import { Field } from "@/components/Modal";
 import { useErrorToast, useToast } from "@/components/Toast";
@@ -12,7 +14,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { initialsOf } from "@/lib/format";
 
-const TABS = ["API keys", "AI models", "Notifications", "Team members", "Appearance"] as const;
+const TABS = ["Pipeline rules", "Channel overrides", "TikTok accounts", "Change history", "API keys", "AI models", "Notifications", "Team members", "Appearance"] as const;
 type Tab = (typeof TABS)[number];
 
 function TikTokAuditToggle() {
@@ -23,19 +25,19 @@ function TikTokAuditToggle() {
   return <div className="setting-inline"><div><strong>App audited</strong><span>Turn on once TikTok approves the app in the Content Posting audit. Until then posts are private (SELF_ONLY).</span></div><Toggle checked={!!policy?.tiktok_app_audited} onChange={() => policy && save.mutate(!policy.tiktok_app_audited)} label="App audited"/></div>;
 }
 
-/** Integrations that are configured on the server only (storage, FFmpeg) or elsewhere in Settings. */
-const CARD_KEYS = new Set(["instagram", "tiktok", "llm"]);
+/** Tools that live on the server: the downloader (yt-dlp), the editor (FFmpeg) and storage. */
+const CARD_KEYS = new Set(["tiktok", "llm"]);
 
-function OtherIntegrations({ isOwner }: { isOwner: boolean }) {
+export function OtherIntegrations({ isOwner }: { isOwner: boolean }) {
   const { data } = useQuery({ queryKey: ["settings", "integrations"], queryFn: settings.integrations });
   const [results, setResults] = useState<Record<string, { ok: boolean; message: string }>>({});
   const test = useMutation({ mutationFn: (key: string) => settings.testIntegration(key), onSuccess: (r, key) => setResults(x => ({ ...x, [key]: r })) });
-  return <Card><div className="card-title">Other integrations</div><div className="card-caption">Storage and FFmpeg are configured in the server’s <code>.env</code> file.</div>
-    {data?.filter(x => !CARD_KEYS.has(x.key)).map(x => { const r = results[x.key]; return <div className="api-row" key={x.key}><div><strong>{x.name}</strong><span>{x.masked}</span></div>{r ? <span className={`test-result ${r.ok ? "ok" : "fail"}`}>{r.message}</span> : <Badge tone={x.configured ? "success" : "warning"}>{x.configured ? (x.source === "app" ? "Set in app" : x.source === "env" ? "From .env" : "Configured") : "Needs setup"}</Badge>}{isOwner && <Button onClick={() => test.mutate(x.key)} disabled={test.isPending && test.variables === x.key}>{test.isPending && test.variables === x.key ? "Testing…" : "Test connection"}</Button>}</div>; })}
+  return <Card><div className="card-title">Downloader, editor and storage</div><div className="card-caption">yt-dlp downloads the videos and FFmpeg edits them. Both are installed with the app — no key is needed. “Test” runs a real download check and a real test edit.</div>
+    {data?.filter(x => !CARD_KEYS.has(x.key)).map(x => { const r = results[x.key]; return <div className="api-row" key={x.key}><div><strong>{x.name}</strong><span>{x.masked}</span></div>{r ? <span className={`test-result ${r.ok ? "ok" : "fail"}`}>{r.message}</span> : <Badge tone={x.configured ? "success" : "warning"}>{x.configured ? (x.source === "app" ? "Set in app" : x.key === "ytdlp" || x.key === "ffmpeg" ? "Installed" : x.source === "env" ? "From .env" : "Configured") : "Needs setup"}</Badge>}{isOwner && <Button onClick={() => test.mutate(x.key)} disabled={test.isPending && test.variables === x.key}>{test.isPending && test.variables === x.key ? "Testing…" : "Test"}</Button>}</div>; })}
   </Card>;
 }
 
-function ApiKeys() {
+export function ApiKeys() {
   const { user } = useAuth();
   const isOwner = user?.role === "owner";
   const { data } = useQuery({ queryKey: ["credentials"], queryFn: credentials.list });
@@ -103,9 +105,14 @@ function Team() {
 
 export default function Settings() {
   const { user } = useAuth();
-  const [tab, setTab] = useState<Tab>("API keys");
-  return <><PageHeader title="Settings" description="Manage integrations, notifications, team access, and appearance."/><div className="settings-layout"><div className="settings-nav">{TABS.map(x => <button className={tab === x ? "active" : ""} key={x} onClick={() => setTab(x)}>{x}</button>)}</div><div className="settings-content">
-    {tab === "API keys" && <><ApiKeys/><Appearance/></>}
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<Tab>(params.get("tab") === "keys" ? "API keys" : "Pipeline rules");
+  return <><PageHeader title="Settings" description="Pipeline rules, channel overrides, TikTok accounts, integrations and team access."/><div className="settings-layout"><div className="settings-nav">{TABS.map(x => <button className={tab === x ? "active" : ""} key={x} onClick={() => setTab(x)}>{x}</button>)}</div><div className="settings-content">
+    {tab === "Pipeline rules" && <GlobalRules/>}
+    {tab === "Channel overrides" && <ChannelOverrides/>}
+    {tab === "TikTok accounts" && <TikTokSummary/>}
+    {tab === "Change history" && <RuleHistory/>}
+    {tab === "API keys" && <ApiKeys/>}
     {tab === "AI models" && <AIModels isOwner={user?.role === "owner"}/>}
     {tab === "Notifications" && <Notifications/>}
     {tab === "Team members" && <Team/>}

@@ -24,6 +24,8 @@ class LocalStorage:
     def save(self, local_path: str, key: str) -> str:
         dest = self._path(key)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
+        if os.path.exists(dest):
+            os.remove(dest)
         shutil.move(local_path, dest)
         return key
 
@@ -36,6 +38,13 @@ class LocalStorage:
             os.remove(self._path(key))
         except FileNotFoundError:
             pass
+
+    def local_path(self, key: str) -> str | None:
+        path = self._path(key)
+        return path if os.path.exists(path) else None
+
+    def url(self, key: str) -> str | None:
+        return None
 
 
 class S3Storage:
@@ -69,6 +78,13 @@ class S3Storage:
 
     def delete(self, key: str) -> None:
         self.client.delete_object(Bucket=self.bucket, Key=key)
+
+    def local_path(self, key: str) -> str | None:
+        return None
+
+    def url(self, key: str) -> str | None:
+        """A short-lived link the browser can play the file from."""
+        return self.client.generate_presigned_url("get_object", Params={"Bucket": self.bucket, "Key": key}, ExpiresIn=3600)
 
     def test(self) -> None:
         self.client.head_bucket(Bucket=self.bucket)

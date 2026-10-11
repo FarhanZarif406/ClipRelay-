@@ -41,6 +41,14 @@ def start_credential_listener() -> None:
 
 
 @app.on_event("startup")
+def start_inline_worker() -> None:
+    if settings.inline_worker and settings.environment != "test":
+        from app.services import local_runner
+
+        local_runner.start()
+
+
+@app.on_event("startup")
 def seed_defaults() -> None:
     """Make sure a default prompt template exists so the pipeline can rewrite out of the box."""
     db = SessionLocal()

@@ -11,10 +11,14 @@ from app.integrations.http import ApiError
 from app.models import Job, JobStatus, TikTokAccount, TikTokStatus, Violation
 from app.schemas import TikTokUpdate
 from app.security import create_oauth_state, decrypt, verify_oauth_state
-from app.services import activity, credentials, serializers, stats, tokens
+from app.services import activity, credentials, rules, serializers, stats, tokens
 
 router = APIRouter(tags=["tiktok"])
 COLORS = ["blue", "orange", "pink", "violet", "green"]
+
+
+def _default_cap(db) -> int:
+    return int(rules.global_values(db)["uploads_per_tiktok_account_per_day"])
 
 
 @router.get("/tiktok/oauth/start")
@@ -74,7 +78,7 @@ def list_accounts(db: DB, _: CurrentUser):
     ).all()
     per = stats.account_stats(db)
     return {
-        "items": [serializers.tiktok_account(a, per.get(a.id)) for a in accounts],
+        "items": [serializers.tiktok_account(a, per.get(a.id), _default_cap(db)) for a in accounts],
         "capacity": get_settings().max_tiktok_accounts,
     }
 
@@ -86,8 +90,10 @@ def update_account(account_id: int, body: TikTokUpdate, db: DB, _: CurrentUser):
         raise HTTPException(404, "Account not found")
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(account, field, value)
+    if "daily_cap" in body.model_fields_set and body.daily_cap is None:
+        account.daily_cap = None  # back to the global rule
     db.commit()
-    return serializers.tiktok_account(account, stats.account_stats(db).get(account.id))
+    return serializers.tiktok_account(account, stats.account_stats(db).get(account.id), _default_cap(db))
 
 
 @router.delete("/tiktok-accounts/{account_id}", status_code=204)
@@ -100,10 +106,9 @@ def disconnect(account_id: int, db: DB, _: CurrentUser):
             tiktok.revoke(decrypt(account.access_token_enc) or "")
     except Exception:
         pass  # best effort — the account is removed locally regardless
-    # Keep the row (history, unique video guard) but drop credentials and links.
+    # Keep the row (history, unique video guard) but drop credentials.
     account.status = TikTokStatus.REVOKED
     account.access_token_enc = account.refresh_token_enc = None
-    account.sources = []
     # Jobs that hadn't started uploading are cancelled.
     for job in db.scalars(select(Job).where(Job.tiktok_account_id == account.id, Job.status.in_(JobStatus.PENDING - {JobStatus.UPLOADING}))):
         job.status = JobStatus.CANCELLED
@@ -123,7 +128,7 @@ def health(account_id: int, db: DB, _: CurrentUser):
     rate = (1 - len(violations) / published) * 100 if published else 100.0
     score = "healthy" if rate >= 98 and account.status == TikTokStatus.ACTIVE else "at_risk" if rate >= 90 else "poor"
     return {
-        "account": serializers.tiktok_account(account, stats.account_stats(db).get(account.id)),
+        "account": serializers.tiktok_account(account, stats.account_stats(db).get(account.id), _default_cap(db)),
         "published": published,
         "failed": failed,
         "violation_count": len(violations),
@@ -143,6 +148,6 @@ def routes_preview(db: DB, _: CurrentUser):
         .limit(6)
     ).all()
     return [
-        {"job_id": j.id, "title": j.rewritten_title or j.video.original_title, "source": serializers.source_ref(j.video.source), "video_id": j.video_id, "tiktok_account": serializers.tiktok_ref(j.tiktok_account), "status": j.status}
+        {"job_id": j.id, "title": j.rewritten_title or j.video.original_title, "video_id": j.video_id, "tiktok_account": serializers.tiktok_ref(j.tiktok_account), "status": j.status}
         for j in jobs
     ]

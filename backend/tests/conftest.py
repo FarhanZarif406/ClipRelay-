@@ -13,8 +13,6 @@ os.environ.update(
         "LLM_PROVIDER": "anthropic",
         "LLM_MODEL": "claude-test",
         "LLM_API_KEY": "sk-test",
-        "INSTAGRAM_APP_ID": "ig-app",
-        "INSTAGRAM_APP_SECRET": "ig-secret",
         "TIKTOK_CLIENT_KEY": "tt-key",
         "TIKTOK_CLIENT_SECRET": "tt-secret",
         "STORAGE_BACKEND": "local",
@@ -32,7 +30,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.integrations import http as http_module  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import InstagramSource, PromptTemplate, TikTokAccount, utcnow  # noqa: E402
+from app.models import PromptTemplate, TikTokAccount, utcnow  # noqa: E402
 from app.security import encrypt  # noqa: E402
 from app.services import credentials, dispatch, llm_registry, media  # noqa: E402
 from app.services.prompts import DEFAULT_TEMPLATE  # noqa: E402
@@ -94,40 +92,49 @@ def tiktok_account(db):
 
 
 @pytest.fixture
-def source(db, tiktok_account):
-    s = InstagramSource(
-        ig_user_id="1789",
-        username="slowtravel",
-        access_token_enc=encrypt("ig-access"),
-        token_expires_at=utcnow() + timedelta(days=50),
-        token_refreshed_at=utcnow(),
-        is_active=True,
-        refresh_interval_minutes=30,
+def channel(db, tiktok_account):
+    from app.models import Channel
+
+    row = Channel(
+        youtube_channel_id="UC" + "a" * 22, handle="@northbound", display_name="Northbound", active=True,
+        default_tiktok_account_id=tiktok_account.id,
+        monitoring_since=utcnow() - timedelta(days=1),
     )
-    s.tiktok_accounts = [tiktok_account]
-    db.add(s)
+    db.add(row)
     db.commit()
-    return s
+    return row
 
 
 @pytest.fixture
 def fake_media(monkeypatch):
-    """Replace download + ffprobe. Durations are looked up by media URL."""
-    durations: dict[str, float] = {}
+    """Replace the YouTube download and FFmpeg. `calls` records every render with its settings."""
+    from app.services import sources
 
-    def download(url: str, retries: int = 3) -> str:
+    calls: list[dict] = []
+
+    def make_file() -> str:
         fd, path = tempfile.mkstemp(suffix=".mp4")
         with os.fdopen(fd, "wb") as fh:
             fh.write(b"\x00" * 2048)
-        durations[path] = durations.get(url, 30.0)
         return path
 
-    def probe(path: str) -> media.ProbeResult:
-        return media.ProbeResult(durations[path], 1080, 1920)
+    class Adapter:
+        name = "fake"
 
-    monkeypatch.setattr(media, "download", download)
-    monkeypatch.setattr(media, "probe", probe)
-    return durations
+        def download(self, video):
+            if calls and calls[0].get("fail_download"):
+                calls[0]["fail_download"] -= 1
+                raise sources.SourceError("The video is private")
+            return make_file()
+
+    def render(src, *, speed, flip, keep_audio):
+        calls.append({"speed": speed, "flip": flip, "keep_audio": keep_audio})
+        return make_file()
+
+    monkeypatch.setattr(sources, "get_adapter", lambda: Adapter())
+    monkeypatch.setattr(media, "probe", lambda path: media.ProbeResult(30.0, 1080, 1920, True))
+    monkeypatch.setattr(media, "render", render)
+    return calls
 
 
 @pytest.fixture

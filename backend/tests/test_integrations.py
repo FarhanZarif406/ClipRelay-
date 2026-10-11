@@ -4,13 +4,12 @@ import httpx
 import pytest
 import respx
 
-from app.api.sources import parse_entry
-from app.integrations import http, instagram, tiktok
+from app.integrations import http, tiktok
 from app.integrations.http import AuthError, RateLimitError
 from app.models import TikTokStatus, utcnow
 from app.security import decrypt, encrypt
 from app.services import prompts, tokens
-from tests.helpers import TT, ig_video
+from tests.helpers import TT
 
 
 @respx.mock
@@ -30,37 +29,6 @@ def test_token_encryption_roundtrip():
     secret = "IGQVJ-very-secret"
     stored = encrypt(secret)
     assert stored != secret and decrypt(stored) == secret
-
-
-def test_media_item_title_and_tags():
-    item = instagram.MediaItem(**{**ig_video("1", caption="3 hidden beaches in Crete #Crete #travel\nmore text #crete"), "timestamp": None})
-    assert item.title == "3 hidden beaches in Crete"
-    assert item.tags == ["crete", "travel"]
-
-
-@respx.mock
-def test_instagram_auth_error_mapping():
-    respx.get(url__startswith="https://graph.instagram.com/v21.0/me").mock(
-        return_value=httpx.Response(400, json={"error": {"message": "Session expired", "type": "OAuthException", "code": 190}})
-    )
-    with pytest.raises(AuthError):
-        instagram.get_profile("bad")
-
-
-@respx.mock
-def test_instagram_oauth_exchange_gets_long_lived_token():
-    respx.post(instagram.TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": "short", "user_id": 1789}))
-    respx.get("https://graph.instagram.com/access_token").mock(return_value=httpx.Response(200, json={"access_token": "long", "expires_in": 5184000}))
-    result = instagram.exchange_code("code")
-    assert result.access_token == "long" and result.user_id == "1789"
-    assert result.expires_at > utcnow() + timedelta(days=59)
-
-
-def test_parse_entry():
-    assert parse_entry("@SlowTravel") == ("username", "slowtravel")
-    assert parse_entry("https://www.instagram.com/daily.nature/") == ("username", "daily.nature")
-    assert parse_entry("https://instagram.com/profile/123456") == ("id", "123456")
-    assert parse_entry("not a valid name!") is None
 
 
 def test_tiktok_chunk_plan():
@@ -103,16 +71,6 @@ def test_tiktok_refresh_failure_marks_expired(db, tiktok_account):
     with pytest.raises(AuthError):
         tokens.tiktok_token(db, tiktok_account)
     assert tiktok_account.status == TikTokStatus.EXPIRED
-
-
-@respx.mock
-def test_instagram_token_refresh_near_expiry(db, source):
-    source.token_expires_at = utcnow() + timedelta(days=3)
-    source.token_refreshed_at = utcnow() - timedelta(days=2)
-    db.commit()
-    respx.get("https://graph.instagram.com/refresh_access_token").mock(return_value=httpx.Response(200, json={"access_token": "fresh", "expires_in": 5184000}))
-    assert tokens.instagram_token(db, source) == "fresh"
-    assert source.token_expires_at > utcnow() + timedelta(days=50)
 
 
 def test_prompt_render_variables_and_aliases():

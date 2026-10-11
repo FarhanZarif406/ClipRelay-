@@ -33,10 +33,9 @@ class Spec:
 
 
 REGISTRY: dict[str, Spec] = {
-    "instagram.app_id": Spec("instagram_app_id", "instagram", "App ID", secret=False),
-    "instagram.app_secret": Spec("instagram_app_secret", "instagram", "App secret"),
     "tiktok.client_key": Spec("tiktok_client_key", "tiktok", "Client key", secret=False),
     "tiktok.client_secret": Spec("tiktok_client_secret", "tiktok", "Client secret"),
+    "youtube.api_key": Spec("youtube_api_key", "youtube", "YouTube Data API key"),
     "smtp.host": Spec("smtp_host", "smtp", "SMTP host", secret=False),
     "smtp.port": Spec("smtp_port", "smtp", "Port", secret=False),
     "smtp.security": Spec("smtp_security", "smtp", "Security (starttls / ssl / none)", secret=False),

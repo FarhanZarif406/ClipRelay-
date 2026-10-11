@@ -7,10 +7,16 @@ import { Spinner } from "@/components/ui";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { ThemeProvider } from "@/hooks/useTheme";
 import Login from "@/pages/Login";
+import { Privacy, Terms } from "@/pages/Legal";
 
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
+const Channels = lazy(() => import("@/pages/Channels"));
+const ReviewQueue = lazy(() => import("@/pages/ReviewQueue"));
+const Published = lazy(() => import("@/pages/Published"));
+const Skipped = lazy(() => import("@/pages/Skipped"));
+const Integrations = lazy(() => import("@/pages/Integrations"));
+const EditingRules = lazy(() => import("@/pages/EditingRules"));
 const DailyReport = lazy(() => import("@/pages/DailyReport"));
-const Sources = lazy(() => import("@/pages/Sources"));
 const TikTokAccounts = lazy(() => import("@/pages/TikTokAccounts"));
 const AutomationRules = lazy(() => import("@/pages/AutomationRules"));
 const PromptStudio = lazy(() => import("@/pages/PromptStudio"));
@@ -35,8 +41,10 @@ export default function App() {
   return <QueryClientProvider client={queryClient}><BrowserRouter><AuthProvider><ThemeProvider><ToastProvider>
     <Routes>
       <Route path="/login" element={<Login/>}/>
+      <Route path="/terms" element={<Terms/>}/>
+      <Route path="/privacy" element={<Privacy/>}/>
       <Route element={<RequireAuth><Layout/></RequireAuth>}>
-        {([["/", Dashboard], ["/report", DailyReport], ["/sources", Sources], ["/tiktok", TikTokAccounts], ["/rules", AutomationRules], ["/prompts", PromptStudio], ["/jobs", JobsQueue], ["/audit", ComplianceAudit], ["/logs", Logs], ["/settings", Settings]] as const).map(([path, Page]) =>
+        {([["/", Dashboard], ["/channels", Channels], ["/review", ReviewQueue], ["/published", Published], ["/skipped", Skipped], ["/editing", EditingRules], ["/integrations", Integrations], ["/report", DailyReport], ["/tiktok", TikTokAccounts], ["/rules", AutomationRules], ["/prompts", PromptStudio], ["/jobs", JobsQueue], ["/audit", ComplianceAudit], ["/logs", Logs], ["/settings", Settings]] as const).map(([path, Page]) =>
           <Route key={path} path={path} element={<Suspense fallback={<Spinner/>}><Page/></Suspense>}/>)}
       </Route>
       <Route path="*" element={<Navigate to="/" replace/>}/>

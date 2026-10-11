@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models import (
     ActivityLog,
-    InstagramSource,
+    Channel,
     Job,
     JobStatus,
     TikTokAccount,
@@ -60,8 +60,10 @@ def nav(db: Session) -> dict:
         "monthly_quota": get_settings().monthly_job_quota,
         "reset_in_days": (next_month - now).days + 1,
         "onboarding_completed": workspace_settings.get(db, "onboarding")["completed"],
-        "active_sources": _count(db, select(func.count(InstagramSource.id)).where(InstagramSource.is_active.is_(True))),
         "tiktok_accounts": _count(db, select(func.count(TikTokAccount.id))),
+        "review_jobs": _count(db, select(func.count(Job.id)).where(Job.status == JobStatus.AWAITING_APPROVAL)),
+        "skipped_videos": _count(db, select(func.count(Video.id)).where(Video.status == VideoStatus.SKIPPED)),
+        "channels": _count(db, select(func.count(Channel.id))),
     }
 
 
@@ -90,7 +92,7 @@ def summary(db: Session) -> dict:
     failed, failed_y = today_yesterday(failed_ts)
     removed, _ = today_yesterday(violation_ts)
     pending = _count(db, select(func.count(Job.id)).where(Job.status.in_(JobStatus.PENDING)))
-    processing = _count(db, select(func.count(Job.id)).where(Job.status.in_([JobStatus.REWRITING, JobStatus.UPLOADING])))
+    processing = _count(db, select(func.count(Job.id)).where(Job.status.in_(JobStatus.PROCESSING | {JobStatus.UPLOADING})))
 
     kpis = [
         {"key": "fetched", "label": "Videos fetched", "value": fetched, "delta": delta(fetched, fetched_y), "tone": "primary", "series": _daily_series(fetched_ts, today, 10)},
@@ -108,10 +110,6 @@ def summary(db: Session) -> dict:
         "removed": statuses[JobStatus.VIOLATED],
     }
 
-    active_sources = db.scalars(
-        select(InstagramSource).where(InstagramSource.is_active.is_(True)).order_by(InstagramSource.next_run_at.asc().nulls_first())
-    ).all()
-    next_source = active_sources[0] if active_sources else None
     policy = workspace_settings.get(db, "policy")
 
     accounts = db.scalars(select(TikTokAccount).order_by(TikTokAccount.id)).all()
@@ -122,9 +120,9 @@ def summary(db: Session) -> dict:
         if a.status in (TikTokStatus.EXPIRING, TikTokStatus.EXPIRED, TikTokStatus.REVOKED)
     ]
 
-    rejected = db.scalars(select(Video).where(Video.status == VideoStatus.REJECTED).order_by(Video.id.desc()).limit(5)).all()
+    rejected = db.scalars(select(Video).where(Video.status == VideoStatus.SKIPPED).order_by(Video.id.desc()).limit(5)).all()
     accepted_today = _count(db, select(func.count(Video.id)).where(Video.created_at >= today, Video.status == VideoStatus.ACCEPTED))
-    rejected_today = _count(db, select(func.count(Video.id)).where(Video.created_at >= today, Video.status == VideoStatus.REJECTED))
+    rejected_today = _count(db, select(func.count(Video.id)).where(Video.created_at >= today, Video.status == VideoStatus.SKIPPED))
 
     return {
         "kpis": kpis,
@@ -132,13 +130,7 @@ def summary(db: Session) -> dict:
         "attention": attention,
         "unacknowledged_violations": _count(db, select(func.count(Violation.id)).where(Violation.acknowledged.is_(False))),
         "recent_activity": [serializers.log(e) for e in db.scalars(select(ActivityLog).order_by(ActivityLog.id.desc()).limit(4))],
-        "next_run": {
-            "at": next_source.next_run_at if next_source else None,
-            "interval_minutes": next_source.refresh_interval_minutes if next_source else None,
-            "paused": policy["automations_paused"],
-            "active_sources": len(active_sources),
-            "sources": [serializers.source_ref(s) for s in active_sources[:3]],
-        },
+        "automations_paused": policy["automations_paused"],
         "rejections": {
             "items": [serializers.video(v) for v in rejected],
             "removed_today": rejected_today,
@@ -177,14 +169,13 @@ def daily_report(db: Session, day: datetime) -> dict:
     languages = Counter(
         db.scalars(select(Video.detected_language).where(Video.created_at >= start, Video.created_at < end, Video.status == VideoStatus.ACCEPTED))
     )
-    filtered = _count(db, select(func.count(Video.id)).where(Video.created_at >= start, Video.created_at < end, Video.status == VideoStatus.REJECTED))
+    filtered = _count(db, select(func.count(Video.id)).where(Video.created_at >= start, Video.created_at < end, Video.status == VideoStatus.SKIPPED))
     rows = []
     for a in accounts:
         stats = per_account.get(a.id, {})
         rows.append(
             {
                 **serializers.tiktok_ref(a),
-                "sources": len(a.sources),
                 "posts_today": stats.get("posts_today", 0),
                 "failed_today": stats.get("failed_today", 0),
                 "lifetime_posts": stats.get("lifetime_posts", 0),
