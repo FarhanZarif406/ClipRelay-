@@ -203,6 +203,7 @@ Channel overrides). Every change is recorded with who made it and when (Settings
 | `speed` | 1.08 | 1.0 to 1.5; video and audio are sped up together (`setpts` + `atempo`) |
 | `horizontal_flip` | on | `hflip` |
 | `keep_audio` | on | off removes the sound |
+| `shorts_only` | on | only YouTube Shorts are processed; a regular video is held as `not_a_short` |
 | `max_duration_seconds` / `min_duration_seconds` | 180 / 5 | outside this range a video is skipped |
 | `videos_per_channel_per_day` | 3 | further uploads are held as `skipped_channel_cap` |
 | `uploads_per_tiktok_account_per_day` | 7 | global only; an account can also have its own cap. Held as `skipped_account_cap` |
@@ -312,7 +313,7 @@ cd backend
 pytest -q
 ```
 
-The suite (103 tests) uses SQLite and mocks **YouTube, TikTok and the LLM** with `respx`, and stubs FFmpeg and downloads. It
+The suite (105 tests) uses SQLite and mocks **YouTube, TikTok and the LLM** with `respx`, and stubs FFmpeg and downloads. It
 covers:
 - auth
 - channel lookup, adding a channel, the uploads feed and the push webhook

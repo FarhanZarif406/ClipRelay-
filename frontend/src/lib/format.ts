@@ -82,6 +82,7 @@ export function initialsOf(name: string): string {
 }
 
 export const SKIP_REASON: Record<string, string> = {
+  not_a_short: "Not a Short (long video)",
   too_long: "Too long",
   too_short: "Too short",
   skipped_channel_cap: "Channel daily cap",

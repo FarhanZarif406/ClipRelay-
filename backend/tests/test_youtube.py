@@ -36,6 +36,7 @@ def details(monkeypatch):
     """Metadata for `youtube.video_details`, by video id (30 seconds unless set)."""
     known: dict[str, VideoMeta] = {}
     monkeypatch.setattr(youtube, "video_details", lambda video_id: known.get(video_id) or meta(video_id))
+    monkeypatch.setattr(youtube, "is_short", lambda video_id: not video_id.startswith("regular"))
     return known
 
 
@@ -143,6 +144,31 @@ def test_duration_checks_hold_the_video_with_a_reason(db, channel, details):
     rules.set_values(db, {"max_duration_seconds": 600}, channel=channel)  # a channel override applies to the next video
     details["long2"] = meta("long2", 181)
     assert detection.discover(db, channel, "long2").status == VideoStatus.ACCEPTED
+
+
+def test_only_shorts_are_processed(db, channel, details):
+    details["regular1"] = meta("regular1", 95)  # short enough, but a normal video, not a Short
+    video = detection.discover(db, channel, "regular1")
+    assert (video.status, video.skip_reason) == (VideoStatus.SKIPPED, SkipReason.NOT_SHORT) and db.scalar(select(Job)) is None
+    assert detection.discover(db, channel, "short1").status == VideoStatus.ACCEPTED
+    rules.set_values(db, {"shorts_only": False})  # switched off: duration alone decides
+    assert detection.discover(db, channel, "regular2").status == VideoStatus.ACCEPTED
+
+
+@respx.mock
+def test_is_short_reads_youtubes_own_answer(db, channel, details, monkeypatch):
+    monkeypatch.undo()
+    respx.get("https://www.youtube.com/shorts/s1").mock(return_value=httpx.Response(200, text="ok"))
+    respx.get("https://www.youtube.com/shorts/v1").mock(return_value=httpx.Response(303, headers={"location": "https://www.youtube.com/watch?v=v1"}))
+    respx.get("https://www.youtube.com/shorts/x1").mock(return_value=httpx.Response(302, headers={"location": "https://consent.youtube.com/m?continue=x"}))
+    assert youtube.is_short("s1") is True and youtube.is_short("v1") is False
+    with pytest.raises(youtube.YouTubeError):
+        youtube.is_short("x1")
+    # No answer from YouTube: nothing is stored, so the next poll or push tries the video again.
+    monkeypatch.setattr(youtube, "video_details", lambda video_id: meta(video_id))
+    with pytest.raises(youtube.YouTubeError):
+        detection.discover(db, channel, "x1")
+    assert db.scalar(select(Video)) is None
 
 
 def test_old_live_and_foreign_videos_are_ignored(db, channel, details):

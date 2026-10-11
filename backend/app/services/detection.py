@@ -48,9 +48,11 @@ def _language_reason(video: Video, policy: dict) -> str | None:
 
 
 def _check(db: Session, video: Video, channel: Channel, account: TikTokAccount | None) -> tuple[str, str] | None:
-    """The duration and cap checks, counted against the videos table inside the caller's transaction."""
+    """The Shorts, duration and cap checks, counted against the videos table inside the caller's transaction."""
     values = rules.effective(db, channel.id)
     duration = video.duration_sec or 0
+    if values["shorts_only"] and not youtube.is_short(video.youtube_video_id):
+        return SkipReason.NOT_SHORT, f"Not a YouTube Short — a regular video of {duration:.0f}s"
     if duration > values["max_duration_seconds"]:
         return SkipReason.TOO_LONG, f"Duration {duration:.0f}s is over the {values['max_duration_seconds']}s limit — not short-form"
     if duration < values["min_duration_seconds"]:
@@ -102,16 +104,20 @@ def discover(db: Session, channel: Channel, video_id: str, *, meta: youtube.Vide
     except IntegrityError:
         return None
     video.channel = channel
+    try:
+        failed = _check(db, video, channel, pipeline.pick_account(db, video))
+    except ApiError:
+        db.delete(video)  # YouTube gave no answer yet: forget the video so the next poll or push tries again
+        db.flush()
+        raise
     if meta.published_at and (channel.last_upload_at is None or meta.published_at > channel.last_upload_at):
         channel.last_upload_at = meta.published_at
     activity.record(db, "Detection", f"Video #{video.id} detected on {channel.display_name}: “{meta.title[:60]}” ({video_id})", event="video_detected", payload={"video_id": video.id})
 
-    account = pipeline.pick_account(db, video)
-    failed = _check(db, video, channel, account)
     if failed:
         return _skip(db, video, *failed)
     video.status = VideoStatus.ACCEPTED
-    pipeline.create_job(db, video, account)
+    pipeline.create_job(db, video, pipeline.pick_account(db, video))
     return video
 
 

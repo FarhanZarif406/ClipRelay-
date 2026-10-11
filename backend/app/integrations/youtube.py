@@ -265,6 +265,20 @@ def _video_from_ytdlp(video_id: str) -> VideoMeta:
     )
 
 
+def is_short(video_id: str) -> bool:
+    """Whether YouTube itself treats the video as a Short.
+
+    YouTube serves a Short at /shorts/<id>; for a regular video the same address redirects to /watch.
+    Anything else (a consent page, a block, an outage) is not an answer, so it raises and the caller retries later.
+    """
+    response = request("GET", f"https://www.youtube.com/shorts/{video_id}", headers=BROWSER_HEADERS, retries=2, follow_redirects=False)
+    if response.status_code == 200:
+        return True
+    if response.status_code in (301, 302, 303, 307, 308) and "/watch" in response.headers.get("location", ""):
+        return False
+    raise YouTubeError(f"Could not tell whether {video_id} is a Short (YouTube answered {response.status_code})", status=response.status_code)
+
+
 def video_details(video_id: str) -> VideoMeta:
     return _video_from_api(video_id) if api_key() else _video_from_ytdlp(video_id)
 

@@ -31,6 +31,7 @@ RULES: dict[str, Rule] = {
     "speed": Rule("float", 1.08, "Speed", "Video and audio are sped up together. 1.0 leaves the speed unchanged.", "Editing", 1.0, 1.5),
     "horizontal_flip": Rule("bool", True, "Horizontal flip", "Mirror the video left to right.", "Editing"),
     "keep_audio": Rule("bool", True, "Keep audio", "Keep the original audio track. Off removes the sound.", "Editing"),
+    "shorts_only": Rule("bool", True, "Shorts only", "On: only YouTube Shorts are processed; regular (long) videos are received and held as skipped.", "Detection"),
     "max_duration_seconds": Rule("int", 180, "Maximum duration (seconds)", "Longer uploads are skipped as not short-form.", "Detection", 1, 3600),
     "min_duration_seconds": Rule("int", 5, "Minimum duration (seconds)", "Shorter uploads are skipped.", "Detection", 0, 600),
     "videos_per_channel_per_day": Rule("int", 3, "Videos per channel per day", "Further uploads from the same channel are held as skipped.", "Detection", 1, 100),

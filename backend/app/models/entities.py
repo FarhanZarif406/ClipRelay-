@@ -36,6 +36,7 @@ class VideoStatus:
 
 
 class SkipReason:
+    NOT_SHORT = "not_a_short"
     TOO_LONG = "too_long"
     TOO_SHORT = "too_short"
     CHANNEL_CAP = "skipped_channel_cap"
