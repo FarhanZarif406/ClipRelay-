@@ -24,9 +24,14 @@ def record(
     job_id: int | None = None,
     payload: dict | None = None,
     request_id: str | None = None,
+    user_id: int | None = None,
 ) -> ActivityLog:
     """Write an activity-log row (shown in Logs + Recent activity) and push a live event."""
+    if user_id is None and job_id is not None:  # an event about a video belongs to that video's member
+        job = db.get(Job, job_id)
+        user_id = job.video.user_id if job and job.video else None
     entry = ActivityLog(
+        user_id=user_id,
         service=service,
         message=message,
         level=level,

@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
-from app.api.deps import DB, CurrentUser, OwnerUser
+from app.api.deps import DB, OwnerUser
 from app.config import get_settings
 from app.models import TikTokAccount, TikTokStatus, User
 from app.services import activity, credential_checks, credentials
@@ -110,7 +110,7 @@ def _card(db, group: str, user: User) -> dict:
 
 
 @router.get("")
-def list_cards(db: DB, user: CurrentUser):
+def list_cards(db: DB, user: OwnerUser):  # admin only: members never see the API keys section
     return [_card(db, group, user) for group in CARDS]
 
 

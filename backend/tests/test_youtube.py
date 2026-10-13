@@ -5,8 +5,9 @@ from datetime import timedelta
 import httpx
 import pytest
 import respx
-from sqlalchemy import select
+from sqlalchemy import func, select
 
+from tests.conftest import ME
 from app.integrations import youtube
 from app.integrations.youtube import VideoMeta
 from app.models import ActivityLog, Channel, Job, JobStatus, RuleChange, SkipReason, Video, VideoStatus, utcnow
@@ -95,19 +96,19 @@ def test_render_command_only_does_the_two_edits():
 # ---------------------------------------------------------------- rules
 
 def test_rules_inherit_override_and_audit(db, channel, client, auth):
-    assert rules.effective(db, channel.id)["speed"] == 1.08 and rules.effective(db)["cap_reset_timezone"] == "Asia/Karachi"
-    rules.set_values(db, {"speed": 1.2})
+    assert rules.effective(db, channel.id, user_id=1)["speed"] == 1.08 and rules.effective(db, user_id=1)["cap_reset_timezone"] == "Asia/Karachi"
+    rules.set_values(db, {"speed": 1.2}, user=ME)
     rules.set_values(db, {"speed": 1.4, "keep_audio": False}, channel=channel)
-    assert rules.effective(db)["speed"] == 1.2 and rules.effective(db, channel.id)["speed"] == 1.4
+    assert rules.effective(db, user_id=1)["speed"] == 1.2 and rules.effective(db, channel.id, user_id=1)["speed"] == 1.4
     rules.set_values(db, {"speed": None}, channel=channel)  # remove the override: inherit again
-    assert rules.effective(db, channel.id)["speed"] == 1.2 and rules.effective(db, channel.id)["keep_audio"] is False
+    assert rules.effective(db, channel.id, user_id=1)["speed"] == 1.2 and rules.effective(db, channel.id, user_id=1)["keep_audio"] is False
     changes = db.scalars(select(RuleChange).order_by(RuleChange.id)).all()
     assert [(c.key, c.old_value, c.new_value, c.channel_id) for c in changes] == [
         ("speed", 1.08, 1.2, None), ("speed", None, 1.4, channel.id), ("keep_audio", None, False, channel.id), ("speed", 1.4, None, channel.id),
     ]
     for bad in ({"speed": 2}, {"speed": "fast"}, {"hashtag_count": 16}, {"cap_reset_timezone": "Mars/Base"}, {"nope": 1}, {"min_duration_seconds": 500}):
         with pytest.raises(ValueError):
-            rules.set_values(db, bad)
+            rules.set_values(db, bad, user=ME)
     for global_only in ({"cap_reset_timezone": "UTC"}, {"approval_required": False}):  # one switch, not one per channel
         with pytest.raises(ValueError, match="only be set globally"):
             rules.set_values(db, global_only, channel=channel)
@@ -212,7 +213,7 @@ def test_old_live_and_foreign_videos_are_ignored(db, channel, details):
 
 
 def test_channel_cap_and_process_anyway(db, channel, details):
-    rules.set_values(db, {"videos_per_channel_per_day": 2})
+    rules.set_values(db, {"videos_per_channel_per_day": 2}, user=ME)
     statuses = [detection.discover(db, channel, v) for v in ("a", "b", "c")]
     assert [v.status for v in statuses] == [VideoStatus.ACCEPTED, VideoStatus.ACCEPTED, VideoStatus.SKIPPED]
     held = statuses[2]
@@ -225,7 +226,7 @@ def test_channel_cap_and_process_anyway(db, channel, details):
 
 def test_account_cap_counts_published_and_pending(db, channel, tiktok_account, details):
     tiktok_account.daily_cap = None
-    rules.set_values(db, {"uploads_per_tiktok_account_per_day": 2, "videos_per_channel_per_day": 10})
+    rules.set_values(db, {"uploads_per_tiktok_account_per_day": 2, "videos_per_channel_per_day": 10}, user=ME)
     first = detection.discover(db, channel, "a")
     db.scalar(select(Job).where(Job.video_id == first.id)).posted_at = utcnow()
     detection.discover(db, channel, "b")  # still on its way: counts as well
@@ -334,7 +335,7 @@ def test_video_file_needs_a_media_token(client, auth, db, tiktok_account):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as fh:
         fh.write(b"\x00" * 64)
-    video = Video(youtube_video_id="f", status=VideoStatus.ACCEPTED, rendered_file_path="videos/9.mp4")
+    video = Video(user_id=1, youtube_video_id="f", status=VideoStatus.ACCEPTED, rendered_file_path="videos/9.mp4")
     db.add(video)
     db.commit()
     token = client.get("/api/auth/media-token", headers=auth).json()["token"]
@@ -350,3 +351,19 @@ def test_terms_acceptance_is_recorded(client, auth, db):
     assert db.scalar(select(User)).terms_accepted_at is None
     r = client.post("/api/auth/login", json={"email": "alex@example.com", "password": "password123", "accept_terms": True})
     assert r.status_code == 200 and r.json()["user"]["terms_accepted_at"]
+
+
+def test_removing_a_channel_stops_its_unfinished_videos_and_frees_them(client, auth, db, channel, details):
+    waiting, posted = detection.discover(db, channel, "w1"), detection.discover(db, channel, "p1")
+    job_posted = db.scalar(select(Job).where(Job.video_id == posted.id))
+    job_posted.status, job_posted.posted_at = JobStatus.MONITORING, utcnow()
+    rules.set_values(db, {"speed": 1.3}, channel=channel)
+    db.commit()
+    old_id = channel.id
+    assert client.delete(f"/api/channels/{old_id}", headers=auth).status_code == 204
+    db.expire_all()
+    assert db.scalar(select(Job).where(Job.video_id == waiting.id)).status == JobStatus.CANCELLED
+    assert db.get(Job, job_posted.id).status == JobStatus.MONITORING  # already on TikTok: still watched
+    # The videos stay as history but belong to no channel, so a new channel that gets the same id does not inherit them.
+    assert [v.channel_id for v in db.scalars(select(Video))] == [None, None]
+    assert db.scalar(select(func.count()).select_from(rules.RuleSetting).where(rules.RuleSetting.channel_id == old_id)) == 0

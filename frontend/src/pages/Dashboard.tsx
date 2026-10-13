@@ -3,16 +3,30 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { dashboard } from "@/api/endpoints";
 import type { ActivityLog, Kpi, Summary } from "@/api/types";
+import { Menu } from "@/components/Menu";
 import { Icon, type IconName } from "@/components/Icon";
 import { Avatar, Badge, Button, Card, Empty, MiniBars, PageHeader, VideoThumb } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 import { duration, greeting, longAgo, relativeTime } from "@/lib/format";
+import { PODCASTS } from "@/lib/mode";
 
 function kpiMeta(k: Kpi) {
   if (k.meta) return k.meta;
   if (k.delta === null || k.delta === undefined) return "0%";
   return `${k.delta > 0 ? "+" : k.delta < 0 ? "−" : ""}${Math.abs(k.delta)}%`;
 }
+
+/** Where each KPI card's "⋯" menu leads. */
+const KPI_LINKS: Record<string, [string, string][]> = {
+  fetched: [["View channels", "/channels"], ["View skipped videos", "/skipped"]],
+  published: [["View published videos", "/published?status=published"], ["Open daily report", "/report"]],
+  pending: [["Open review queue", "/review"], ["View videos waiting to upload", "/published?status=waiting"]],
+  failed: [["View failed videos", "/published?status=failed"], ["Open logs", "/logs"]],
+  removed: [["Open compliance audit", "/audit"]],
+};
+
+/** Pages the Podcasts window does not have. */
+const HIDDEN_IN_PODCASTS = ["/audit", "/logs", "/channels?"];
 
 const EVENT_TITLES: Record<string, string> = {
   published: "Video published", rewritten: "Caption rewritten", video_skipped: "Video skipped", video_detected: "New upload detected", downloaded: "Video downloaded", rendered: "Video rendered", caption_fallback: "Caption fallback used", channel_added: "Channel added", job_failed: "Upload failed",
@@ -43,7 +57,7 @@ function PerformanceChart() {
   const line = points.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
   const labelEvery = Math.ceil(labels.length / 7);
   return <Card className="chart-card">
-    <div className="card-header"><div><div className="card-title">Publishing performance</div><div className="card-caption">Uploads across all TikTok accounts</div></div><div className="segmented"><button className={days === 7 ? "active" : ""} onClick={() => setDays(7)}>7 days</button><button className={days === 30 ? "active" : ""} onClick={() => setDays(30)}>30 days</button></div></div>
+    <div className="card-header"><div><div className="card-title">{PODCASTS ? "Clips published" : "Publishing performance"}</div><div className="card-caption">Uploads across all TikTok accounts</div></div><div className="segmented"><button className={days === 7 ? "active" : ""} onClick={() => setDays(7)}>7 days</button><button className={days === 30 ? "active" : ""} onClick={() => setDays(30)}>30 days</button></div></div>
     <div className="chart">
       <div className="y-labels">{[max, (max * 2) / 3, max / 3, 0].map(v => <span key={v}>{Math.round(v)}</span>)}</div>
       <div className="plot">
@@ -62,8 +76,8 @@ function JobStatusCard({ summary }: { summary: Summary }) {
   const a = pct(d.published), b = a + pct(d.pending), c = b + pct(d.failed);
   const background = total ? `conic-gradient(var(--success) 0 ${a}%,var(--primary) ${a}% ${b}%,var(--danger) ${b}% ${c}%,var(--warning) ${c}%)` : "var(--surface-3)";
   return <Card className="status-card">
-    <div className="card-header"><div><div className="card-title">Video status</div><div className="card-caption">Today’s distribution</div></div></div>
-    <div className="donut-wrap"><div className="donut" style={{ background }}><div><strong>{total}</strong><span>Total videos</span></div></div></div>
+    <div className="card-header"><div><div className="card-title">{PODCASTS ? "Clip status" : "Video status"}</div><div className="card-caption">Today’s distribution</div></div></div>
+    <div className="donut-wrap"><div className="donut" style={{ background }}><div><strong>{total}</strong><span>{PODCASTS ? "Total clips" : "Total videos"}</span></div></div></div>
     <div className="legend">{([["Published", d.published, "success"], ["Pending", d.pending, "primary"], ["Failed", d.failed, "danger"], ["Removed", d.removed, "warning"]] as const).map(([x, n, cl]) => <div key={x}><span><i className={cl}/>{x}</span><strong>{n}</strong></div>)}</div>
   </Card>;
 }
@@ -76,11 +90,11 @@ export default function Dashboard() {
   const firstName = (user?.name || "").split(" ")[0];
 
   return <>
-    <PageHeader title={`${greeting()}${firstName ? `, ${firstName}` : ""}`} description="Here’s what your content network is doing today."/>
+    <PageHeader title={`${greeting()}${firstName ? `, ${firstName}` : ""}`} description={PODCASTS ? "Podcasts workspace: long videos are cut into short clips and published to its own TikTok accounts." : "Here’s what your content network is doing today."}/>
     {summary && summary.attention.length > 0 && !dismissed && <div className="alert-banner"><div className="alert-icon"><Icon name="alert"/></div><div><strong>{summary.attention.length} TikTok token{summary.attention.length === 1 ? " needs" : "s need"} attention</strong><span>{summary.attention.map(a => a.status === "expiring" ? `@${a.username} expires ${relativeTime(a.refresh_expires_at)}` : `@${a.username} has expired`).join(" · ")}</span></div><button onClick={() => navigate("/tiktok")}>Review accounts <Icon name="arrow" size={15}/></button><button className="icon-button" onClick={() => setDismissed(true)}><Icon name="close" size={16}/></button></div>}
-    {summary && summary.unacknowledged_violations > 0 && <div className="violation-list"><div className="violation-alert"><div className="alert-icon"><Icon name="shield"/></div><div><strong>{summary.unacknowledged_violations} video{summary.unacknowledged_violations === 1 ? " was" : "s were"} flagged by TikTok</strong><span>Review the violations and confirm removal in the Compliance Audit.</span></div><Button variant="danger" onClick={() => navigate("/audit")}>Review</Button></div></div>}
+    {summary && !PODCASTS && summary.unacknowledged_violations > 0 && <div className="violation-list"><div className="violation-alert"><div className="alert-icon"><Icon name="shield"/></div><div><strong>{summary.unacknowledged_violations} video{summary.unacknowledged_violations === 1 ? " was" : "s were"} flagged by TikTok</strong><span>Review the violations and confirm removal in the Compliance Audit.</span></div><Button variant="danger" onClick={() => navigate("/audit")}>Review</Button></div></div>}
     <div className="kpi-grid">
-      {(summary?.kpis ?? []).map(k => <Card className="kpi" key={k.key}><div className="kpi-label">{k.label}<Icon name="more" size={16}/></div><div className="kpi-value">{k.value.toLocaleString()}</div><div className={`kpi-meta ${k.tone}`}><span>{kpiMeta(k)}</span> vs. yesterday <MiniBars series={k.series}/></div></Card>)}
+      {(summary?.kpis ?? []).map(k => <Card className="kpi" key={k.key}><div className="kpi-label">{k.label}<Menu items={(KPI_LINKS[k.key] ?? []).filter(([, to]) => !PODCASTS || !HIDDEN_IN_PODCASTS.some(p => to.startsWith(p))).map(([label, to]) => ({ label, icon: "arrow" as const, onSelect: () => navigate(to) }))} trigger={toggle => <button type="button" className="kpi-more" aria-label={`${k.label} options`} onClick={toggle}><Icon name="more" size={16}/></button>}/></div><div className="kpi-value">{k.value.toLocaleString()}</div><div className={`kpi-meta ${k.tone}`}><span>{kpiMeta(k)}</span> vs. yesterday <MiniBars series={k.series}/></div></Card>)}
     </div>
     <div className="analytics-grid">
       <PerformanceChart/>
@@ -88,7 +102,7 @@ export default function Dashboard() {
     </div>
     <div className="bottom-grid">
       <Card className="full-row">
-        <div className="card-header"><div><div className="card-title">Recent activity</div><div className="card-caption">Live updates from your automations</div></div><Button variant="ghost" onClick={() => navigate("/logs")}>View all <Icon name="arrow" size={14}/></Button></div>
+        <div className="card-header"><div><div className="card-title">Recent activity</div><div className="card-caption">Live updates from your automations</div></div>{!PODCASTS && <Button variant="ghost" onClick={() => navigate("/logs")}>View all <Icon name="arrow" size={14}/></Button>}</div>
         <div className="activity-list">
           {summary?.recent_activity.length === 0 && <Empty icon="clock" title="No activity yet">Events appear here as videos are processed and published.</Empty>}
           {summary?.recent_activity.map(entry => { const [icon, tone] = activityVisual(entry); return <div className="activity" key={entry.id}><div className={`activity-icon ${tone}`}><Icon name={icon} size={16}/></div><div><strong>{EVENT_TITLES[entry.event] ?? entry.service}</strong><span>{entry.message}</span></div><time>{relativeTime(entry.created_at)}</time></div>; })}
@@ -96,7 +110,7 @@ export default function Dashboard() {
       </Card>
     </div>
     {summary && <Card className="language-removals">
-      <div className="card-header"><div><div className="card-title">Skipped videos</div><div className="card-caption">Short-form means up to {summary.rejections.max_duration_seconds} seconds (or any YouTube Short). Longer videos are received and held as long-form; nothing is discarded.</div></div><div className="language-summary"><div><strong>{summary.rejections.removed_today}</strong><span>Skipped today</span></div><div><strong>{summary.rejections.acceptance_rate === null ? "—" : `${summary.rejections.acceptance_rate}%`}</strong><span>Acceptance rate</span></div><Badge tone="success">Up to {summary.rejections.max_duration_seconds}s</Badge><Button variant="ghost" onClick={() => navigate("/skipped")}>View all <Icon name="arrow" size={14}/></Button></div></div>
+      <div className="card-header"><div><div className="card-title">Skipped videos</div><div className="card-caption">{PODCASTS ? `A podcast is a video of at least ${summary.rejections.min_source_duration_seconds} seconds. Shorter uploads are received and held; nothing is discarded.` : `Short-form means up to ${summary.rejections.max_duration_seconds} seconds (or any YouTube Short). Longer videos are received and held as long-form; nothing is discarded.`}</div></div><div className="language-summary"><div><strong>{summary.rejections.removed_today}</strong><span>Skipped today</span></div><div><strong>{summary.rejections.acceptance_rate === null ? "—" : `${summary.rejections.acceptance_rate}%`}</strong><span>Acceptance rate</span></div><Badge tone="success">{PODCASTS ? `${summary.rejections.min_source_duration_seconds}s or longer` : `Up to ${summary.rejections.max_duration_seconds}s`}</Badge><Button variant="ghost" onClick={() => navigate("/skipped")}>View all <Icon name="arrow" size={14}/></Button></div></div>
       {summary.rejections.items.length === 0 && <Empty icon="check" title="Nothing skipped yet"/>}
       {summary.rejections.items.length > 0 && <div className="table-wrap"><table><thead><tr><th>Video</th><th>Channel</th><th>Duration</th><th>Skipped</th><th>Reason</th></tr></thead><tbody>
         {summary.rejections.items.map((video, index) => <tr key={video.id}><td><div className="channel-cell"><VideoThumb index={index + 1} image={video.thumbnail_url} size={12}/><strong>{video.original_title || video.youtube_video_id || `Video ${video.id}`}</strong></div></td><td>{video.channel?.display_name ?? "—"}</td><td>{duration(video.duration_sec)}</td><td>{longAgo(video.created_at)}</td><td style={{ whiteSpace: "normal" }}>{video.rejection_reason}</td></tr>)}

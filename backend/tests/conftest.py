@@ -79,6 +79,7 @@ def template(db):
 def tiktok_account(db):
     account = TikTokAccount(
         open_id="open-1",
+        user_id=1,  # the first registered user (the `auth` fixture)
         username="northbound",
         access_token_enc=encrypt("tt-access"),
         refresh_token_enc=encrypt("tt-refresh"),
@@ -96,7 +97,7 @@ def channel(db, tiktok_account):
     from app.models import Channel
 
     row = Channel(
-        youtube_channel_id="UC" + "a" * 22, handle="@northbound", display_name="Northbound", active=True,
+        youtube_channel_id="UC" + "a" * 22, user_id=1, handle="@northbound", display_name="Northbound", active=True,
         default_tiktok_account_id=tiktok_account.id,
         monitoring_since=utcnow() - timedelta(days=1),
     )
@@ -121,14 +122,14 @@ def fake_media(monkeypatch):
     class Adapter:
         name = "fake"
 
-        def download(self, video):
+        def download(self, video, on_progress=None):
             if calls and calls[0].get("fail_download"):
                 calls[0]["fail_download"] -= 1
                 raise sources.SourceError("The video is private")
             return make_file()
 
-    def render(src, *, speed, flip, keep_audio):
-        calls.append({"speed": speed, "flip": flip, "keep_audio": keep_audio})
+    def render(src, *, speed, flip, keep_audio, framing="original", on_progress=None):
+        calls.append({"speed": speed, "flip": flip, "keep_audio": keep_audio} | ({"framing": framing} if framing != "original" else {}))
         return make_file()
 
     monkeypatch.setattr(sources, "get_adapter", lambda: Adapter())
@@ -143,3 +144,13 @@ def member_auth(client, auth):
     assert r.status_code == 201, r.text
     token = client.post("/api/auth/login", json={"email": "sam@example.com", "password": "password123"}).json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+class _Member:
+    """Stands in for the first registered user where a test changes rules without going through the API."""
+
+    id = 1
+    email = "alex@example.com"
+
+
+ME = _Member()

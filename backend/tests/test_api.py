@@ -20,8 +20,8 @@ def test_dashboard_and_report_empty(client, auth):
 
 
 def test_dashboard_counts(client, auth, db, tiktok_account):
-    video = Video(youtube_video_id="1", status=VideoStatus.ACCEPTED)
-    rejected = Video(youtube_video_id="2", status=VideoStatus.SKIPPED, rejection_reason="Duration 70.0s is not under 60s")
+    video = Video(user_id=1, youtube_video_id="1", status=VideoStatus.ACCEPTED)
+    rejected = Video(user_id=1, youtube_video_id="2", status=VideoStatus.SKIPPED, rejection_reason="Duration 70.0s is not under 60s")
     db.add_all([video, rejected])
     db.flush()
     job = Job(video_id=video.id, tiktok_account_id=tiktok_account.id, status=JobStatus.VIOLATED, posted_at=utcnow())
@@ -52,7 +52,7 @@ def test_oauth_callback_rejects_bad_state(client):
 
 
 def test_tiktok_disconnect_cancels_pending(client, auth, db, tiktok_account):
-    video = Video(youtube_video_id="1", status=VideoStatus.ACCEPTED)
+    video = Video(user_id=1, youtube_video_id="1", status=VideoStatus.ACCEPTED)
     db.add(video)
     db.flush()
     job = Job(video_id=video.id, tiktok_account_id=tiktok_account.id, status=JobStatus.READY)
@@ -88,7 +88,7 @@ def test_prompt_studio_flow(client, auth):
 
 
 def test_job_approve_edit_cancel(client, auth, db, tiktok_account):
-    video = Video(youtube_video_id="1", status=VideoStatus.ACCEPTED, original_caption="Original")
+    video = Video(user_id=1, youtube_video_id="1", status=VideoStatus.ACCEPTED, original_caption="Original")
     db.add(video)
     db.flush()
     job = Job(video_id=video.id, tiktok_account_id=tiktok_account.id, status=JobStatus.AWAITING_APPROVAL, approval_required=True)
@@ -120,7 +120,7 @@ def test_settings_validation(client, auth):
 
 
 def test_audit_and_violation_ack(client, auth, db, tiktok_account):
-    video = Video(youtube_video_id="1", status=VideoStatus.ACCEPTED, original_title="Beach")
+    video = Video(user_id=1, youtube_video_id="1", status=VideoStatus.ACCEPTED, original_title="Beach")
     db.add(video)
     db.flush()
     job = Job(video_id=video.id, tiktok_account_id=tiktok_account.id, status=JobStatus.MONITORING, posted_at=utcnow() - timedelta(hours=7))
@@ -157,7 +157,7 @@ def test_instagram_is_gone(client, auth, db, tiktok_account):
     assert "default_interval_minutes" not in policy and "max_videos_per_run" not in policy
     assert "{source}" not in client.get("/api/prompts/meta", headers=auth).json()["variables"]
 
-    video = Video(youtube_video_id="1", status=VideoStatus.ACCEPTED, original_caption="Goa sunset")
+    video = Video(user_id=1, youtube_video_id="1", status=VideoStatus.ACCEPTED, original_caption="Goa sunset")
     db.add(video)
     db.flush()
     db.add(Job(video_id=video.id, tiktok_account_id=tiktok_account.id, status=JobStatus.READY, rewritten_title="Goa"))
@@ -169,3 +169,28 @@ def test_instagram_is_gone(client, auth, db, tiktok_account):
     assert "sources" not in account
     route = client.get("/api/tiktok-accounts/routes-preview", headers=auth).json()[0]
     assert route["title"] == "Goa" and "source" not in route
+
+
+def test_live_status_lists_every_stage(client, auth, db, tiktok_account):
+    def add(youtube_id, status, **fields):
+        video = Video(user_id=1, youtube_video_id=youtube_id, status=VideoStatus.ACCEPTED, original_title=f"Title {youtube_id}", **{k: v for k, v in fields.items() if k in ("source_file_path", "rendered_file_path")})
+        db.add(video)
+        db.flush()
+        job = Job(video_id=video.id, tiktok_account_id=tiktok_account.id, status=status, **{k: v for k, v in fields.items() if k in ("progress", "posted_at", "attempts", "error")})
+        db.add(job)
+        return job
+
+    add("a", JobStatus.FETCHED)
+    add("b", JobStatus.DOWNLOADING, progress=40)
+    add("c", JobStatus.RENDERING, progress=75, source_file_path="source/c.mp4")
+    add("d", JobStatus.READY, source_file_path="source/d.mp4", rendered_file_path="videos/d.mp4")
+    add("e", JobStatus.MONITORING, source_file_path="source/e.mp4", rendered_file_path="videos/e.mp4", posted_at=utcnow())
+    add("f", JobStatus.FAILED, error="Download failed after 3 attempts: The video is private")
+    db.commit()
+    status = client.get("/api/pipeline/status", headers=auth).json()
+    stages = {s["key"]: s for s in status["stages"]}
+    assert [s["key"] for s in status["stages"]] == ["waiting", "downloading", "editing", "caption", "review", "upload_wait", "uploading"]
+    assert stages["waiting"]["items"][0]["title"] == "Title a" and stages["downloading"]["items"][0]["progress"] == 40
+    assert stages["editing"]["items"][0]["progress"] == 75 and stages["upload_wait"]["total"] == 1 and stages["review"]["total"] == 0
+    assert status["today"] == {"total": 6, "downloaded": 3, "download_left": 2, "edited": 2, "edit_left": 1, "uploaded": 1, "upload_left": 1, "failed": 1}
+    assert client.get("/api/pipeline/status?mode=podcasts", headers=auth).json()["today"]["total"] == 0  # each workspace has its own

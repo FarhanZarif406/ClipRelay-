@@ -10,6 +10,7 @@ import { useErrorToast, useToast } from "@/components/Toast";
 import { Badge, Button, Card, Empty, PageHeader, Spinner, VideoThumb } from "@/components/ui";
 import { useDebounced } from "@/hooks/useDebounced";
 import { JOB_STATUS, dayTime } from "@/lib/format";
+import { PODCASTS } from "@/lib/mode";
 
 const PAGE_SIZE = 25;
 const STATUS_OPTIONS = [
@@ -55,7 +56,7 @@ export default function Published() {
   const total = list.data?.total ?? 0;
   const noAccounts = accounts.data && accounts.data.items.length === 0;
 
-  return <><PageHeader title="Published" description="Everything past the review step: published, waiting to go out, and failed."><Badge tone="neutral">{total} videos</Badge></PageHeader>
+  return <><PageHeader title="Published" description="Everything past the review step: published, waiting to go out, and failed."><Badge tone="neutral">{total} {PODCASTS ? "clips" : "videos"}</Badge></PageHeader>
     {noAccounts && <p className="note-row">No TikTok account is connected yet. Approved and automatic videos wait here as “Waiting for account” and are sent as soon as one is connected in TikTok Accounts.</p>}
     <div className="toolbar"><div className="search-field"><Icon name="search" size={16}/><input placeholder="Search videos…" value={search} onChange={e => setSearch(e.target.value)}/></div>
       <FilterSelect value={status} onChange={setStatus} options={STATUS_OPTIONS}/>

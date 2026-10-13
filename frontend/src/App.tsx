@@ -6,6 +6,7 @@ import { ToastProvider } from "@/components/Toast";
 import { Spinner } from "@/components/ui";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { ThemeProvider } from "@/hooks/useTheme";
+import { BASENAME, PODCASTS } from "@/lib/mode";
 import Login from "@/pages/Login";
 import { Privacy, Terms } from "@/pages/Legal";
 
@@ -16,6 +17,8 @@ const Published = lazy(() => import("@/pages/Published"));
 const Skipped = lazy(() => import("@/pages/Skipped"));
 const Integrations = lazy(() => import("@/pages/Integrations"));
 const EditingRules = lazy(() => import("@/pages/EditingRules"));
+const LiveStatus = lazy(() => import("@/pages/LiveStatus"));
+const ClipRules = lazy(() => import("@/pages/ClipRules"));
 const DailyReport = lazy(() => import("@/pages/DailyReport"));
 const TikTokAccounts = lazy(() => import("@/pages/TikTokAccounts"));
 const PromptStudio = lazy(() => import("@/pages/PromptStudio"));
@@ -35,14 +38,19 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+type Pages = readonly (readonly [string, React.ComponentType])[];
+const SHORTS_PAGES: Pages = [["/", Dashboard], ["/status", LiveStatus], ["/channels", Channels], ["/review", ReviewQueue], ["/published", Published], ["/skipped", Skipped], ["/editing", EditingRules], ["/integrations", Integrations], ["/report", DailyReport], ["/tiktok", TikTokAccounts], ["/prompts", PromptStudio], ["/audit", ComplianceAudit], ["/logs", Logs], ["/settings", Settings]];
+// The Podcasts window: the same screens, showing the Podcasts workspace's own channels, accounts, rules and reports.
+const PODCAST_PAGES: Pages = [["/", Dashboard], ["/status", LiveStatus], ["/channels", Channels], ["/review", ReviewQueue], ["/published", Published], ["/skipped", Skipped], ["/rules", ClipRules], ["/tiktok", TikTokAccounts], ["/report", DailyReport]];
+
 export default function App() {
-  return <QueryClientProvider client={queryClient}><BrowserRouter><AuthProvider><ThemeProvider><ToastProvider>
+  return <QueryClientProvider client={queryClient}><BrowserRouter basename={BASENAME}><AuthProvider><ThemeProvider><ToastProvider>
     <Routes>
       <Route path="/login" element={<Login/>}/>
       <Route path="/terms" element={<Terms/>}/>
       <Route path="/privacy" element={<Privacy/>}/>
       <Route element={<RequireAuth><Layout/></RequireAuth>}>
-        {([["/", Dashboard], ["/channels", Channels], ["/review", ReviewQueue], ["/published", Published], ["/skipped", Skipped], ["/editing", EditingRules], ["/integrations", Integrations], ["/report", DailyReport], ["/tiktok", TikTokAccounts], ["/prompts", PromptStudio], ["/audit", ComplianceAudit], ["/logs", Logs], ["/settings", Settings]] as const).map(([path, Page]) =>
+        {(PODCASTS ? PODCAST_PAGES : SHORTS_PAGES).map(([path, Page]) =>
           <Route key={path} path={path} element={<Suspense fallback={<Spinner/>}><Page/></Suspense>}/>)}
       </Route>
       <Route path="*" element={<Navigate to="/" replace/>}/>

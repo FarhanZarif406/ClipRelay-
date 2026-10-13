@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, select
 
 from app.api.deps import DB, CurrentUser
-from app.models import Job, JobStatus, Violation, utcnow
+from app.models import Job, JobStatus, Video, Violation, utcnow
 from app.services import activity, serializers, workspace_settings
 
 router = APIRouter(tags=["compliance"])
@@ -17,14 +17,15 @@ DISPLAY = {
 
 
 @router.get("/audit")
-def audit(db: DB, _: CurrentUser, limit: int = Query(30, ge=1, le=200)):
+def audit(db: DB, user: CurrentUser, limit: int = Query(30, ge=1, le=200)):
     now = utcnow()
+    mine = Job.video_id.in_(select(Video.id).where(Video.user_id == user.id))
     config = workspace_settings.get(db, "audit")
     hours = sorted(config["check_hours"]) or [24]
     window = hours[-1]
     jobs = db.scalars(
         select(Job)
-        .where(Job.status.in_([JobStatus.MONITORING, JobStatus.CLEAN, JobStatus.VIOLATED]))
+        .where(Job.status.in_([JobStatus.MONITORING, JobStatus.CLEAN, JobStatus.VIOLATED]), mine)
         .where(Job.posted_at >= now - timedelta(hours=window * 3))
         .order_by(Job.posted_at.desc())
         .limit(limit)
@@ -49,8 +50,8 @@ def audit(db: DB, _: CurrentUser, limit: int = Query(30, ge=1, le=200)):
             }
         )
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    published = db.scalar(select(func.count(Job.id)).where(Job.posted_at >= month_start)) or 0
-    violations = db.scalar(select(func.count(Violation.id)).where(Violation.detected_at >= month_start)) or 0
+    published = db.scalar(select(func.count(Job.id)).where(Job.posted_at >= month_start, mine)) or 0
+    violations = db.scalar(select(func.count(Violation.id)).where(Violation.detected_at >= month_start, Violation.job_id.in_(select(Job.id).where(mine)))) or 0
     return {
         "items": items,
         "settings": config,
@@ -60,8 +61,8 @@ def audit(db: DB, _: CurrentUser, limit: int = Query(30, ge=1, le=200)):
 
 
 @router.get("/violations")
-def list_violations(db: DB, _: CurrentUser, unacknowledged: bool = False, limit: int = Query(50, ge=1, le=500)):
-    stmt = select(Violation)
+def list_violations(db: DB, user: CurrentUser, unacknowledged: bool = False, limit: int = Query(50, ge=1, le=500)):
+    stmt = select(Violation).where(Violation.job_id.in_(select(Job.id).join(Video, Job.video_id == Video.id).where(Video.user_id == user.id)))
     if unacknowledged:
         stmt = stmt.where(Violation.acknowledged.is_(False))
     return [serializers.violation(v) for v in db.scalars(stmt.order_by(Violation.id.desc()).limit(limit))]
@@ -70,7 +71,7 @@ def list_violations(db: DB, _: CurrentUser, unacknowledged: bool = False, limit:
 @router.post("/violations/{violation_id}/ack")
 def acknowledge(violation_id: int, db: DB, user: CurrentUser):
     violation = db.get(Violation, violation_id)
-    if not violation:
+    if not violation or not violation.job or violation.job.video.user_id != user.id:
         raise HTTPException(404, "Violation not found")
     violation.acknowledged = True
     if violation.removal_status == "manual_required":

@@ -103,6 +103,29 @@ an accepted condition, not a solved problem. The downloader sits behind an adapt
 
 ---
 
+## Podcasts workspace
+
+**For Podcasts** in the sidebar opens a second workspace in its own window (`/podcasts`). It turns long videos into
+short clips and is kept apart from Shorts: it has its own channels, its own TikTok accounts, its own rules (**Clip
+Rules**), its own review queue, and its own dashboard and daily report. A channel or a TikTok account belongs to one
+workspace only. API keys (TikTok app, AI model) are shared and set once on the Integrations page.
+
+How a podcast becomes clips:
+
+1. A new upload on a podcast channel is detected the same way as a short (push or polling). Uploads shorter than
+   *Shortest podcast* (300 s) are held as skipped.
+2. The video's subtitles are read and the AI model picks the most engaging moments (3 by default, 30–60 s each).
+   Without subtitles or a working AI model, the clips are spread evenly across the video instead.
+3. Only the chosen sections are downloaded — the pieces of the stream that cover each clip — so an hour-long video is
+   never downloaded whole. If a video has no such stream, the whole video is downloaded once and the clips are cut
+   from it.
+4. Each clip is reframed for a vertical screen (*Frame*: `crop`, `blur` or `original`), gets its own caption, and then
+   travels the normal pipeline: review queue, approval, upload to a Podcasts TikTok account.
+
+Each clip is one TikTok post, so three clips from one podcast count as three uploads against the daily caps.
+
+---
+
 ## 3. Create the TikTok app
 
 1. Go to <https://developers.tiktok.com> → **Manage apps → Connect an app** (you may need to create an organization first).
@@ -309,7 +332,7 @@ cd backend
 pytest -q
 ```
 
-The suite (107 tests) uses SQLite and mocks **YouTube, TikTok and the LLM** with `respx`, and stubs FFmpeg and downloads. It
+The suite (115 tests) uses SQLite and mocks **YouTube, TikTok and the LLM** with `respx`, and stubs FFmpeg and downloads. It
 covers:
 - auth
 - channel lookup, adding a channel, the uploads feed and the push webhook

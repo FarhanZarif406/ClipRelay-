@@ -53,6 +53,7 @@ export const JOB_STATUS: Record<JobStatus, { label: string; tone: Tone }> = {
   violated: { label: "Violated", tone: "danger" },
   failed: { label: "Failed", tone: "danger" },
   cancelled: { label: "Cancelled", tone: "neutral" },
+  clipped: { label: "Clips made", tone: "success" },
 };
 
 export const ACCOUNT_STATUS: Record<string, { label: string; tone: Tone }> = {
@@ -74,7 +75,16 @@ export function initialsOf(name: string): string {
 
 export const SKIP_REASON: Record<string, string> = {
   "long-form": "Long-form",
+  not_a_podcast: "Not a podcast (too short)",
   too_short: "Too short",
   skipped_channel_cap: "Channel daily cap",
   skipped_account_cap: "TikTok account daily cap",
 };
+
+/** 75 → "01:15", 3725 → "1:02:05". */
+export function timecode(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${mm}:${ss}` : `${mm}:${ss}`;
+}

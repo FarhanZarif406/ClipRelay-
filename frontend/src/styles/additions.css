@@ -218,3 +218,39 @@ select.inline-input option, .field select option { background: var(--surface-2);
 .narrow-page > .card { padding: 20px; }
 .cell-sub { font-size: 9px; color: var(--muted); margin-top: 3px; white-space: normal; max-width: 200px; line-height: 1.4; }
 a.button { text-decoration: none; display: inline-flex; align-items: center; }
+.kpi-more { border: 0; background: transparent; color: inherit; padding: 2px; border-radius: 6px; cursor: pointer; display: grid; place-items: center; }
+.kpi-more:hover { background: var(--surface-3); color: var(--text); }
+
+/* The menu entry that opens the other workspace in its own window */
+.sidebar nav button.nav-window { margin-top: 10px; border-top: 1px solid var(--border); border-radius: 0 0 10px 10px; padding-top: 14px; color: var(--primary); }
+.sidebar nav button.nav-window span { flex: 1; text-align: left; }
+
+/* Live Status */
+.status-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.status-tile { padding: 14px 16px; }
+.status-tile > span { font-size: 10px; color: var(--muted); display: block; }
+.status-tile > strong { font-size: 22px; display: block; margin: 6px 0 8px; }
+.status-tile > strong small { font-size: 12px; color: var(--muted); font-weight: 500; }
+.status-tile > strong.bad { color: var(--danger); }
+.status-tile > small { font-size: 9px; color: var(--muted); display: block; margin-top: 7px; }
+.status-bar { height: 4px; border-radius: 4px; background: var(--border); overflow: hidden; }
+.status-bar i { display: block; height: 100%; border-radius: 4px; background: var(--primary); transition: width .6s ease; }
+.status-bar i.success { background: var(--success); }
+.status-stages { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.status-stage { padding: 14px 16px; }
+.status-stage-head { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
+.status-stage-head .card-title { flex: 1; }
+.status-stage-icon { width: 26px; height: 26px; border-radius: 8px; background: var(--surface-3); display: grid; place-items: center; color: var(--primary); }
+.status-row { display: flex; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--border); }
+.status-row-main { flex: 1; min-width: 0; }
+.status-row-main strong, .status-row-main span { display: block; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-row-main span { color: var(--muted); font-size: 9px; margin-top: 2px; }
+.status-row-main .status-bar { margin-top: 7px; }
+.status-row-main .status-note { white-space: normal; margin-top: 5px; }
+.status-row-main .status-note.warn { color: var(--warning, #d39b2a); }
+.status-row-side { text-align: right; flex: none; }
+.status-row-side strong { display: block; font-size: 12px; }
+.status-row-side span { font-size: 9px; color: var(--muted); }
+.status-empty { font-size: 10px; color: var(--muted); padding: 10px 0 4px; border-top: 1px solid var(--border); }
+.link-button { border: 0; background: none; padding: 0; color: var(--primary); font-size: inherit; cursor: pointer; }
+@media (max-width: 1000px) { .status-stages { grid-template-columns: 1fr; } .status-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -1,7 +1,7 @@
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -43,3 +43,6 @@ def owner_user(user: CurrentUser) -> User:
 
 
 OwnerUser = Annotated[User, Depends(owner_user)]
+
+# The Podcasts window adds ?mode=podcasts to every request; without it a request is about Shorts.
+Workspace = Annotated[str, Query(alias="mode", pattern="^(shorts|podcasts)$")]

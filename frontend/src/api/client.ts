@@ -1,3 +1,5 @@
+import { PODCASTS } from "@/lib/mode";
+
 const TOKEN_KEY = "cliprelay.token";
 const BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 
@@ -28,6 +30,7 @@ type Query = Record<string, string | number | boolean | null | undefined>;
 
 export function apiUrl(path: string, query?: Query) {
   const params = new URLSearchParams();
+  if (PODCASTS) params.set("mode", "podcasts");  // every request from the Podcasts window is about that workspace
   Object.entries(query ?? {}).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== "") params.set(k, String(v));
   });

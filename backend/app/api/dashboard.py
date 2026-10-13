@@ -5,35 +5,42 @@ from datetime import date
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import DB, CurrentUser
+from app.api.deps import DB, CurrentUser, Workspace
+from app.models import Mode
 from app.services import stats
 
 router = APIRouter(tags=["dashboard"])
 
 
 @router.get("/dashboard/summary")
-def summary(db: DB, _: CurrentUser):
-    return stats.summary(db)
+def summary(db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
+    return stats.summary(db, mode, user.id)
 
 
 @router.get("/dashboard/performance")
-def performance(db: DB, _: CurrentUser, days: int = Query(7, ge=1, le=90)):
-    return stats.performance(db, days)
+def performance(db: DB, user: CurrentUser, days: int = Query(7, ge=1, le=90), mode: Workspace = Mode.SHORTS):
+    return stats.performance(db, days, mode, user.id)
 
 
 @router.get("/dashboard/nav")
-def nav(db: DB, _: CurrentUser):
-    return stats.nav(db)
+def nav(db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
+    return stats.nav(db, mode, user.id)
+
+
+@router.get("/pipeline/status")
+def pipeline_status(db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
+    """Live Status: what is waiting, downloading, being edited and waiting to upload right now."""
+    return stats.pipeline_status(db, mode, user.id)
 
 
 @router.get("/reports/daily")
-def daily(db: DB, _: CurrentUser, day: date | None = None):
-    return stats.daily_report(db, day)
+def daily(db: DB, user: CurrentUser, day: date | None = None, mode: Workspace = Mode.SHORTS):
+    return stats.daily_report(db, day, mode, user.id)
 
 
 @router.get("/reports/daily.csv")
-def daily_csv(db: DB, _: CurrentUser, day: date | None = None):
-    report = stats.daily_report(db, day)
+def daily_csv(db: DB, user: CurrentUser, day: date | None = None, mode: Workspace = Mode.SHORTS):
+    report = stats.daily_report(db, day, mode, user.id)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["date", "account", "status", "uploaded_today", "share_pct", "failed_today", "total_uploaded"])

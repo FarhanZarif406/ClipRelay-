@@ -5,6 +5,7 @@ import httpx
 import respx
 from sqlalchemy import select
 
+from tests.conftest import ME
 from app.models import ActivityLog, CaptionStatus, Job, JobStatus, Video, VideoStatus, Violation, utcnow
 from app.services import media, pipeline, rules
 from app.services.storage import get_storage
@@ -19,7 +20,7 @@ def _make_job(db, tiktok_account, *, status=JobStatus.FETCHED, approval=False, y
         with open(path, "wb") as fh:
             fh.write(b"\x00" * 4096)
     video = Video(
-        youtube_video_id=youtube_video_id, original_title="Hidden beaches in Crete", original_caption="We found this hidden beach #crete",
+        user_id=1, youtube_video_id=youtube_video_id, original_title="Hidden beaches in Crete", original_caption="We found this hidden beach #crete",
         original_tags=["crete"], duration_sec=42, status=VideoStatus.ACCEPTED, rendered_file_path=key if rendered else None,
     )
     db.add(video)
@@ -34,7 +35,7 @@ def _make_job(db, tiktok_account, *, status=JobStatus.FETCHED, approval=False, y
 @respx.mock
 def test_rewrite_uses_template(db, tiktok_account, template):
     job = _make_job(db, tiktok_account, status=JobStatus.REWRITING, caption="pending")
-    rules.set_values(db, {"approval_required": False, "hashtag_count": 2})
+    rules.set_values(db, {"approval_required": False, "hashtag_count": 2}, user=ME)
     respx.post(ANTHROPIC).mock(side_effect=[claude("Crete’s best-kept secret"), claude("40 minutes off the trail, worth it."), claude("#crete #hiddengems #greece")])
     assert pipeline.rewrite_job(db, job.id) == JobStatus.READY
     assert job.rewritten_title == "Crete’s best-kept secret" and job.caption_status == CaptionStatus.DONE
@@ -64,7 +65,7 @@ def test_caption_falls_back_when_the_model_fails(db, tiktok_account, template):
 
 def test_process_downloads_renders_and_waits_for_the_caption(db, tiktok_account, fake_media):
     job = _make_job(db, tiktok_account, status=JobStatus.FETCHED, caption="pending", rendered=False)
-    rules.set_values(db, {"speed": 1.2, "horizontal_flip": False})
+    rules.set_values(db, {"speed": 1.2, "horizontal_flip": False}, user=ME)
     assert pipeline.process_video(db, job.id) == JobStatus.REWRITING
     assert fake_media == [{"speed": 1.2, "flip": False, "keep_audio": True}]  # read from settings at job time
     video = job.video
@@ -78,7 +79,7 @@ def test_process_downloads_renders_and_waits_for_the_caption(db, tiktok_account,
 def test_process_goes_straight_to_review_when_the_caption_is_ready(db, tiktok_account, fake_media):
     job = _make_job(db, tiktok_account, status=JobStatus.FETCHED, rendered=False)
     assert pipeline.process_video(db, job.id) == JobStatus.AWAITING_APPROVAL
-    rules.set_values(db, {"approval_required": False})
+    rules.set_values(db, {"approval_required": False}, user=ME)
     other = _make_job(db, tiktok_account, status=JobStatus.FETCHED, rendered=False, youtube_video_id="v2")
     assert pipeline.process_video(db, other.id) == JobStatus.READY
 
@@ -152,7 +153,7 @@ def _mock_tiktok_upload():
 
 @respx.mock
 def test_upload_posts_once_and_starts_monitoring(db, tiktok_account):
-    rules.set_values(db, {"publish_mode": "direct"})
+    rules.set_values(db, {"publish_mode": "direct"}, user=ME)
     job = _make_job(db, tiktok_account, status=JobStatus.READY)
     init, put = _mock_tiktok_upload()
     assert pipeline.upload_job(db, job.id) == "posted"
@@ -174,7 +175,7 @@ def test_upload_posts_once_and_starts_monitoring(db, tiktok_account):
 def test_daily_cap_defers(db, tiktok_account):
     tiktok_account.daily_cap = 1
     job = _make_job(db, tiktok_account, status=JobStatus.READY)
-    earlier = Video(youtube_video_id="v0", status=VideoStatus.ACCEPTED)
+    earlier = Video(user_id=1, youtube_video_id="v0", status=VideoStatus.ACCEPTED)
     db.add(earlier)
     db.flush()
     db.add(Job(video_id=earlier.id, tiktok_account_id=tiktok_account.id, status=JobStatus.CLEAN, posted_at=utcnow()))
@@ -190,7 +191,7 @@ def test_daily_cap_defers(db, tiktok_account):
 
 @respx.mock
 def test_rate_limit_defers_without_failing(db, tiktok_account):
-    rules.set_values(db, {"publish_mode": "direct"})
+    rules.set_values(db, {"publish_mode": "direct"}, user=ME)
     job = _make_job(db, tiktok_account, status=JobStatus.READY)
     respx.post(f"{TT}/post/publish/creator_info/query/").mock(return_value=tt_ok(CREATOR))
     respx.post(f"{TT}/post/publish/video/init/").mock(return_value=tt_err("rate_limit_exceeded", 429))

@@ -13,7 +13,7 @@ from app.config import get_settings
 
 log = logging.getLogger(__name__)
 
-_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="cliprelay-task")
+_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cliprelay-task")  # downloads are slow; captions must not wait behind them
 _started = False
 _lock = threading.Lock()
 DAILY = 24 * 60 * 60.0

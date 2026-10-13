@@ -12,6 +12,7 @@ decides what to enqueue next. This keeps the pipeline unit-testable.
 
 import logging
 import os
+import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -30,6 +31,7 @@ from app.models import (
     Violation,
     utcnow,
 )
+from app.db import session_scope
 from app.services import activity, media, notify, prompts, rules, sources, tokens, workspace_settings
 from app.services.activity import job_event
 from app.services.storage import get_storage
@@ -101,12 +103,18 @@ def mark_failed(db: Session, job_id: int, error: str) -> None:
 def pick_account(db: Session, video: Video) -> TikTokAccount | None:
     """The channel's default TikTok account, or the least-loaded connected account when it has none."""
     channel = video.channel
-    if channel and channel.default_tiktok_account and channel.default_tiktok_account.status in ACTIVE_ACCOUNT:
-        return channel.default_tiktok_account
-    accounts = list(db.scalars(select(TikTokAccount).where(TikTokAccount.status.in_(ACTIVE_ACCOUNT)).order_by(TikTokAccount.id)))
+    default = channel.default_tiktok_account if channel else None
+    if default and default.status in ACTIVE_ACCOUNT and default.mode == video.mode and default.user_id == video.user_id:
+        return default
+    # Each workspace has its own accounts: a podcast clip never goes to a Shorts account, or the other way round.
+    accounts = list(db.scalars(
+        select(TikTokAccount)
+        .where(TikTokAccount.status.in_(ACTIVE_ACCOUNT), TikTokAccount.mode == video.mode, TikTokAccount.user_id == video.user_id)  # a member's videos go to that member's accounts only
+        .order_by(TikTokAccount.id)
+    ))
     if not accounts:
         return None
-    since = cap_day_start(rules.global_values(db)["cap_reset_timezone"])
+    since = cap_day_start(rules.global_values(db, user_id=video.user_id)["cap_reset_timezone"])
     return min(accounts, key=lambda a: (account_load(db, a.id, since), a.id))
 
 
@@ -119,7 +127,7 @@ def create_job(db: Session, video: Video, account: TikTokAccount | None, *, prom
         video_id=video.id,
         tiktok_account_id=account.id if account else None,
         prompt_template_id=prompt_template_id,
-        approval_required=bool(rules.effective(db, video.channel_id)["approval_required"]),
+        approval_required=bool(rules.for_video(db, video)["approval_required"]),
         status=JobStatus.FETCHED,
         caption_status=CaptionStatus.PENDING,
         next_check_at=utcnow() + LEASE,
@@ -127,9 +135,20 @@ def create_job(db: Session, video: Video, account: TikTokAccount | None, *, prom
     db.add(job)
     db.flush()
     source = f" from {video.channel.display_name}" if video.channel else ""
-    job_event(db, job, JobStatus.FETCHED, f"New upload detected{source} · {video.duration_sec or 0:.0f}s")
-    if account is None:
+    if video.parent_id:
+        job_event(db, job, JobStatus.FETCHED, f"Clip {video.clip_start or 0:.0f}s–{video.clip_end or 0:.0f}s of “{(video.parent.original_title if video.parent else '')[:60]}”")
+    else:
+        job_event(db, job, JobStatus.FETCHED, f"New upload detected{source} · {video.duration_sec or 0:.0f}s")
+    if account is None and not video.is_podcast_source:
         job.error = "No active TikTok account connected"
+    return job
+
+
+def create_podcast_job(db: Session, video: Video) -> Job:
+    """The job that analyses a whole podcast. It has no TikTok account and no caption: its clips get those."""
+    job = create_job(db, video, None)
+    job.caption_status = CaptionStatus.DONE
+    job.approval_required = False
     return job
 
 
@@ -155,7 +174,7 @@ def _advance(db: Session, job: Job) -> str:
     job.attempts = 0
     job.error = None
     # Read at this moment, not at detection, so switching approval on or off applies to the next job to finish.
-    job.approval_required = bool(rules.effective(db, job.video.channel_id)["approval_required"])
+    job.approval_required = bool(rules.for_video(db, job.video)["approval_required"])
     if job.approval_required:
         job_event(db, job, JobStatus.AWAITING_APPROVAL, "Waiting in the review queue")
     else:
@@ -177,42 +196,78 @@ def _stage_failed(db: Session, job: Job, stage: str, error: str) -> str:
     return job.status
 
 
+def progress_writer(job_id: int):
+    """A callback that stores how far a download or render has got (0–100), for the Live Status page.
+
+    It writes through a short session of its own, at most every few seconds, so the long-running
+    stage never holds the database.
+    """
+    state = {"value": -1, "at": 0.0}
+
+    def write(percent: float) -> None:
+        value = max(0, min(100, int(percent)))
+        now = time.monotonic()
+        if value == state["value"] or (value < 100 and now - state["at"] < 2.5):
+            return
+        state.update(value=value, at=now)
+        try:
+            with session_scope() as other:
+                other.execute(update(Job).where(Job.id == job_id).values(progress=value).execution_options(synchronize_session=False))
+        except Exception as exc:  # progress is a nicety: never let it break a download
+            log.debug("could not store progress for job %s: %s", job_id, exc)
+
+    return write
+
+
+def _set_progress(db: Session, job: Job, value: int | None) -> None:
+    db.execute(update(Job).where(Job.id == job.id).values(progress=value).execution_options(synchronize_session=False))
+    job.progress = value
+
+
 def process_video(db: Session, job_id: int) -> str | None:
     """Download the original and apply the edits. A failure is retried from the stage that broke."""
     job = db.get(Job, job_id)
     if not job or job.status not in (JobStatus.FETCHED, JobStatus.DOWNLOADING, JobStatus.RENDERING):
         return job.status if job else None
     video = job.video
+    if video.is_podcast_source:
+        from app.services import podcasts
+
+        return podcasts.split(db, job)
     storage = get_storage()
     job.next_check_at = utcnow() + PROCESS_LEASE
 
     if not video.source_file_path:
         if job.status != JobStatus.DOWNLOADING:
-            job_event(db, job, JobStatus.DOWNLOADING, "Downloading from YouTube")
+            job_event(db, job, JobStatus.DOWNLOADING, "Downloading the clip's section from YouTube" if video.parent_id else "Downloading from YouTube")
+        _set_progress(db, job, 0)
         db.commit()
         try:
-            path = sources.get_adapter().download(video)
+            path = sources.get_adapter().download(video, progress_writer(job.id))
             info = media.probe(path)
         except (sources.SourceError, media.ProbeError) as exc:
             return _stage_failed(db, job, "Download", str(exc))
         video.width, video.height, video.size_bytes = info.width, info.height, os.path.getsize(path)
-        video.duration_sec = video.duration_sec or round(info.duration, 2)
+        video.duration_sec = round(info.duration, 2) if video.parent_id else (video.duration_sec or round(info.duration, 2))
         video.source_file_path = storage.save(path, f"source/{video.id}.mp4")
         job.attempts = 0
         activity.record(db, "Download", f"Video #{video.id} downloaded · {video.size_bytes / 1_048_576:.1f} MB", event="downloaded", job_id=job.id)
 
-    values = rules.effective(db, video.channel_id)
+    values = rules.for_video(db, video)
     speed, flip, keep_audio = float(values["speed"]), bool(values["horizontal_flip"]), bool(values["keep_audio"])
-    summary = f"speed {speed:g}x · flip {'on' if flip else 'off'} · audio {'kept' if keep_audio else 'removed'}"
+    framing = values.get("framing", "original")  # only the Podcasts workspace reframes the picture
+    summary = f"speed {speed:g}x · flip {'on' if flip else 'off'} · audio {'kept' if keep_audio else 'removed'}" + (f" · frame {framing}" if video.parent_id else "")
     if job.status != JobStatus.RENDERING:
         job_event(db, job, JobStatus.RENDERING, f"Rendering · {summary}")
+    _set_progress(db, job, 0)
     db.commit()
     try:
         with storage.local_copy(video.source_file_path) as source_path:
-            rendered = media.render(source_path, speed=speed, flip=flip, keep_audio=keep_audio)
+            rendered = media.render(source_path, speed=speed, flip=flip, keep_audio=keep_audio, framing=framing, on_progress=progress_writer(job.id))
     except (media.RenderError, OSError) as exc:
         return _stage_failed(db, job, "Render", str(exc))
     video.rendered_file_path = storage.save(rendered, f"videos/{video.id}.mp4")
+    _set_progress(db, job, None)
     activity.record(db, "Render", f"Video #{video.id} rendered · {summary}", event="rendered", job_id=job.id)
     return _advance(db, job)
 
@@ -230,7 +285,7 @@ def rewrite_job(db: Session, job_id: int) -> str | None:
     if job.caption_status != CaptionStatus.PENDING:
         return _advance(db, job)  # the caption was already written; make sure the job has moved on
     video = job.video
-    values = rules.effective(db, video.channel_id)
+    values = rules.for_video(db, video)
     count = int(values["hashtag_count"])
     channel_name = video.channel.display_name if video.channel else ""
     template = prompts.resolve_template(db, job.prompt_template_id)
@@ -278,9 +333,11 @@ def assign_waiting_jobs(db: Session) -> int:
     """Give every unfinished job that has no TikTok account one, as soon as an account is connected."""
     assigned = 0
     for job in db.scalars(select(Job).where(Job.tiktok_account_id.is_(None), Job.status.in_(JobStatus.PENDING))):
+        if job.video.is_podcast_source:
+            continue  # a podcast is analysed, never posted: only its clips need an account
         account = pick_account(db, job.video)
         if account is None:
-            break
+            continue  # the other workspace may still have an account for its own jobs
         job.tiktok_account_id = account.id
         job.tiktok_account = account
         job.error = None
@@ -308,7 +365,7 @@ def upload_job(db: Session, job_id: int) -> str:
         return _defer(job, timedelta(minutes=2), WAITING_FOR_ACCOUNT)  # nothing is lost: it is sent once an account exists
     if account.status not in (TikTokStatus.ACTIVE, TikTokStatus.EXPIRING):
         return _defer(job, timedelta(minutes=10), f"@{account.username} is {account.status} — reconnect it")
-    values = rules.effective(db, job.video.channel_id)
+    values = rules.for_video(db, job.video)
     cap = account_cap(account, values)
     if not job.video.forced and posts_since(db, account.id, cap_day_start(values["cap_reset_timezone"], now)) >= cap:
         return _defer(job, timedelta(hours=1), f"Daily cap of {cap} reached for @{account.username}")
@@ -588,12 +645,12 @@ def cleanup_files(db: Session, now: datetime | None = None) -> int:
         select(Video, Job)
         .join(Job, Job.video_id == Video.id)
         .where(or_(Video.source_file_path.is_not(None), Video.rendered_file_path.is_not(None)))
-        .where(or_(Job.posted_at.is_not(None), Job.status.in_([JobStatus.FAILED, JobStatus.CANCELLED])))
+        .where(or_(Job.posted_at.is_not(None), Job.status.in_([JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.CLIPPED])))
     ).unique().all()
     retention: dict[int | None, int] = {}
     for video, job in rows:
         if video.channel_id not in retention:
-            retention[video.channel_id] = int(rules.effective(db, video.channel_id)["file_retention_days"])
+            retention[video.channel_id] = int(rules.for_video(db, video)["file_retention_days"])
         finished = job.posted_at or job.updated_at
         if job.status == JobStatus.UPLOADING or finished > now - timedelta(days=retention[video.channel_id]):
             continue

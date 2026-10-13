@@ -50,6 +50,7 @@ def channel(c: Channel, stats: dict | None = None, overrides: int = 0) -> dict:
     return {
         **channel_ref(c),
         "youtube_channel_id": c.youtube_channel_id,
+        "mode": c.mode,
         "url": f"https://www.youtube.com/channel/{c.youtube_channel_id}",
         "active": c.active,
         "default_tiktok_account": tiktok_ref(c.default_tiktok_account),
@@ -77,6 +78,11 @@ def video(v: Video) -> dict:
         "files_deleted_at": v.files_deleted_at,
         "skip_reason": v.skip_reason,
         "forced": v.forced,
+        "mode": v.mode,
+        "clip": {
+            "start": v.clip_start, "end": v.clip_end, "podcast_id": v.parent_id,
+            "podcast_title": v.parent.original_title if v.parent else "", "podcast_url": v.parent.permalink if v.parent else None,
+        } if v.parent_id else None,
         "thumbnail_url": v.thumbnail_url,
         "posted_at": v.posted_at,
         "original_title": v.original_title,
@@ -109,6 +115,8 @@ def job(j: Job, *, detail: bool = False) -> dict:
         "privacy_level": j.privacy_level,
         "tiktok_post_id": j.tiktok_post_id,
         "error": j.error,
+        "progress": j.progress,
+        "attempts": j.attempts,
         "violation_reason": j.violation_reason,
         "check_count": j.check_count,
         "next_check_at": j.next_check_at,

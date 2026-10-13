@@ -1,7 +1,7 @@
 import { api } from "./client";
 import type {
   ActivityLog, AuditItem, AuditSettings, Channel, ChannelCard, ChannelRules, CredentialCard, CredentialResult, DailyReport, LLMProvider, LLMProviderList, LLMProviderName, Integration, Job, Nav, NotificationSettings, Page, Policy, Prompt,
-  RuleChange, RuleDef, RuleValue, RuleValues, Summary, TikTokAccount, User, Video, Violation,
+  PipelineStatus, RuleChange, RuleDef, RuleValue, RuleValues, Summary, TikTokAccount, User, Video, Violation,
 } from "./types";
 
 export const auth = {
@@ -17,6 +17,7 @@ export const dashboard = {
   summary: () => api<Summary>("/dashboard/summary"),
   performance: (days: number) => api<{ labels: string[]; values: number[] }>("/dashboard/performance", { query: { days } }),
   nav: () => api<Nav>("/dashboard/nav"),
+  status: () => api<PipelineStatus>("/pipeline/status"),
   daily: (day?: string) => api<DailyReport>("/reports/daily", { query: { day } }),
 };
 

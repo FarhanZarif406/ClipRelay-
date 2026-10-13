@@ -5,9 +5,9 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import func, or_, select
 
-from app.api.deps import DB, CurrentUser
+from app.api.deps import DB, CurrentUser, Workspace
 from app.integrations.http import ApiError
-from app.models import Job, JobStatus, TikTokAccount, User, Video
+from app.models import Job, JobStatus, Mode, TikTokAccount, User, Video
 from app.schemas import JobUpdate, RejectIn
 from app.security import decode_token
 from app.services import activity, detection, dispatch, pipeline, serializers
@@ -26,9 +26,9 @@ STATUS_GROUPS = {
 }
 
 
-def _get(db, job_id: int) -> Job:
+def _get(db, job_id: int, user: User) -> Job:
     job = db.get(Job, job_id)
-    if not job:
+    if not job or job.video.user_id != user.id:  # another member's video does not exist as far as this one can tell
         raise HTTPException(404, "Job not found")
     return job
 
@@ -36,7 +36,7 @@ def _get(db, job_id: int) -> Job:
 @router.get("/jobs")
 def list_jobs(
     db: DB,
-    _: CurrentUser,
+    user: CurrentUser,
     q: str | None = None,
     status: str | None = None,
     tiktok_account_id: int | None = None,
@@ -45,8 +45,9 @@ def list_jobs(
     period: str | None = Query(None, pattern="^(today|7d|30d)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
+    mode: Workspace = Mode.SHORTS,
 ):
-    stmt = select(Job).join(Video, Job.video_id == Video.id)
+    stmt = select(Job).join(Video, Job.video_id == Video.id).where(Video.mode == mode, Video.user_id == user.id)
     if status:
         statuses = STATUS_GROUPS.get(status, {status})
         stmt = stmt.where(Job.status.in_(statuses))
@@ -78,13 +79,13 @@ def list_jobs(
 
 
 @router.get("/jobs/{job_id}")
-def get_job(job_id: int, db: DB, _: CurrentUser):
-    return serializers.job(_get(db, job_id), detail=True)
+def get_job(job_id: int, db: DB, user: CurrentUser):
+    return serializers.job(_get(db, job_id, user), detail=True)
 
 
 @router.patch("/jobs/{job_id}")
-def edit_job(job_id: int, body: JobUpdate, db: DB, _: CurrentUser):
-    job = _get(db, job_id)
+def edit_job(job_id: int, body: JobUpdate, db: DB, user: CurrentUser):
+    job = _get(db, job_id, user)
     if job.status not in JobStatus.PROCESSING | {JobStatus.AWAITING_APPROVAL, JobStatus.READY, JobStatus.FAILED}:
         raise HTTPException(409, f"Job can't be edited while {job.status}")
     data = body.model_dump(exclude_unset=True)
@@ -94,6 +95,10 @@ def edit_job(job_id: int, body: JobUpdate, db: DB, _: CurrentUser):
         account = db.get(TikTokAccount, data["tiktok_account_id"]) if data["tiktok_account_id"] else None
         if data["tiktok_account_id"] and not account:
             raise HTTPException(404, "TikTok account not found")
+        if account and account.user_id != user.id:
+            raise HTTPException(404, "TikTok account not found")
+        if account and account.mode != job.video.mode:
+            raise HTTPException(400, "That TikTok account belongs to the other workspace")
         clash = db.scalar(select(Job.id).where(Job.video_id == job.video_id, Job.tiktok_account_id == data["tiktok_account_id"], Job.id != job.id))
         if clash:
             raise HTTPException(409, "This video is already assigned to that account")
@@ -110,7 +115,7 @@ def edit_job(job_id: int, body: JobUpdate, db: DB, _: CurrentUser):
 
 @router.post("/jobs/{job_id}/approve")
 def approve(job_id: int, db: DB, user: CurrentUser):
-    job = _get(db, job_id)
+    job = _get(db, job_id, user)
     try:
         pipeline.approve_job(db, job)
     except ValueError as exc:
@@ -122,8 +127,8 @@ def approve(job_id: int, db: DB, user: CurrentUser):
 
 
 @router.post("/jobs/{job_id}/retry")
-def retry(job_id: int, db: DB, _: CurrentUser):
-    job = _get(db, job_id)
+def retry(job_id: int, db: DB, user: CurrentUser):
+    job = _get(db, job_id, user)
     try:
         status = pipeline.retry_job(db, job)
     except ValueError as exc:
@@ -142,7 +147,7 @@ def retry(job_id: int, db: DB, _: CurrentUser):
 @router.post("/jobs/{job_id}/reject")
 def reject(job_id: int, body: RejectIn, db: DB, user: CurrentUser):
     """Review queue: this video is not published. The reason is kept with the job."""
-    job = _get(db, job_id)
+    job = _get(db, job_id, user)
     try:
         pipeline.reject_job(db, job, body.reason)
     except ValueError as exc:
@@ -153,8 +158,8 @@ def reject(job_id: int, body: RejectIn, db: DB, user: CurrentUser):
 
 
 @router.post("/jobs/{job_id}/cancel")
-def cancel(job_id: int, db: DB, _: CurrentUser):
-    job = _get(db, job_id)
+def cancel(job_id: int, db: DB, user: CurrentUser):
+    job = _get(db, job_id, user)
     try:
         pipeline.cancel_job(db, job)
     except ValueError as exc:
@@ -165,8 +170,8 @@ def cancel(job_id: int, db: DB, _: CurrentUser):
 
 
 @router.get("/videos")
-def list_videos(db: DB, _: CurrentUser, status: str | None = None, channel_id: int | None = None, limit: int = Query(20, ge=1, le=500)):
-    stmt = select(Video)
+def list_videos(db: DB, user: CurrentUser, status: str | None = None, channel_id: int | None = None, limit: int = Query(20, ge=1, le=500), mode: Workspace = Mode.SHORTS):
+    stmt = select(Video).where(Video.mode == mode, Video.user_id == user.id, Video.parent_id.is_(None))  # uploads, not the clips cut from them
     if status:
         stmt = stmt.where(Video.status == status)
     if channel_id:
@@ -178,7 +183,7 @@ def list_videos(db: DB, _: CurrentUser, status: str | None = None, channel_id: i
 def process_anyway(video_id: int, db: DB, user: CurrentUser):
     """Skipped screen: put a held video into the pipeline by hand."""
     video = db.get(Video, video_id)
-    if not video:
+    if not video or video.user_id != user.id:
         raise HTTPException(404, "Video not found")
     try:
         job = detection.process_anyway(db, video)
@@ -200,7 +205,7 @@ def video_file(video_id: int, token: str, db: DB):
     if not user or not user.is_active:
         raise HTTPException(401, "Invalid or expired media token")
     video = db.get(Video, video_id)
-    if not video or not video.rendered_file_path:
+    if not video or not video.rendered_file_path or video.user_id != user.id:
         raise HTTPException(404, "The rendered file is not available")
     storage = get_storage()
     path = storage.local_path(video.rendered_file_path)

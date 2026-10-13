@@ -53,9 +53,16 @@ def decrypt(value: str | None) -> str | None:
         raise RuntimeError("Could not decrypt stored token — has ENCRYPTION_KEY changed?") from exc
 
 
-def create_oauth_state(provider: str, user_id: int) -> str:
+def create_oauth_state(provider: str, user_id: int, **claims) -> str:
     """Signed, short-lived OAuth `state` value (CSRF protection without a DB table)."""
-    return create_access_token(str(user_id), expires_minutes=15, purpose=f"oauth:{provider}")
+    return create_access_token(str(user_id), expires_minutes=15, purpose=f"oauth:{provider}", **claims)
+
+
+def oauth_state_claims(state: str, provider: str) -> dict:
+    payload = decode_token(state)
+    if payload.get("purpose") != f"oauth:{provider}":
+        raise jwt.InvalidTokenError("state purpose mismatch")
+    return payload
 
 
 def verify_oauth_state(state: str, provider: str) -> int:

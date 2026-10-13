@@ -2,12 +2,12 @@
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 
-from app.api.deps import DB, CurrentUser
+from app.api.deps import DB, CurrentUser, Workspace
 from app.integrations import youtube
 from app.integrations.http import ApiError
-from app.models import Channel, Job, TikTokAccount, TikTokStatus, Video, VideoStatus, utcnow
+from app.models import Channel, Job, JobStatus, Mode, RuleSetting, User, TikTokAccount, TikTokStatus, Video, VideoStatus, utcnow
 from app.services import activity, detection, dispatch, rules, serializers
 
 router = APIRouter(tags=["channels"])
@@ -30,18 +30,23 @@ class RulesIn(BaseModel):
     values: dict[str, bool | int | float | str | None]
 
 
-def _get(db, channel_id: int) -> Channel:
+def _owner_name(db, channel: Channel) -> str:
+    owner = db.get(User, channel.user_id) if channel.user_id else None
+    return (owner.name or owner.email) if owner else "another member"
+
+
+def _get(db, channel_id: int, user: User) -> Channel:
     channel = db.get(Channel, channel_id)
-    if not channel:
+    if not channel or channel.user_id != user.id:  # another member's channel does not exist as far as this one can tell
         raise HTTPException(404, "Channel not found")
     return channel
 
 
-def _account(db, account_id: int | None) -> TikTokAccount | None:
+def _account(db, account_id: int | None, user: User) -> TikTokAccount | None:
     if not account_id:
         return None
     account = db.get(TikTokAccount, account_id)
-    if not account or account.status == TikTokStatus.REVOKED:
+    if not account or account.status == TikTokStatus.REVOKED or account.user_id != user.id:
         raise HTTPException(404, "TikTok account not found")
     return account
 
@@ -52,7 +57,8 @@ def _stats(db) -> dict[int, dict]:
         select(Video.channel_id, func.count(Job.id)).join(Job, Job.video_id == Video.id).where(Job.posted_at.is_not(None)).group_by(Video.channel_id)
     ):
         out.setdefault(channel_id, {})["published"] = count
-    for channel_id, status, count in db.execute(select(Video.channel_id, Video.status, func.count(Video.id)).group_by(Video.channel_id, Video.status)):
+    # A podcast's clips are videos too; only the uploads themselves are counted as detected or skipped.
+    for channel_id, status, count in db.execute(select(Video.channel_id, Video.status, func.count(Video.id)).where(Video.parent_id.is_(None)).group_by(Video.channel_id, Video.status)):
         out.setdefault(channel_id, {})["skipped" if status == VideoStatus.SKIPPED else "detected"] = count
     return out
 
@@ -65,10 +71,10 @@ def _resolve(query: str) -> youtube.ChannelInfo:
 
 
 @router.get("/channels")
-def list_channels(db: DB, _: CurrentUser):
+def list_channels(db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
     stats = _stats(db)
-    channels = db.scalars(select(Channel).order_by(Channel.id.desc())).all()
-    overrides = dict(db.execute(select(rules.RuleSetting.channel_id, func.count()).where(rules.RuleSetting.channel_id.is_not(None)).group_by(rules.RuleSetting.channel_id)).all())
+    channels = db.scalars(select(Channel).where(Channel.mode == mode, Channel.user_id == user.id).order_by(Channel.id.desc())).all()
+    overrides = dict(db.execute(select(RuleSetting.channel_id, func.count()).where(RuleSetting.channel_id.is_not(None)).group_by(RuleSetting.channel_id)).all())
     return {
         "items": [serializers.channel(c, stats.get(c.id), overrides.get(c.id, 0)) for c in channels],
         "push_available": youtube.push_available(),
@@ -76,31 +82,39 @@ def list_channels(db: DB, _: CurrentUser):
 
 
 @router.post("/channels/resolve")
-def resolve(body: ResolveIn, db: DB, _: CurrentUser):
+def resolve(body: ResolveIn, db: DB, user: CurrentUser):
     """Look a channel up so the operator can confirm it is the right one before saving."""
     info = _resolve(body.query)
-    existing = db.scalar(select(Channel.id).where(Channel.youtube_channel_id == info.youtube_channel_id))
+    existing = db.scalar(select(Channel).where(Channel.youtube_channel_id == info.youtube_channel_id))
     return {
         "youtube_channel_id": info.youtube_channel_id, "display_name": info.display_name, "handle": info.handle,
-        "thumbnail_url": info.thumbnail_url, "url": info.url, "already_added": bool(existing),
+        "thumbnail_url": info.thumbnail_url, "url": info.url, "already_added": bool(existing), "added_in": existing.mode if existing else None,
+        "added_by": _owner_name(db, existing) if existing and existing.user_id != user.id else None,
     }
 
 
 @router.post("/channels", status_code=201)
-def add_channel(body: ChannelCreate, db: DB, user: CurrentUser):
-    account = _account(db, body.default_tiktok_account_id)
+def add_channel(body: ChannelCreate, db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
+    account = _account(db, body.default_tiktok_account_id, user)
+    if account and account.mode != mode:
+        raise HTTPException(400, "That TikTok account belongs to the other workspace")
     info = _resolve(body.query)
-    if db.scalar(select(Channel.id).where(Channel.youtube_channel_id == info.youtube_channel_id)):
-        raise HTTPException(409, "This channel is already being monitored")
+    existing = db.scalar(select(Channel).where(Channel.youtube_channel_id == info.youtube_channel_id))
+    if existing:
+        if existing.user_id != user.id:  # a channel belongs to the member who added it first
+            raise HTTPException(409, f"This channel has already been added by {_owner_name(db, existing)}")
+        # One channel, one workspace: its uploads are either republished whole (Shorts) or cut into clips (Podcasts).
+        where = "here" if existing.mode == mode else f"in the {existing.mode.capitalize()} workspace"
+        raise HTTPException(409, f"This channel is already being monitored {where}")
     now = utcnow()
     channel = Channel(
-        youtube_channel_id=info.youtube_channel_id, handle=info.handle, display_name=info.display_name or info.youtube_channel_id,
+        youtube_channel_id=info.youtube_channel_id, mode=mode, user_id=user.id, handle=info.handle, display_name=info.display_name or info.youtube_channel_id,
         thumbnail_url=info.thumbnail_url, default_tiktok_account_id=account.id if account else None,
         added_by=user.id, monitoring_since=now, next_poll_at=now,
     )
     db.add(channel)
     db.flush()
-    activity.record(db, "Detection", f"Channel {channel.display_name} added by {user.email}", event="channel_added", payload={"channel_id": channel.id})
+    activity.record(db, "Detection", f"Channel {channel.display_name} added by {user.email}", event="channel_added", payload={"channel_id": channel.id}, user_id=user.id)
     detection.subscribe(db, channel)
     db.commit()
     return serializers.channel(channel)
@@ -108,10 +122,12 @@ def add_channel(body: ChannelCreate, db: DB, user: CurrentUser):
 
 @router.patch("/channels/{channel_id}")
 def update_channel(channel_id: int, body: ChannelUpdate, db: DB, user: CurrentUser):
-    channel = _get(db, channel_id)
+    channel = _get(db, channel_id, user)
     data = body.model_dump(exclude_unset=True)
     if "default_tiktok_account_id" in data:
-        account = _account(db, data["default_tiktok_account_id"])
+        account = _account(db, data["default_tiktok_account_id"], user)
+        if account and account.mode != channel.mode:
+            raise HTTPException(400, "That TikTok account belongs to the other workspace")
         channel.default_tiktok_account_id = account.id if account else None
     if data.get("active") is not None and data["active"] != channel.active:
         channel.active = data["active"]
@@ -121,7 +137,7 @@ def update_channel(channel_id: int, body: ChannelUpdate, db: DB, user: CurrentUs
             detection.subscribe(db, channel)
         else:
             detection.unsubscribe(channel)
-        activity.record(db, "Detection", f"Channel {channel.display_name} {'activated' if channel.active else 'paused'} by {user.email}", event="channel_toggled")
+        activity.record(db, "Detection", f"Channel {channel.display_name} {'activated' if channel.active else 'paused'} by {user.email}", event="channel_toggled", user_id=user.id)
     db.commit()
     db.refresh(channel)
     return serializers.channel(channel, _stats(db).get(channel.id))
@@ -129,17 +145,30 @@ def update_channel(channel_id: int, body: ChannelUpdate, db: DB, user: CurrentUs
 
 @router.delete("/channels/{channel_id}", status_code=204)
 def delete_channel(channel_id: int, db: DB, user: CurrentUser):
-    channel = _get(db, channel_id)
+    channel = _get(db, channel_id, user)
     detection.unsubscribe(channel)
-    activity.record(db, "Detection", f"Channel {channel.display_name} removed by {user.email}", event="channel_removed")
-    db.delete(channel)  # its videos stay as the record of what was published
+    # Videos that have not gone out yet stop here; what was already published keeps running its checks.
+    stopped = 0
+    for job in db.scalars(select(Job).join(Video, Job.video_id == Video.id).where(Video.channel_id == channel.id, Job.status.in_(JobStatus.PENDING - {JobStatus.UPLOADING}))):
+        job.next_check_at = None
+        job.error = f"Channel {channel.display_name} was removed"
+        activity.job_event(db, job, JobStatus.CANCELLED, "Cancelled: the channel was removed")
+        stopped += 1
+    # The videos stay as the record of what was detected and published, but no longer point at the channel.
+    # Done here, not left to the database: a later channel could otherwise be given this channel's id and inherit them.
+    db.execute(update(Video).where(Video.channel_id == channel.id).values(channel_id=None).execution_options(synchronize_session=False))
+    db.execute(delete(RuleSetting).where(RuleSetting.channel_id == channel.id).execution_options(synchronize_session=False))
+    activity.record(db, "Detection", f"Channel {channel.display_name} removed by {user.email}" + (f" · {stopped} unfinished video(s) cancelled" if stopped else ""), event="channel_removed", user_id=user.id)
+    db.flush()
+    db.expire_all()
+    db.delete(db.get(Channel, channel_id))
     db.commit()
 
 
 @router.post("/channels/{channel_id}/check")
-def check_now(channel_id: int, db: DB, _: CurrentUser):
+def check_now(channel_id: int, db: DB, user: CurrentUser):
     """Read the channel's uploads feed right now instead of waiting for the next poll."""
-    channel = _get(db, channel_id)
+    channel = _get(db, channel_id, user)
     videos = detection.poll_channel(db, channel)
     job_ids = list(db.scalars(select(Job.id).where(Job.video_id.in_([v.id for v in videos])))) if videos else []
     db.commit()
@@ -149,23 +178,30 @@ def check_now(channel_id: int, db: DB, _: CurrentUser):
 
 
 @router.get("/channels/{channel_id}/rules")
-def get_channel_rules(channel_id: int, db: DB, _: CurrentUser):
-    channel = _get(db, channel_id)
-    return {"overrides": rules.channel_overrides(db, channel.id), "effective": rules.effective(db, channel.id), "global": rules.global_values(db)}
+def get_channel_rules(channel_id: int, db: DB, user: CurrentUser):
+    channel = _get(db, channel_id, user)
+    return _channel_rules(db, channel)
+
+
+def _channel_rules(db, channel: Channel) -> dict:
+    return {
+        "overrides": rules.channel_overrides(db, channel.id, channel.mode), "effective": rules.effective(db, channel.id, channel.mode, channel.user_id),
+        "global": rules.global_values(db, channel.mode, channel.user_id),
+    }
 
 
 @router.put("/channels/{channel_id}/rules")
 def put_channel_rules(channel_id: int, body: RulesIn, db: DB, user: CurrentUser):
     """Set overrides for one channel. A null value removes the override, so the channel inherits the global value again."""
-    channel = _get(db, channel_id)
+    channel = _get(db, channel_id, user)
     try:
         changes = rules.set_values(db, body.values, channel=channel, user=user)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     if changes:
-        activity.record(db, "Settings", f"{user.email} changed {', '.join(c.key for c in changes)} for {channel.display_name}", event="rules_updated")
+        activity.record(db, "Settings", f"{user.email} changed {', '.join(c.key for c in changes)} for {channel.display_name}", event="rules_updated", user_id=user.id)
     db.commit()
-    return {"overrides": rules.channel_overrides(db, channel.id), "effective": rules.effective(db, channel.id), "global": rules.global_values(db)}
+    return _channel_rules(db, channel)
 
 
 # ---------------------------------------------------------------- YouTube push webhook (no login: called by the hub)

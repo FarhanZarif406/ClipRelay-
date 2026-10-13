@@ -6,6 +6,7 @@ import { FilterSelect } from "@/components/Menu";
 import { useErrorToast, useToast } from "@/components/Toast";
 import { Badge, Button, Card, Empty, PageHeader, Spinner, VideoThumb } from "@/components/ui";
 import { SKIP_REASON, duration, relativeTime } from "@/lib/format";
+import { PODCASTS } from "@/lib/mode";
 
 export default function Skipped() {
   const queryClient = useQueryClient();
@@ -38,7 +39,7 @@ export default function Skipped() {
         <td><Button disabled={process.isPending} onClick={() => process.mutate(v)}>Process anyway</Button></td>
       </tr>)}</tbody></table></div>
       {list.isLoading && <Spinner/>}
-      {!list.isLoading && items.length === 0 && <Empty icon="check" title="Nothing skipped">Videos that are too long, too short, or over a daily cap are listed here with the reason.</Empty>}
+      {!list.isLoading && items.length === 0 && <Empty icon="check" title="Nothing skipped">{PODCASTS ? "Uploads that are too short to be a podcast, or over the daily limit, are listed here with the reason." : "Videos that are too long, too short, or over a daily cap are listed here with the reason."}</Empty>}
     </Card>
   </>;
 }

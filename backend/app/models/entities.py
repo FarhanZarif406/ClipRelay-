@@ -22,11 +22,20 @@ class JobStatus:
     VIOLATED = "violated"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    CLIPPED = "clipped"  # a podcast whose clips were chosen; each clip then has a job of its own
 
-    TERMINAL = {CLEAN, VIOLATED, FAILED, CANCELLED}
+    TERMINAL = {CLEAN, VIOLATED, FAILED, CANCELLED, CLIPPED}
     PROCESSING = {FETCHED, DOWNLOADING, RENDERING, REWRITING}
     PENDING = PROCESSING | {AWAITING_APPROVAL, READY, UPLOADING}
     PUBLISHED = {POSTED, MONITORING, CLEAN}
+
+
+class Mode:
+    """The two workspaces. Channels, TikTok accounts, videos and rules each belong to exactly one."""
+
+    SHORTS = "shorts"  # short uploads, republished whole
+    PODCASTS = "podcasts"  # long uploads, cut into short clips
+    ALL = (SHORTS, PODCASTS)
 
 
 class VideoStatus:
@@ -38,6 +47,7 @@ class VideoStatus:
 class SkipReason:
     LONG_FORM = "long-form"
     TOO_SHORT = "too_short"
+    NOT_PODCAST = "not_a_podcast"
     CHANNEL_CAP = "skipped_channel_cap"
     ACCOUNT_CAP = "skipped_account_cap"
 
@@ -95,12 +105,13 @@ class RuleSetting(Base):
     """One pipeline rule (speed, flip, caps, …). `channel_id` NULL is the global default, otherwise a channel override."""
 
     __tablename__ = "pipeline_settings"
-    __table_args__ = (UniqueConstraint("key", "channel_id", name="uq_pipeline_settings_key_channel"),)
+    __table_args__ = (UniqueConstraint("key", "channel_id", "user_id", name="uq_pipeline_settings_key_channel_user"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     key: Mapped[str] = mapped_column(String(80), index=True)
     value: Mapped[Any] = mapped_column(JSONType)
     scope: Mapped[str] = mapped_column(String(16), default="global")  # global | channel
     channel_id: Mapped[int | None] = mapped_column(ForeignKey("channels.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)  # the member this belongs to
     updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
@@ -113,6 +124,7 @@ class RuleChange(Base):
     key: Mapped[str] = mapped_column(String(80))
     channel_id: Mapped[int | None] = mapped_column(Integer, index=True)
     channel_name: Mapped[str | None] = mapped_column(String(255))
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)  # the member this belongs to
     old_value: Mapped[Any] = mapped_column(JSONType, nullable=True)
     new_value: Mapped[Any] = mapped_column(JSONType, nullable=True)
     changed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
@@ -124,6 +136,7 @@ class TikTokAccount(Base, TimestampMixin):
     __tablename__ = "tiktok_accounts"
     id: Mapped[int] = mapped_column(primary_key=True)
     open_id: Mapped[str] = mapped_column(String(128), unique=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)  # the member this belongs to
     username: Mapped[str] = mapped_column(String(128))
     display_name: Mapped[str | None] = mapped_column(String(255))
     avatar_url: Mapped[str | None] = mapped_column(Text)
@@ -136,6 +149,7 @@ class TikTokAccount(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(16), default=TikTokStatus.ACTIVE)
     daily_cap: Mapped[int | None] = mapped_column(Integer)  # NULL = use the uploads_per_tiktok_account_per_day rule
     default_privacy: Mapped[str] = mapped_column(String(40), default="PUBLIC_TO_EVERYONE")
+    mode: Mapped[str] = mapped_column(String(16), default=Mode.SHORTS, server_default=Mode.SHORTS, index=True)
     last_error: Mapped[str | None] = mapped_column(Text)
     last_posted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
@@ -187,6 +201,8 @@ class Channel(Base, TimestampMixin):
     __tablename__ = "channels"
     id: Mapped[int] = mapped_column(primary_key=True)
     youtube_channel_id: Mapped[str] = mapped_column(String(64), unique=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)  # the member this belongs to
+    mode: Mapped[str] = mapped_column(String(16), default=Mode.SHORTS, server_default=Mode.SHORTS, index=True)
     handle: Mapped[str | None] = mapped_column(String(128))
     display_name: Mapped[str] = mapped_column(String(255), default="")
     thumbnail_url: Mapped[str | None] = mapped_column(Text)
@@ -210,6 +226,7 @@ class Video(Base):
     __tablename__ = "videos"
     id: Mapped[int] = mapped_column(primary_key=True)
     channel_id: Mapped[int | None] = mapped_column(ForeignKey("channels.id", ondelete="SET NULL"), index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)  # the member this belongs to
     # Unique on purpose: YouTube notifies again whenever a title or description is edited, and the
     # constraint makes every repeat harmless — the insert fails and no second job is ever created.
     youtube_video_id: Mapped[str | None] = mapped_column(String(64), unique=True)
@@ -233,7 +250,19 @@ class Video(Base):
     forced: Mapped[bool] = mapped_column(Boolean, default=False)  # "Process anyway": duration and cap checks are bypassed
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)  # discovered at
 
+    mode: Mapped[str] = mapped_column(String(16), default=Mode.SHORTS, server_default=Mode.SHORTS, index=True)
+    # A podcast clip is a video of its own (one clip = one TikTok post) that points at the podcast it was cut from.
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("videos.id", ondelete="CASCADE"), index=True)
+    clip_start: Mapped[float | None] = mapped_column(Float)
+    clip_end: Mapped[float | None] = mapped_column(Float)
+
     channel: Mapped[Channel | None] = relationship(lazy="joined")
+    parent: Mapped["Video | None"] = relationship(remote_side="Video.id", lazy="joined")
+
+    @property
+    def is_podcast_source(self) -> bool:
+        """A whole podcast (not one of its clips): it is analysed and split, never published itself."""
+        return self.mode == Mode.PODCASTS and self.parent_id is None
 
 
 class Job(Base, TimestampMixin):
@@ -262,6 +291,7 @@ class Job(Base, TimestampMixin):
     next_check_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     check_count: Mapped[int] = mapped_column(Integer, default=0)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
+    progress: Mapped[int | None] = mapped_column(Integer)  # 0–100 while downloading or rendering; shown on Live Status
     error: Mapped[str | None] = mapped_column(Text)
     violation_reason: Mapped[str | None] = mapped_column(Text)
 
@@ -306,4 +336,5 @@ class ActivityLog(Base):
     message: Mapped[str] = mapped_column(Text)
     request_id: Mapped[str] = mapped_column(String(40))
     job_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, index=True)  # the member it concerns; NULL = the whole workspace
     payload: Mapped[dict | None] = mapped_column(JSONType)

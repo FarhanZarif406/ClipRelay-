@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Navigate } from "react-router-dom";
 import { credentials } from "@/api/endpoints";
 import { AIModels } from "@/components/AIModels";
 import { CredentialCard } from "@/components/CredentialCard";
@@ -9,10 +10,12 @@ import { OtherIntegrations } from "@/pages/Settings";
 export default function Integrations() {
   const { user } = useAuth();
   const isOwner = user?.role === "owner";
-  const { data } = useQuery({ queryKey: ["credentials"], queryFn: credentials.list });
+  const { data } = useQuery({ queryKey: ["credentials"], queryFn: credentials.list, enabled: isOwner });
   const card = (group: string) => data?.find(c => c.group === group);
   const tiktokCard = card("tiktok");
   const youtubeCard = card("youtube");
+
+  if (!isOwner) return <Navigate to="/" replace/>;  // API keys are the admin's only
 
   return <><PageHeader title="Integrations" description="Everything ClipRelay connects to: TikTok, YouTube, the AI model, the downloader and the editor."/>
     <div className="narrow-page">

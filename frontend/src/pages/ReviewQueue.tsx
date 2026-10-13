@@ -5,7 +5,8 @@ import { apiUrl } from "@/api/client";
 import type { Job } from "@/api/types";
 import { useErrorToast, useToast } from "@/components/Toast";
 import { Badge, Button, Card, Empty, PageHeader, Spinner, Toggle, VideoThumb } from "@/components/ui";
-import { duration, relativeTime } from "@/lib/format";
+import { duration, relativeTime, timecode } from "@/lib/format";
+import { PODCASTS } from "@/lib/mode";
 
 const tagText = (tags: string[]) => tags.map(t => `#${t}`).join(" ");
 const parseTags = (text: string) => Array.from(new Set(text.split(/[\s,]+/).map(t => t.replace(/^#+/, "").trim()).filter(Boolean)));
@@ -96,9 +97,9 @@ export default function ReviewQueue() {
 
   const src = job && job.video.has_file && media.data ? apiUrl(`/videos/${job.video.id}/file`, { token: media.data.token }) : null;
 
-  return <><PageHeader title="Review Queue" description={approval ? "Watch the edited video, fix the caption, and approve or reject. Nothing is published until you approve." : "Approval is off: new videos are published automatically and do not stop here."}><div className="pause-control"><span>Require approval</span><Toggle checked={approval} disabled={!ruleValues.data || setApproval.isPending} label="Require approval" onChange={() => { if (!setApproval.isPending) setApproval.mutate(!approval); }}/></div><Badge tone={queue.length ? "warning" : "success"}>{queue.length} waiting</Badge></PageHeader>
+  return <><PageHeader title="Review Queue" description={approval ? (PODCASTS ? "Watch each clip, fix the caption, and approve or reject. Nothing is published until you approve." : "Watch the edited video, fix the caption, and approve or reject. Nothing is published until you approve.") : "Approval is off: new videos are published automatically and do not stop here."}><div className="pause-control"><span>Require approval</span><Toggle checked={approval} disabled={!ruleValues.data || setApproval.isPending} label="Require approval" onChange={() => { if (!setApproval.isPending) setApproval.mutate(!approval); }}/></div><Badge tone={queue.length ? "warning" : "success"}>{queue.length} waiting</Badge></PageHeader>
     {list.isLoading && <Spinner/>}
-    {!list.isLoading && !job && <Card><Empty icon="check" title="Nothing to review">{approval ? "New short videos appear here once they are downloaded, edited and captioned." : "Require approval is off, so new videos go straight to publishing. Turn it on above to check each video first."}</Empty></Card>}
+    {!list.isLoading && !job && <Card><Empty icon="check" title="Nothing to review">{approval ? (PODCASTS ? "Clips appear here once a new podcast has been analysed, cut and captioned." : "New short videos appear here once they are downloaded, edited and captioned.") : "Require approval is off, so new videos go straight to publishing. Turn it on above to check each video first."}</Empty></Card>}
     {job && <div className="review-layout">
       <Card className="review-list">{queue.map(j => <button key={j.id} className={j.id === job.id ? "active" : ""} onClick={() => setCurrentId(j.id)}><VideoThumb index={j.id} image={j.video.thumbnail_url}/><div><strong>{j.video.original_title || "Untitled"}</strong><span>{j.video.channel?.display_name ?? "—"} · {relativeTime(j.created_at, { suffix: true })}</span></div></button>)}</Card>
       <Card className="review-main">
@@ -109,8 +110,11 @@ export default function ReviewQueue() {
         <div className="review-form">
           <div className="review-meta">
             <span>Source channel</span><strong>{job.video.channel?.display_name ?? "—"}</strong>
-            <span>Original title</span><div style={{ whiteSpace: "normal" }}>{job.video.original_title}</div>
-            <span>YouTube</span><div>{job.video.permalink ? <a href={job.video.permalink} target="_blank" rel="noreferrer">Open the original video</a> : "—"} · {duration(job.video.duration_sec)}</div>
+            {job.video.clip
+              ? <><span>Podcast</span><div style={{ whiteSpace: "normal" }}>{job.video.clip.podcast_title}</div>
+                <span>Clip</span><div>{timecode(job.video.clip.start)} – {timecode(job.video.clip.end)} · “{job.video.original_title}”</div></>
+              : <><span>Original title</span><div style={{ whiteSpace: "normal" }}>{job.video.original_title}</div></>}
+            <span>YouTube</span><div>{job.video.permalink ? <a href={job.video.permalink} target="_blank" rel="noreferrer">{job.video.clip ? "Open the podcast at this moment" : "Open the original video"}</a> : "—"} · {duration(job.video.duration_sec)}</div>
             <span>Post to</span><div><select className="cell-select" value={accountId} onChange={e => setAccountId(e.target.value)}><option value="">No account yet (waits)</option>{(accounts.data?.items ?? []).map(a => <option key={a.id} value={a.id}>@{a.username}</option>)}</select></div>
           </div>
           {job.caption_fallback && <div className="fallback-note"><strong>Caption fallback.</strong> The AI model failed for this video, so the original YouTube title and the default hashtags are shown. Edit them before publishing.</div>}

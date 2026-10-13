@@ -25,6 +25,9 @@ export type Video = {
   files_deleted_at: string | null;
   skip_reason: string | null;
   forced: boolean;
+  mode: "shorts" | "podcasts";
+  /** Set on a clip cut from a podcast. */
+  clip: { start: number; end: number; podcast_id: number; podcast_title: string; podcast_url: string | null } | null;
   thumbnail_url: string | null;
   posted_at: string | null;
   original_title: string;
@@ -38,7 +41,7 @@ export type Video = {
 
 export type JobStatus =
   | "fetched" | "downloading" | "rendering" | "rewriting" | "awaiting_approval" | "ready" | "uploading" | "posted"
-  | "monitoring" | "clean" | "violated" | "failed" | "cancelled";
+  | "monitoring" | "clean" | "violated" | "failed" | "cancelled" | "clipped";
 
 export type Job = {
   id: number;
@@ -78,7 +81,7 @@ export type Summary = {
   unacknowledged_violations: number;
   recent_activity: ActivityLog[];
   timezone: string;
-  rejections: { items: Video[]; removed_today: number; acceptance_rate: number | null; max_duration_seconds: number };
+  rejections: { items: Video[]; removed_today: number; acceptance_rate: number | null; max_duration_seconds: number | null; min_source_duration_seconds: number | null };
   accounts: (Ref & { posts_today: number; lifetime_posts: number })[];
 };
 
@@ -220,7 +223,7 @@ export type Channel = ChannelRef & {
   videos_skipped: number;
   override_count: number;
 };
-export type ChannelCard = { youtube_channel_id: string; display_name: string; handle: string | null; thumbnail_url: string | null; url: string; already_added: boolean };
+export type ChannelCard = { youtube_channel_id: string; display_name: string; handle: string | null; thumbnail_url: string | null; url: string; already_added: boolean; added_in: "shorts" | "podcasts" | null; added_by: string | null };
 
 export type RuleValue = boolean | number | string;
 export type RuleValues = Record<string, RuleValue>;
@@ -230,3 +233,14 @@ export type RuleDef = {
 };
 export type RuleChange = { id: number; key: string; label: string; channel_id: number | null; channel_name: string | null; old_value: RuleValue | null; new_value: RuleValue | null; changed_by: string | null; changed_at: string };
 export type ChannelRules = { overrides: RuleValues; effective: RuleValues; global: RuleValues };
+
+export type StatusItem = {
+  id: number; video_id: number; title: string; channel: string | null; thumbnail_url: string | null; permalink: string | null; duration_sec: number | null;
+  progress: number | null; since: string; attempts: number; note: string | null; retry_at: string | null; podcast: boolean;
+  clip: { start: number; end: number; podcast_title: string } | null; tiktok_account: Ref | null;
+};
+export type PipelineStatus = {
+  mode: "shorts" | "podcasts"; timezone: string; podcasts_analysing: number;
+  today: { total: number; downloaded: number; download_left: number; edited: number; edit_left: number; uploaded: number; upload_left: number; failed: number };
+  stages: { key: string; label: string; total: number; items: StatusItem[] }[];
+};

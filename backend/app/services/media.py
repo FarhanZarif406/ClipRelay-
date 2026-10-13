@@ -5,6 +5,9 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -76,16 +79,41 @@ def atempo_chain(speed: float) -> str:
     return ",".join(parts)
 
 
-def render_command(src: str, dst: str, *, speed: float, flip: bool, keep_audio: bool, has_audio: bool) -> list[str]:
+VERTICAL = (1080, 1920)
+
+
+def framing_filters(framing: str, width: int | None, height: int | None) -> tuple[list[str], str | None]:
+    """How a (usually wide) picture becomes a vertical 9:16 clip. Returns (simple filters, or a filter graph).
+
+    crop: the middle of the picture fills the screen. blur: the whole picture over a blurred copy of itself.
+    A picture that is already vertical, or `original`, is left alone.
+    """
+    w, h = VERTICAL
+    if framing == "original" or not width or not height or width * 16 <= height * 9:
+        return [], None
+    if framing == "blur":
+        graph = (
+            f"[0:v]split=2[a][b];[a]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},boxblur=24:4[bg];"
+            f"[b]scale={w}:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2"
+        )
+        return [], graph
+    return ["crop=trunc(ih*9/16/2)*2:ih", f"scale={w}:{h}"], None
+
+
+def render_command(src: str, dst: str, *, speed: float, flip: bool, keep_audio: bool, has_audio: bool, framing: str = "original", width: int | None = None, height: int | None = None) -> list[str]:
     """Build the FFmpeg command. Streams that need no change are copied, not re-encoded."""
     faster = abs(speed - 1.0) > 1e-6
-    filters = (["hflip"] if flip else []) + ([f"setpts=PTS/{speed:.4f}"] if faster else [])
-    cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y", "-i", src, "-map", "0:v:0"]
-    if filters:
-        # Same resolution and frame rate as the source; CRF 20 leaves headroom for TikTok's own re-encode.
-        cmd += ["-vf", ",".join(filters), "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p"]
+    frame, graph = framing_filters(framing, width, height)
+    filters = frame + (["hflip"] if flip else []) + ([f"setpts=PTS/{speed:.4f}"] if faster else [])
+    cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y", "-i", src]
+    # CRF 20 leaves headroom for TikTok's own re-encode. Without a filter the picture is copied untouched.
+    encode = ["-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p"]
+    if graph:
+        cmd += ["-filter_complex", graph + "".join(f",{f}" for f in filters) + "[v]", "-map", "[v]", *encode]
+    elif filters:
+        cmd += ["-map", "0:v:0", "-vf", ",".join(filters), *encode]
     else:
-        cmd += ["-c:v", "copy"]
+        cmd += ["-map", "0:v:0", "-c:v", "copy"]
     if keep_audio and has_audio:
         cmd += ["-map", "0:a:0"]
         cmd += ["-af", atempo_chain(speed), "-c:a", "aac", "-b:a", "192k"] if faster else ["-c:a", "copy"]
@@ -105,7 +133,34 @@ def _ffmpeg_message(stderr: str) -> str:
     return text[:300]
 
 
-def render(src: str, *, speed: float, flip: bool, keep_audio: bool) -> str:
+Progress = Callable[[float], None]  # called with 0–100
+
+
+def _run(cmd: list[str], seconds: float, on_progress: Progress | None, timeout: float) -> tuple[int, str]:
+    """Run FFmpeg and return (exit code, error text). With `on_progress`, reports how much of the output is written."""
+    if on_progress is None or seconds <= 0:
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout)
+        return result.returncode, result.stderr
+    proc = subprocess.Popen(cmd[:1] + ["-progress", "pipe:1", "-nostats"] + cmd[1:], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
+    errors: list[str] = []
+    reader = threading.Thread(target=lambda: errors.append(proc.stderr.read()), daemon=True)
+    reader.start()
+    deadline = time.monotonic() + timeout
+    for line in proc.stdout:
+        if line.startswith(("out_time_us=", "out_time_ms=")):  # both are microseconds
+            try:
+                on_progress(min(99.0, int(line.split("=", 1)[1]) / 1_000_000 / seconds * 100))
+            except ValueError:
+                pass
+        if time.monotonic() > deadline:
+            proc.kill()
+            raise subprocess.TimeoutExpired(cmd, timeout)
+    proc.wait()
+    reader.join(5)
+    return proc.returncode, "".join(errors)
+
+
+def render(src: str, *, speed: float, flip: bool, keep_audio: bool, framing: str = "original", on_progress: Progress | None = None) -> str:
     """Apply the edits to `src` and return the path of a new temporary MP4 (H.264 / AAC)."""
     try:
         info = probe(src)
@@ -113,16 +168,16 @@ def render(src: str, *, speed: float, flip: bool, keep_audio: bool) -> str:
         raise RenderError(str(exc)) from exc
     fd, dst = tempfile.mkstemp(suffix=".mp4")
     os.close(fd)
-    cmd = render_command(src, dst, speed=speed, flip=flip, keep_audio=keep_audio, has_audio=info.has_audio)
+    cmd = render_command(src, dst, speed=speed, flip=flip, keep_audio=keep_audio, has_audio=info.has_audio, framing=framing, width=info.width, height=info.height)
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=1800)
+        code, errors = _run(cmd, info.duration / max(speed, 0.01), on_progress, 1800)
     except FileNotFoundError as exc:
         os.remove(dst)
         raise RenderError("FFmpeg was not found — install FFmpeg on the server") from exc
     except subprocess.TimeoutExpired as exc:
         os.remove(dst)
         raise RenderError("Rendering took longer than 30 minutes and was stopped") from exc
-    if result.returncode != 0 or os.path.getsize(dst) == 0:
+    if code != 0 or os.path.getsize(dst) == 0:
         os.remove(dst)
-        raise RenderError(_ffmpeg_message(result.stderr))
+        raise RenderError(_ffmpeg_message(errors))
     return dst

@@ -15,6 +15,8 @@ import { useTheme } from "@/hooks/useTheme";
 import { initialsOf } from "@/lib/format";
 
 const TABS = ["Pipeline rules", "Channel overrides", "TikTok accounts", "Change history", "API keys", "AI models", "Notifications", "Team members", "Appearance"] as const;
+/** Tabs only the admin sees: API keys and everything else that belongs to the whole workspace. */
+const ADMIN_TABS: readonly string[] = ["API keys", "AI models", "Notifications", "Team members"];
 type Tab = (typeof TABS)[number];
 
 function TikTokAuditToggle() {
@@ -106,14 +108,18 @@ function Team() {
 export default function Settings() {
   const { user } = useAuth();
   const [params] = useSearchParams();
-  const [tab, setTab] = useState<Tab>(params.get("tab") === "keys" ? "API keys" : "Pipeline rules");
-  return <><PageHeader title="Settings" description="Pipeline rules, channel overrides, TikTok accounts, integrations and team access."/><div className="settings-layout"><div className="settings-nav">{TABS.map(x => <button className={tab === x ? "active" : ""} key={x} onClick={() => setTab(x)}>{x}</button>)}</div><div className="settings-content">
+  const isAdmin = user?.role === "owner";
+  const tabs = TABS.filter(x => isAdmin || !ADMIN_TABS.includes(x));
+  const wanted: Tab = params.get("tab") === "keys" ? "API keys" : "Pipeline rules";
+  const [chosen, setTab] = useState<Tab>(wanted);
+  const tab: Tab = tabs.includes(chosen) ? chosen : "Pipeline rules";
+  return <><PageHeader title="Settings" description={isAdmin ? "Your own rules and accounts, plus the workspace's API keys, AI models and team." : "Your own rules, channel overrides and TikTok accounts. They apply only to your channels."}/><div className="settings-layout"><div className="settings-nav">{tabs.map(x => <button className={tab === x ? "active" : ""} key={x} onClick={() => setTab(x)}>{x}</button>)}</div><div className="settings-content">
     {tab === "Pipeline rules" && <>
       <Card><div className="card-title">Set in one place</div><div className="card-caption">These are not repeated here, so there is only one place to change each of them.</div>
         <div className="api-row"><div><strong>Speed, flip and audio</strong><span>The edit every video gets</span></div><Link className="button secondary" to="/editing">Open Editing Rules</Link></div>
         <div className="api-row"><div><strong>Caption prompt</strong><span>What the AI model is asked to write</span></div><Link className="button secondary" to="/prompts">Open Prompt Studio</Link></div>
         <div className="api-row"><div><strong>Require approval</strong><span>Review each video, or publish automatically</span></div><Link className="button secondary" to="/review">Open Review Queue</Link></div></Card>
-      <GlobalRules groups={["Detection", "Publishing", "Caption", "Storage"]} hideKeys={["approval_required"]} caption="Global defaults. Nothing is hardcoded: a change applies to the next video, with no restart. A channel can override most of them under “Channel overrides”."/>
+      <GlobalRules groups={["Detection", "Publishing", "Caption", "Storage"]} hideKeys={["approval_required"]} caption="Your own defaults: they apply to your channels only, not to other members. A change applies to the next video, with no restart. One of your channels can override most of them under “Channel overrides”."/>
     </>}
     {tab === "Channel overrides" && <ChannelOverrides/>}
     {tab === "TikTok accounts" && <TikTokSummary/>}

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.integrations import youtube
 from app.integrations.http import ApiError
-from app.models import Channel, Job, SkipReason, TikTokAccount, Video, VideoStatus, utcnow
+from app.models import Channel, Job, Mode, SkipReason, TikTokAccount, Video, VideoStatus, utcnow
 from app.services import activity, pipeline, rules
 
 log = logging.getLogger(__name__)
@@ -27,14 +27,28 @@ def _skip(db: Session, video: Video, code: str, reason: str) -> Video:
     video.status = VideoStatus.SKIPPED
     video.skip_reason = code
     video.rejection_reason = reason
-    activity.record(db, "Filter", f"Video #{video.id} skipped ({code}): {reason}", level="warning", event="video_skipped", payload={"video_id": video.id, "reason": code})
+    activity.record(db, "Filter", f"Video #{video.id} skipped ({code}): {reason}", level="warning", event="video_skipped", payload={"video_id": video.id, "reason": code}, user_id=video.user_id)
     return video
 
 
 def _check(db: Session, video: Video, channel: Channel, account: TikTokAccount | None) -> tuple[str, str] | None:
     """The short-form and cap checks, counted against the videos table inside the caller's transaction."""
-    values = rules.effective(db, channel.id)
+    values = rules.effective(db, channel.id, channel.mode, channel.user_id)
     duration = video.duration_sec or 0
+    since = pipeline.cap_day_start(values["cap_reset_timezone"])
+    taken = db.scalar(
+        select(func.count(Video.id)).where(
+            Video.channel_id == channel.id, Video.id != video.id, Video.parent_id.is_(None), Video.status == VideoStatus.ACCEPTED, Video.created_at >= since
+        )
+    ) or 0
+    if channel.mode == Mode.PODCASTS:
+        # The opposite of Shorts: only long videos are podcasts. Account caps are applied to each clip when it uploads.
+        shortest = values["min_source_duration_seconds"]
+        if duration < shortest:
+            return SkipReason.NOT_PODCAST, f"Too short for a podcast: {duration:.0f}s, under the {shortest}s minimum"
+        if taken >= values["videos_per_channel_per_day"]:
+            return SkipReason.CHANNEL_CAP, f"{channel.display_name} already has {taken} podcasts today (limit {values['videos_per_channel_per_day']})"
+        return None
     # Short-form = up to the maximum duration from Settings, or anything YouTube itself lists as a Short.
     limit = values["max_duration_seconds"]
     if duration > limit and not youtube.is_short(video.youtube_video_id):
@@ -42,12 +56,6 @@ def _check(db: Session, video: Video, channel: Channel, account: TikTokAccount |
     if duration < values["min_duration_seconds"]:
         return SkipReason.TOO_SHORT, f"Duration {duration:.0f}s is under the {values['min_duration_seconds']}s minimum"
 
-    since = pipeline.cap_day_start(values["cap_reset_timezone"])
-    taken = db.scalar(
-        select(func.count(Video.id)).where(
-            Video.channel_id == channel.id, Video.id != video.id, Video.status == VideoStatus.ACCEPTED, Video.created_at >= since
-        )
-    ) or 0
     if taken >= values["videos_per_channel_per_day"]:
         return SkipReason.CHANNEL_CAP, f"{channel.display_name} already has {taken} videos today (limit {values['videos_per_channel_per_day']})"
     if account is not None:
@@ -74,7 +82,7 @@ def discover(db: Session, channel: Channel, video_id: str, *, meta: youtube.Vide
         return None  # uploaded before monitoring started — only new uploads are republished
 
     video = Video(
-        channel_id=channel.id, youtube_video_id=video_id, permalink=meta.url, thumbnail_url=meta.thumbnail_url,
+        channel_id=channel.id, mode=channel.mode, user_id=channel.user_id, youtube_video_id=video_id, permalink=meta.url, thumbnail_url=meta.thumbnail_url,
         posted_at=meta.published_at, original_title=meta.title[:500], original_caption=meta.description,
         original_tags=[str(tag).lstrip("#") for tag in meta.tags][:50], duration_sec=round(meta.duration_seconds, 2),
     )
@@ -93,12 +101,15 @@ def discover(db: Session, channel: Channel, video_id: str, *, meta: youtube.Vide
         raise
     if meta.published_at and (channel.last_upload_at is None or meta.published_at > channel.last_upload_at):
         channel.last_upload_at = meta.published_at
-    activity.record(db, "Detection", f"Video #{video.id} detected on {channel.display_name}: “{meta.title[:60]}” ({video_id})", event="video_detected", payload={"video_id": video.id})
+    activity.record(db, "Detection", f"Video #{video.id} detected on {channel.display_name}: “{meta.title[:60]}” ({video_id})", event="video_detected", payload={"video_id": video.id}, user_id=video.user_id)
 
     if failed:
         return _skip(db, video, *failed)
     video.status = VideoStatus.ACCEPTED
-    pipeline.create_job(db, video, pipeline.pick_account(db, video))
+    if video.is_podcast_source:
+        pipeline.create_podcast_job(db, video)
+    else:
+        pipeline.create_job(db, video, pipeline.pick_account(db, video))
     return video
 
 
@@ -109,7 +120,7 @@ def process_anyway(db: Session, video: Video) -> Job:
     video.status = VideoStatus.ACCEPTED
     video.forced = True
     video.skip_reason = video.rejection_reason = None
-    job = pipeline.create_job(db, video, pipeline.pick_account(db, video))
+    job = pipeline.create_podcast_job(db, video) if video.is_podcast_source else pipeline.create_job(db, video, pipeline.pick_account(db, video))
     activity.record(db, "Detection", f"Video #{video.id} processed by hand", event="video_forced", job_id=job.id)
     return job
 
@@ -117,7 +128,7 @@ def process_anyway(db: Session, video: Video) -> Job:
 def poll_channel(db: Session, channel: Channel) -> list[Video]:
     """Polling fallback: read the channel's uploads feed so a missed push never means a missed video."""
     now = utcnow()
-    interval = int(rules.global_values(db)["poll_interval_minutes"])
+    interval = int(rules.global_values(db, user_id=channel.user_id)["poll_interval_minutes"])
     channel.last_checked_at = now
     channel.next_poll_at = now + timedelta(minutes=interval)
     try:
@@ -169,7 +180,7 @@ def subscribe(db: Session, channel: Channel) -> bool:
         youtube.subscribe(channel.youtube_channel_id)
     except ApiError as exc:
         channel.pubsub_error = str(exc)[:500]
-        activity.record(db, "Detection", f"Push subscription failed for {channel.display_name}: {exc}", level="warning", event="pubsub_failed")
+        activity.record(db, "Detection", f"Push subscription failed for {channel.display_name}: {exc}", level="warning", event="pubsub_failed", user_id=channel.user_id)
         return False
     channel.pubsub_error = None
     return True

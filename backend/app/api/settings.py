@@ -7,11 +7,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from app.api.deps import DB, CurrentUser, OwnerUser
+from app.api.deps import DB, CurrentUser, OwnerUser, Workspace
 from app.config import get_settings
 from app.integrations import llm, tiktok, youtube
 from app.integrations.http import ApiError
-from app.models import TikTokAccount, TikTokStatus
+from app.models import Mode, TikTokAccount, TikTokStatus
 from app.schemas import AuditIn, NotificationsIn, PolicyIn
 from app.services import activity, credentials, mailer, media, notify, rules, workspace_settings
 from app.services.storage import get_storage
@@ -31,28 +31,28 @@ class RulesIn(BaseModel):
 
 
 @router.get("/rules")
-def get_rules(db: DB, _: CurrentUser):
-    """The pipeline rules: what each one is, and its current global value."""
-    return {"definitions": rules.describe(), "values": rules.global_values(db)}
+def get_rules(db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
+    """The signed-in member's own rules for one workspace: what each one is, and its current value."""
+    return {"definitions": rules.describe(mode), "values": rules.global_values(db, mode, user.id)}
 
 
 @router.put("/rules")
-def put_rules(body: RulesIn, db: DB, user: CurrentUser):
+def put_rules(body: RulesIn, db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
     """Change global rules. They apply to the next job; a null value resets a rule to its default."""
     try:
-        changes = rules.set_values(db, body.values, user=user)
+        changes = rules.set_values(db, body.values, user=user, mode=mode)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     if changes:
-        activity.record(db, "Settings", f"{user.email} changed {', '.join(c.key for c in changes)}", event="rules_updated")
+        activity.record(db, "Settings", f"{user.email} changed {', '.join(c.key for c in changes)}", event="rules_updated", user_id=user.id)
     db.commit()
-    return {"definitions": rules.describe(), "values": rules.global_values(db)}
+    return {"definitions": rules.describe(mode), "values": rules.global_values(db, mode, user.id)}
 
 
 @router.get("/rules/history")
-def rules_history(db: DB, _: CurrentUser, channel_id: int | None = None, limit: int = 50):
-    """Who changed which rule, and when."""
-    return rules.history(db, channel_id=channel_id, limit=min(max(limit, 1), 200))
+def rules_history(db: DB, user: CurrentUser, channel_id: int | None = None, limit: int = 50, mode: Workspace = Mode.SHORTS):
+    """The member's own rule changes, and when they were made."""
+    return rules.history(db, channel_id=channel_id, limit=min(max(limit, 1), 200), mode=mode, user_id=user.id)
 
 
 @router.get("/policy")
@@ -61,7 +61,7 @@ def get_policy(db: DB, _: CurrentUser):
 
 
 @router.put("/policy")
-def put_policy(body: PolicyIn, db: DB, _: CurrentUser):
+def put_policy(body: PolicyIn, db: DB, _: OwnerUser):
     return _save(db, "policy", body)
 
 
@@ -76,12 +76,12 @@ def put_audit(body: AuditIn, db: DB, _: CurrentUser):
 
 
 @router.get("/notifications")
-def get_notifications(db: DB, _: CurrentUser):
+def get_notifications(db: DB, _: OwnerUser):
     return workspace_settings.get(db, "notifications")
 
 
 @router.put("/notifications")
-def put_notifications(body: NotificationsIn, db: DB, _: CurrentUser):
+def put_notifications(body: NotificationsIn, db: DB, _: OwnerUser):
     return _save(db, "notifications", body)
 
 
@@ -159,8 +159,8 @@ def _mask(value: str, prefix: int = 6) -> str:
 
 
 @router.get("/integrations")
-def integrations(user: CurrentUser):
-    """Status of every integration. Masked values are only included for owners."""
+def integrations(user: OwnerUser):
+    """Status of every integration. Admin only: members never see the API keys section."""
     s = get_settings()
     tt_key = credentials.get("tiktok.client_key")
     llm_cfg = llm.resolve()

@@ -11,14 +11,17 @@ def _card(client, headers, group):
     return next(c for c in client.get("/api/credentials", headers=headers).json() if c["group"] == group)
 
 
-def test_member_sees_status_only_and_cannot_write(client, auth, member_auth):
-    card = _card(client, member_auth, "tiktok")
-    assert card["configured"] is True and "fields" not in card and "redirect_uri" not in card
+def test_api_keys_are_for_the_admin_only(client, auth, member_auth):
+    # A member cannot see the API keys section at all, let alone change it.
+    assert client.get("/api/credentials", headers=member_auth).status_code == 403
+    assert client.get("/api/settings/integrations", headers=member_auth).status_code == 403
     assert client.put("/api/credentials/tiktok", headers=member_auth, json={"values": {"client_key": "x"}}).status_code == 403
     assert client.post("/api/credentials/tiktok/validate", headers=member_auth, json={}).status_code == 403
     assert client.delete("/api/credentials/tiktok", headers=member_auth).status_code == 403
-    integrations = client.get("/api/settings/integrations", headers=member_auth).json()
-    assert all(i["masked"] in ("Configured", "Needs setup") for i in integrations)
+    assert client.post("/api/settings/integrations/ffmpeg/test", headers=member_auth).status_code == 403
+    assert client.put("/api/settings/notifications", headers=member_auth, json={"email": "x@example.com"}).status_code == 403
+    card = _card(client, auth, "tiktok")
+    assert card["configured"] is True and "fields" in card
 
 
 def test_owner_card_masks_secrets_and_shows_redirect(client, auth):

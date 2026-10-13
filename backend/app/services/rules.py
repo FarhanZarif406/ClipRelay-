@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Channel, RuleChange, RuleSetting, User
+from app.models import Channel, Mode, RuleChange, RuleSetting, User, Video
 
 
 @dataclass(frozen=True)
@@ -48,10 +48,43 @@ RULES: dict[str, Rule] = {
     "poll_interval_minutes": Rule("int", 5, "Polling interval (minutes)", "How often each channel's uploads are checked, in case a push notification is missed.", "Detection", 1, 1440, per_channel=False),
 }
 
+# The Podcasts workspace has its own rules. They are stored under a "podcast." prefix, so the two
+# workspaces never share a value. A few plumbing settings (timezone, publish mode, polling, retention)
+# are not repeated: Podcasts reads them from the Shorts rules above.
+PODCAST_PREFIX = "podcast."
+SHARED_WITH_PODCASTS = ("cap_reset_timezone", "publish_mode", "poll_interval_minutes", "file_retention_days")
+PODCAST_RULES: dict[str, Rule] = {
+    "clips_per_video": Rule("int", 3, "Clips per podcast", "How many short clips are cut from each podcast.", "Clips", 1, 10),
+    "clip_min_seconds": Rule("int", 30, "Shortest clip (seconds)", "A clip is never shorter than this.", "Clips", 10, 300),
+    "clip_max_seconds": Rule("int", 60, "Longest clip (seconds)", "A clip is never longer than this.", "Clips", 15, 600),
+    "framing": Rule(
+        "choice", "crop", "Frame",
+        "crop: the middle of the picture fills a vertical 9:16 screen. blur: the whole picture with a blurred background. original: left as it is.",
+        "Editing", choices=("crop", "blur", "original"),
+    ),
+    "speed": Rule("float", 1.0, "Speed", "Video and audio are sped up together. 1.0 leaves the speed unchanged.", "Editing", 1.0, 1.5),
+    "horizontal_flip": Rule("bool", False, "Horizontal flip", "Mirror the clip left to right.", "Editing"),
+    "keep_audio": Rule("bool", True, "Keep audio", "Keep the original sound. Off removes it.", "Editing"),
+    "min_source_duration_seconds": Rule("int", 300, "Shortest podcast (seconds)", "Uploads shorter than this are not podcasts and are skipped.", "Detection", 60, 14400),
+    "videos_per_channel_per_day": Rule("int", 2, "Podcasts per channel per day", "Further podcasts from the same channel are held as skipped.", "Detection", 1, 50),
+    "approval_required": Rule("bool", True, "Require approval", "On: every clip waits in the review queue. Off: clips are published straight away.", "Publishing", per_channel=False),
+    "uploads_per_tiktok_account_per_day": Rule("int", 7, "Uploads per TikTok account per day", "Applies to every podcast account that has no cap of its own.", "Publishing", 1, 100, per_channel=False),
+    "hashtag_count": Rule("int", 8, "Hashtag count", "How many hashtags a caption gets.", "Caption", 0, 15),
+    "fallback_hashtags": Rule("text", "podcast clips fyp foryou viral", "Fallback hashtags", "Used with the clip title when the AI model fails.", "Caption", max=500),
+}
 
-def clean(key: str, value: Any) -> Any:
+
+def registry(mode: str = Mode.SHORTS) -> dict[str, Rule]:
+    return PODCAST_RULES if mode == Mode.PODCASTS else RULES
+
+
+def _stored(key: str, mode: str) -> str:
+    return PODCAST_PREFIX + key if mode == Mode.PODCASTS else key
+
+
+def clean(key: str, value: Any, mode: str = Mode.SHORTS) -> Any:
     """Validate one value and return it in its stored form. Raises ValueError with a readable message."""
-    rule = RULES.get(key)
+    rule = registry(mode).get(key)
     if rule is None:
         raise ValueError(f"Unknown setting {key!r}")
     if rule.kind == "bool":
@@ -85,62 +118,94 @@ def clean(key: str, value: Any) -> Any:
     return value
 
 
-def _rows(db: Session, channel_id: int | None) -> dict[str, RuleSetting]:
-    condition = RuleSetting.channel_id.is_(None) if channel_id is None else RuleSetting.channel_id == channel_id
-    return {row.key: row for row in db.scalars(select(RuleSetting).where(condition)) if row.key in RULES}
+def _rows(db: Session, channel_id: int | None, mode: str = Mode.SHORTS, user_id: int | None = None) -> dict[str, RuleSetting]:
+    """Stored rows of one workspace, by rule key (without the storage prefix).
+
+    Global rows belong to one member (`user_id`); a channel's overrides belong to the channel.
+    """
+    if channel_id is None:
+        condition = RuleSetting.channel_id.is_(None) & (RuleSetting.user_id == user_id)  # `== None` renders IS NULL
+    else:
+        condition = RuleSetting.channel_id == channel_id
+    known = registry(mode)
+    out = {}
+    for row in db.scalars(select(RuleSetting).where(condition)):
+        podcast = row.key.startswith(PODCAST_PREFIX)
+        key = row.key[len(PODCAST_PREFIX):] if podcast else row.key
+        if podcast == (mode == Mode.PODCASTS) and key in known:
+            out[key] = row
+    return out
 
 
-def global_values(db: Session) -> dict[str, Any]:
+def global_values(db: Session, mode: str = Mode.SHORTS, user_id: int | None = None) -> dict[str, Any]:
+    """One member's own rules. A member who has changed nothing has the built-in defaults."""
     values = {key: rule.default for key, rule in RULES.items()}
-    values.update({key: row.value for key, row in _rows(db, None).items()})
+    values.update({key: row.value for key, row in _rows(db, None, Mode.SHORTS, user_id).items()})
+    if mode == Mode.PODCASTS:
+        shared = {key: values[key] for key in SHARED_WITH_PODCASTS}
+        values = {**shared, **{key: rule.default for key, rule in PODCAST_RULES.items()}}
+        values.update({key: row.value for key, row in _rows(db, None, mode, user_id).items()})
     return values
 
 
-def channel_overrides(db: Session, channel_id: int) -> dict[str, Any]:
-    return {key: row.value for key, row in _rows(db, channel_id).items() if RULES[key].per_channel}
+def channel_overrides(db: Session, channel_id: int, mode: str = Mode.SHORTS) -> dict[str, Any]:
+    known = registry(mode)
+    return {key: row.value for key, row in _rows(db, channel_id, mode).items() if known[key].per_channel}
 
 
-def effective(db: Session, channel_id: int | None = None) -> dict[str, Any]:
-    """The rules that apply to one channel: its overrides on top of the global values."""
-    values = global_values(db)
+def effective(db: Session, channel_id: int | None = None, mode: str = Mode.SHORTS, user_id: int | None = None) -> dict[str, Any]:
+    """The rules that apply to one channel: its overrides on top of its member's own values."""
+    values = global_values(db, mode, user_id)
     if channel_id is not None:
-        values.update(channel_overrides(db, channel_id))
+        values.update(channel_overrides(db, channel_id, mode))
     return values
 
 
-def set_values(db: Session, changes: dict[str, Any], *, channel: Channel | None = None, user: User | None = None) -> list[RuleChange]:
-    """Apply changes. A value of None removes a channel override, or resets a global value to its default."""
+def for_video(db: Session, video: Video) -> dict[str, Any]:
+    """The rules that apply to one video: those of its workspace and its channel."""
+    return effective(db, video.channel_id, video.mode, video.user_id)
+
+
+def set_values(db: Session, changes: dict[str, Any], *, channel: Channel | None = None, user: User | None = None, mode: str | None = None) -> list[RuleChange]:
+    """Apply changes to `user`'s own rules (or to one of their channels).
+
+    A value of None removes a channel override, or resets a global value to its default.
+    """
+    mode = mode or (channel.mode if channel else Mode.SHORTS)
+    owner = channel.user_id if channel else (user.id if user else None)
+    known = registry(mode)
     cleaned = {}
     for key, value in changes.items():
-        rule = RULES.get(key)
+        rule = known.get(key)
         if rule is None:
             raise ValueError(f"Unknown setting {key!r}")
         if channel is not None and not rule.per_channel:
             raise ValueError(f"{rule.label} can only be set globally")
-        cleaned[key] = None if value is None else clean(key, value)
-    if {"min_duration_seconds", "max_duration_seconds"} & cleaned.keys():
-        merged = {**effective(db, channel.id if channel else None), **{k: v for k, v in cleaned.items() if v is not None}}
-        if merged["min_duration_seconds"] >= merged["max_duration_seconds"]:
-            raise ValueError("Minimum duration must be lower than maximum duration")
+        cleaned[key] = None if value is None else clean(key, value, mode)
+    merged = {**effective(db, channel.id if channel else None, mode, owner), **{k: v for k, v in cleaned.items() if v is not None}}
+    if {"min_duration_seconds", "max_duration_seconds"} & cleaned.keys() and merged["min_duration_seconds"] >= merged["max_duration_seconds"]:
+        raise ValueError("Minimum duration must be lower than maximum duration")
+    if {"clip_min_seconds", "clip_max_seconds"} & cleaned.keys() and merged["clip_min_seconds"] > merged["clip_max_seconds"]:
+        raise ValueError("The shortest clip cannot be longer than the longest clip")
 
     channel_id = channel.id if channel else None
-    rows = _rows(db, channel_id)
+    rows = _rows(db, channel_id, mode, owner)
     recorded = []
     for key, value in cleaned.items():
         row = rows.get(key)
         # For the audit trail, "no row" reads as the default (global) or as None = inherits (channel).
-        old = row.value if row else (RULES[key].default if channel is None else None)
-        new = value if value is not None or channel is not None else RULES[key].default
+        old = row.value if row else (known[key].default if channel is None else None)
+        new = value if value is not None or channel is not None else known[key].default
         if value is None:
             if row:
                 db.delete(row)
         elif row:
             row.value, row.updated_by = value, user.id if user else None
         else:
-            db.add(RuleSetting(key=key, value=value, scope="channel" if channel else "global", channel_id=channel_id, updated_by=user.id if user else None))
+            db.add(RuleSetting(key=_stored(key, mode), value=value, scope="channel" if channel else "global", channel_id=channel_id, user_id=owner, updated_by=user.id if user else None))
         if old != new:
             change = RuleChange(
-                key=key, channel_id=channel_id, channel_name=channel.display_name if channel else None,
+                key=_stored(key, mode), channel_id=channel_id, channel_name=channel.display_name if channel else None, user_id=owner,
                 old_value=old, new_value=new, changed_by=user.id if user else None, changed_by_email=user.email if user else None,
             )
             db.add(change)
@@ -149,25 +214,29 @@ def set_values(db: Session, changes: dict[str, Any], *, channel: Channel | None 
     return recorded
 
 
-def history(db: Session, *, channel_id: int | None = None, limit: int = 50) -> list[dict]:
-    stmt = select(RuleChange).order_by(RuleChange.id.desc()).limit(limit)
+def history(db: Session, *, channel_id: int | None = None, limit: int = 50, mode: str = Mode.SHORTS, user_id: int | None = None) -> list[dict]:
+    stmt = select(RuleChange).where(RuleChange.user_id == user_id).order_by(RuleChange.id.desc()).limit(limit)
+    podcast = RuleChange.key.startswith(PODCAST_PREFIX)
+    stmt = stmt.where(podcast if mode == Mode.PODCASTS else ~podcast)
     if channel_id is not None:
         stmt = stmt.where(RuleChange.channel_id == channel_id)
-    return [
-        {
-            "id": c.id, "key": c.key, "label": RULES[c.key].label if c.key in RULES else c.key,
+    known = registry(mode)
+    out = []
+    for c in db.scalars(stmt):
+        key = c.key.removeprefix(PODCAST_PREFIX)
+        out.append({
+            "id": c.id, "key": key, "label": known[key].label if key in known else key,
             "channel_id": c.channel_id, "channel_name": c.channel_name, "old_value": c.old_value, "new_value": c.new_value,
             "changed_by": c.changed_by_email, "changed_at": c.changed_at,
-        }
-        for c in db.scalars(stmt)
-    ]
+        })
+    return out
 
 
-def describe() -> list[dict]:
+def describe(mode: str = Mode.SHORTS) -> list[dict]:
     return [
         {
             "key": key, "kind": rule.kind, "default": rule.default, "label": rule.label, "help": rule.help, "group": rule.group,
             "min": rule.min, "max": rule.max, "choices": list(rule.choices), "per_channel": rule.per_channel,
         }
-        for key, rule in RULES.items()
+        for key, rule in registry(mode).items()
     ]

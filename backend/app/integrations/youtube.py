@@ -265,6 +265,50 @@ def _video_from_ytdlp(video_id: str) -> VideoMeta:
     )
 
 
+def transcript(video_id: str) -> list[tuple[float, str]]:
+    """What is said in the video, as (start in seconds, text). Empty when the video has no subtitles.
+
+    Uploaded subtitles are preferred over YouTube's automatic ones, in the video's own language.
+    """
+    try:
+        import yt_dlp
+    except ImportError as exc:  # pragma: no cover
+        raise YouTubeError("yt-dlp is not installed on the server") from exc
+    options = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True, "socket_timeout": 30}
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(watch_url(video_id), download=False, process=False)
+    except yt_dlp.utils.DownloadError as exc:
+        raise YouTubeError(f"Could not read YouTube video {video_id}: {str(exc)[:200]}") from exc
+    url = _subtitle_url(info)
+    if not url:
+        return []
+    response = request("GET", url, headers=BROWSER_HEADERS, retries=2)
+    if response.status_code >= 400:
+        raise YouTubeError(f"YouTube returned HTTP {response.status_code} for the subtitles", status=response.status_code)
+    try:
+        events = response.json().get("events", [])
+    except ValueError as exc:
+        raise YouTubeError("YouTube returned subtitles in an unexpected format") from exc
+    out = []
+    for event in events:
+        text = "".join(seg.get("utf8", "") for seg in event.get("segs") or []).replace("\n", " ").strip()
+        if text:
+            out.append((float(event.get("tStartMs", 0)) / 1000, text))
+    return out
+
+
+def _subtitle_url(info: dict) -> str | None:
+    wanted = [info.get("language"), "en", "hi", "ur"]
+    for tracks in (info.get("subtitles") or {}, info.get("automatic_captions") or {}):
+        languages = [code for code in wanted if code and code in tracks] + [code for code in tracks if "-orig" in code] + list(tracks)
+        for code in languages:
+            for track in tracks.get(code) or []:
+                if track.get("ext") == "json3" and track.get("url"):
+                    return track["url"]
+    return None
+
+
 def is_short(video_id: str) -> bool:
     """Whether YouTube itself treats the video as a Short.
 
