@@ -21,7 +21,7 @@ import httpx
 from app.config import get_settings
 from app.integrations import youtube
 from app.models import Video
-from app.services import media
+from app.services import downloader, media
 
 
 log = logging.getLogger(__name__)
@@ -58,8 +58,7 @@ def _readable(message: str) -> str:
 
 
 # Podcast clips: the stream YouTube serves in small pieces (HLS). Only the pieces a clip needs are fetched.
-SECTION_FORMAT = "bv*[protocol^=m3u8][vcodec^=avc1][height<=1080]+ba[protocol^=m3u8]/b[protocol^=m3u8][height<=1080]"
-WHOLE_FORMAT = "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[ext=mp4][height<=1080]/bv*[height<=1080]+ba/b"
+SECTION_FORMAT = "bv*[protocol^=m3u8][vcodec^=avc1]+ba[protocol^=m3u8]/b[protocol^=m3u8]"
 SEGMENT_ATTEMPTS = 6
 _whole_locks: dict[str, threading.Lock] = {}
 _whole_guard = threading.Lock()
@@ -134,9 +133,10 @@ class YtDlpAdapter:
     def download(self, video: Video, on_progress: Progress | None = None) -> str:
         if video.clip_start is not None and video.clip_end is not None and video.parent is not None:
             return self.download_clip(video, on_progress)
-        return self._download_whole(video.permalink or youtube.watch_url(video.youtube_video_id or ""), "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b", on_progress)
+        return self._download_whole(video.permalink or youtube.watch_url(video.youtube_video_id or ""), on_progress)
 
-    def _download_whole(self, url: str, fmt: str, on_progress: Progress | None = None) -> str:
+    def _download_whole(self, url: str, on_progress: Progress | None = None) -> str:
+        """Download a whole video: Full HD first, and when YouTube refuses, by every other way of asking in turn."""
         yt_dlp = self._yt_dlp()
         folder = tempfile.mkdtemp(prefix="cliprelay-src-")
         state = {"video_seen": False, "audio_first": False, "best": 0.0}
@@ -161,15 +161,19 @@ class YtDlpAdapter:
         options = {
             "progress_hooks": [hook],
             "quiet": True, "no_warnings": True, "noprogress": True, "noplaylist": True, "socket_timeout": 30, "retries": 3,
-            "format": fmt,
+            "format": downloader.SOURCE_FORMAT, "format_sort": downloader.FORMAT_SORT, "concurrent_fragment_downloads": 4, "overwrites": True,
             "merge_output_format": "mp4",
             "outtmpl": os.path.join(folder, "source.%(ext)s"),
             "ffmpeg_location": media.ffmpeg_exe(),
         }
-        try:
-            with yt_dlp.YoutubeDL(options) as ydl:
+        def fetch(access: dict) -> None:
+            state.update(video_seen=False, audio_first=False)  # a fresh attempt starts its files again
+            with yt_dlp.YoutubeDL({**options, **access}) as ydl:
                 ydl.download([url])
-        except yt_dlp.utils.DownloadError as exc:
+
+        try:
+            downloader.try_each(fetch)
+        except downloader.DownloaderError as exc:
             raise SourceError(_readable(str(exc))) from exc
         files = [os.path.join(folder, name) for name in os.listdir(folder) if not name.endswith(".part")]
         if not files or os.path.getsize(files[0]) == 0:
@@ -190,16 +194,19 @@ class YtDlpAdapter:
 
     def _clip_from_pieces(self, url: str, start: float, end: float, on_progress: Progress | None = None) -> str:
         yt_dlp = self._yt_dlp()
+        def look_up(access: dict) -> dict:
+            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 30, "format": SECTION_FORMAT, "format_sort": downloader.FORMAT_SORT, **access}) as ydl:
+                return ydl.extract_info(url, download=False)
+
         try:
-            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 30, "format": SECTION_FORMAT}) as ydl:
-                info = ydl.extract_info(url, download=False)
-        except yt_dlp.utils.DownloadError as exc:
+            info = downloader.try_each(look_up)
+        except downloader.DownloaderError as exc:
             raise SourceError(_readable(str(exc))) from exc
         formats = info.get("requested_formats") or [info]
         folder = tempfile.mkdtemp(prefix="cliprelay-pieces-")
         inputs: list[tuple[str, float]] = []
         try:
-            with httpx.Client(timeout=45, headers=info.get("http_headers") or {}, follow_redirects=True) as client:
+            with httpx.Client(timeout=45, headers=info.get("http_headers") or {}, follow_redirects=True, proxy=downloader.proxy() or None) as client:
                 plans = []
                 for fmt in formats:
                     playlist_url = fmt.get("url") or ""
@@ -233,7 +240,7 @@ class YtDlpAdapter:
                     os.remove(old)
         with lock:
             if not os.path.exists(cached):
-                shutil.move(self._download_whole(url, WHOLE_FORMAT, on_progress), cached)
+                shutil.move(self._download_whole(url, on_progress), cached)
         return _cut([(cached, start)], end - start, has_audio_input=False)
 
 

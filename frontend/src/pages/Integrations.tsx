@@ -3,6 +3,7 @@ import { Navigate } from "react-router-dom";
 import { credentials } from "@/api/endpoints";
 import { AIModels } from "@/components/AIModels";
 import { CredentialCard } from "@/components/CredentialCard";
+import { VideoSource } from "@/components/VideoSource";
 import { Card, PageHeader } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 import { OtherIntegrations } from "@/pages/Settings";
@@ -47,7 +48,10 @@ export default function Integrations() {
         <p className="howto" style={{ paddingLeft: 0 }}>Finding channels, detecting new uploads and downloading all work with no key. A YouTube Data API key only makes channel and video lookups faster and more reliable. To get one: open <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noreferrer">Google Cloud Console → YouTube Data API v3</a>, click Enable, then Credentials → Create credentials → API key, and paste it below.</p></Card>
       {youtubeCard && <CredentialCard card={youtubeCard} isOwner={isOwner}/>}
 
-      <div className="section-label">4 · Downloader and editor (already installed)</div>
+      <div className="section-label">4 · Video source (the downloader)</div>
+      <VideoSource/>
+
+      <div className="section-label">5 · Editor and storage (already installed)</div>
       <OtherIntegrations isOwner={isOwner}/>
     </div>
   </>;

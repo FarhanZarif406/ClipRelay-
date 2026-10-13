@@ -1,7 +1,7 @@
-import { api } from "./client";
+import { ApiError, api, apiUrl, getToken } from "./client";
 import type {
   ActivityLog, AuditItem, AuditSettings, Channel, ChannelCard, ChannelRules, CredentialCard, CredentialResult, DailyReport, LLMProvider, LLMProviderList, LLMProviderName, Integration, Job, Nav, NotificationSettings, Page, Policy, Prompt,
-  PipelineStatus, RuleChange, RuleDef, RuleValue, RuleValues, Summary, TikTokAccount, User, Video, Violation,
+  PipelineStatus, SourceDiagnosis, SourceInfo, CookiesInfo, RuleChange, RuleDef, RuleValue, RuleValues, Summary, TikTokAccount, User, Video, Violation,
 } from "./types";
 
 export const auth = {
@@ -133,4 +133,22 @@ export const users = {
   create: (body: { email: string; password: string; name: string }) => api<User>("/users", { method: "POST", body }),
   remove: (id: number) => api<void>(`/users/${id}`, { method: "DELETE" }),
   setRole: (id: number, role: "owner" | "member") => api<User>(`/users/${id}/role`, { method: "PATCH", body: { role } }),
+};
+
+/** Integrations → Video Source: the downloader's cookies file, proxy, player client, test and diagnosis (admin only). */
+export const source = {
+  info: () => api<SourceInfo>("/integrations/source"),
+  save: (body: { proxy?: string; player_client?: string }) => api<SourceInfo>("/integrations/source", { method: "PUT", body }),
+  /** The file itself is the request body; only its status comes back. */
+  uploadCookies: async (file: File) => {
+    const response = await fetch(apiUrl("/integrations/source/cookies"), { method: "POST", headers: { Authorization: `Bearer ${getToken() ?? ""}`, "Content-Type": "text/plain" }, body: await file.text() });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new ApiError(typeof body?.detail === "string" ? body.detail : `Upload failed (${response.status})`, response.status);
+    return body as CookiesInfo;
+  },
+  removeCookies: () => api<void>("/integrations/source/cookies", { method: "DELETE" }),
+  update: () => api<{ ok: boolean; message: string }>("/integrations/source/update", { method: "POST" }),
+  test: (url: string) => api<{ ok: boolean; message: string }>("/integrations/source/test", { method: "POST", body: { url } }),
+  diagnose: (url: string) => api<SourceDiagnosis>("/integrations/source/diagnose", { method: "POST", body: { url } }),
+  diagnosis: (id: string) => api<SourceDiagnosis>(`/integrations/source/diagnose/${id}`),
 };

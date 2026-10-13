@@ -64,6 +64,21 @@ the AI model for captions (Gemini), the optional YouTube Data API key, and the s
 editor (FFmpeg). Each has a **Test** button: the editor test renders a real two-second clip with the current edit, and
 the downloader test reads a real YouTube video. The edit itself (speed, flip, audio) is on the **Editing Rules** page.
 
+### Video Source (the downloader)
+The **Video Source** card on the Integrations page (admin only) controls how videos are downloaded:
+
+- **Cookies file** — upload a `cookies.txt` (Netscape format, exported while signed in to youtube.com) when YouTube
+  answers "Sign in to confirm you're not a bot". It is kept on the server only and never shown again.
+- **Proxy** — an optional `http://user:pass@host:port` address, stored encrypted.
+- **Player client** — which YouTube app yt-dlp pretends to be.
+- **Update now** — upgrades yt-dlp; YouTube changes often and old versions stop working.
+- **Test download** and **Run diagnosis** — look one video up, or try it with every player client, with and without
+  cookies and over IPv6, and say which ways work. Nothing is downloaded and no setting is changed.
+
+When YouTube refuses a download, the other ways of asking are tried by themselves (without cookies, other player
+clients, IPv6) and the one that works is remembered for the next video. Full HD is asked for first, measured on the
+short side so an upright Short arrives as 1080×1920; when a video has no 1080p the best it does have is taken.
+
 ### Where API keys live
 
 Every third-party credential can be managed from the UI **without a restart**. Values saved in the app are encrypted with

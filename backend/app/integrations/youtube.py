@@ -249,9 +249,11 @@ def _video_from_ytdlp(video_id: str) -> VideoMeta:
         import yt_dlp
     except ImportError as exc:  # pragma: no cover
         raise YouTubeError("yt-dlp is not installed, and no YOUTUBE_API_KEY is set") from exc
+    from app.services import downloader  # the saved proxy, cookies and player client apply to every lookup
+
     options = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True, "socket_timeout": 30}
     try:
-        with yt_dlp.YoutubeDL(options) as ydl:
+        with downloader.access_options() as access, yt_dlp.YoutubeDL({**options, **access}) as ydl:
             info = ydl.extract_info(watch_url(video_id), download=False, process=False)
     except yt_dlp.utils.DownloadError as exc:
         raise YouTubeError(f"Could not read YouTube video {video_id}: {str(exc)[:200]}") from exc
@@ -274,9 +276,11 @@ def transcript(video_id: str) -> list[tuple[float, str]]:
         import yt_dlp
     except ImportError as exc:  # pragma: no cover
         raise YouTubeError("yt-dlp is not installed on the server") from exc
+    from app.services import downloader  # the saved proxy, cookies and player client apply to every lookup
+
     options = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True, "socket_timeout": 30}
     try:
-        with yt_dlp.YoutubeDL(options) as ydl:
+        with downloader.access_options() as access, yt_dlp.YoutubeDL({**options, **access}) as ydl:
             info = ydl.extract_info(watch_url(video_id), download=False, process=False)
     except yt_dlp.utils.DownloadError as exc:
         raise YouTubeError(f"Could not read YouTube video {video_id}: {str(exc)[:200]}") from exc

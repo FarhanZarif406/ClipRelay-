@@ -28,13 +28,13 @@ function TikTokAuditToggle() {
 }
 
 /** Tools that live on the server: the downloader (yt-dlp), the editor (FFmpeg) and storage. */
-const CARD_KEYS = new Set(["tiktok", "llm"]);
+const CARD_KEYS = new Set(["tiktok", "llm", "ytdlp"]);  // the downloader has its own Video Source card
 
 export function OtherIntegrations({ isOwner }: { isOwner: boolean }) {
   const { data } = useQuery({ queryKey: ["settings", "integrations"], queryFn: settings.integrations });
   const [results, setResults] = useState<Record<string, { ok: boolean; message: string }>>({});
   const test = useMutation({ mutationFn: (key: string) => settings.testIntegration(key), onSuccess: (r, key) => setResults(x => ({ ...x, [key]: r })) });
-  return <Card><div className="card-title">Downloader, editor and storage</div><div className="card-caption">yt-dlp downloads the videos and FFmpeg edits them. Both are installed with the app — no key is needed. “Test” runs a real download check and a real test edit.</div>
+  return <Card><div className="card-title">Editor and storage</div><div className="card-caption">FFmpeg edits the videos and is installed with the app — no key is needed. “Test” runs a real test edit.</div>
     {data?.filter(x => !CARD_KEYS.has(x.key)).map(x => { const r = results[x.key]; return <div className="api-row" key={x.key}><div><strong>{x.name}</strong><span>{x.masked}</span></div>{r ? <span className={`test-result ${r.ok ? "ok" : "fail"}`}>{r.message}</span> : <Badge tone={x.configured ? "success" : "warning"}>{x.configured ? (x.source === "app" ? "Set in app" : x.key === "ytdlp" || x.key === "ffmpeg" ? "Installed" : x.source === "env" ? "From .env" : "Configured") : "Needs setup"}</Badge>}{isOwner && <Button onClick={() => test.mutate(x.key)} disabled={test.isPending && test.variables === x.key}>{test.isPending && test.variables === x.key ? "Testing…" : "Test"}</Button>}</div>; })}
   </Card>;
 }

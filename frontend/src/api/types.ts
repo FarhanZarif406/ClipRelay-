@@ -244,3 +244,15 @@ export type PipelineStatus = {
   today: { total: number; downloaded: number; download_left: number; edited: number; edit_left: number; uploaded: number; upload_left: number; failed: number };
   stages: { key: string; label: string; total: number; items: StatusItem[] }[];
 };
+
+export type CookiesInfo = { present: boolean; count?: number; expires_at?: string | null; expired?: boolean; updated_at?: string };
+export type SourceInfo = {
+  installed: boolean; version: string | null; cookies: boolean; cookies_file: CookiesInfo;
+  options: { proxy: string; proxy_set: boolean; player_client: string }; player_clients: string[];
+  stats: { completed: number; failed_downloads: number }; working_route: string | null; js_runtime: string | null;
+};
+export type DiagnosisRow = { client: string; cookies: boolean; ipv6: boolean; ok: boolean; format: string | null; height: number | null; low: boolean; message: string };
+export type SourceDiagnosis = {
+  id: string; status: "running" | "done" | "failed"; stage: string | null; cookies: boolean; proxy: boolean; player_client: string;
+  rows: DiagnosisRow[]; total: number; verdict?: string; version?: string | null; js_runtime?: string | null; verbose?: string; command?: string;
+};
