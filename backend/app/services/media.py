@@ -146,15 +146,20 @@ def _run(cmd: list[str], seconds: float, on_progress: Progress | None, timeout: 
     reader = threading.Thread(target=lambda: errors.append(proc.stderr.read()), daemon=True)
     reader.start()
     deadline = time.monotonic() + timeout
-    for line in proc.stdout:
-        if line.startswith(("out_time_us=", "out_time_ms=")):  # both are microseconds
-            try:
-                on_progress(min(99.0, int(line.split("=", 1)[1]) / 1_000_000 / seconds * 100))
-            except ValueError:
-                pass
-        if time.monotonic() > deadline:
-            proc.kill()
-            raise subprocess.TimeoutExpired(cmd, timeout)
+    try:
+        for line in proc.stdout:
+            if line.startswith(("out_time_us=", "out_time_ms=")):  # both are microseconds
+                try:
+                    written = int(line.split("=", 1)[1]) / 1_000_000
+                except ValueError:
+                    continue
+                on_progress(min(99.0, written / seconds * 100))  # may raise to stop the render
+            if time.monotonic() > deadline:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+    except BaseException:
+        proc.kill()  # timed out, or stopped by the operator: FFmpeg must not keep running
+        proc.wait()
+        raise
     proc.wait()
     reader.join(5)
     return proc.returncode, "".join(errors)
@@ -177,6 +182,10 @@ def render(src: str, *, speed: float, flip: bool, keep_audio: bool, framing: str
     except subprocess.TimeoutExpired as exc:
         os.remove(dst)
         raise RenderError("Rendering took longer than 30 minutes and was stopped") from exc
+    except BaseException:  # stopped by the operator
+        if os.path.exists(dst):
+            os.remove(dst)
+        raise
     if code != 0 or os.path.getsize(dst) == 0:
         os.remove(dst)
         raise RenderError(_ffmpeg_message(errors))

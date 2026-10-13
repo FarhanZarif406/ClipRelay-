@@ -196,27 +196,48 @@ def _stage_failed(db: Session, job: Job, stage: str, error: str) -> str:
     return job.status
 
 
+class JobStopped(Exception):
+    """The operator stopped the job while it was downloading or rendering. Not a failure: nothing is retried."""
+
+
+STOPPED = (JobStatus.CANCELLED, JobStatus.FAILED)
+
+
 def progress_writer(job_id: int):
     """A callback that stores how far a download or render has got (0–100), for the Live Status page.
 
-    It writes through a short session of its own, at most every few seconds, so the long-running
-    stage never holds the database.
+    It writes through a short session of its own, at most every few seconds, so the long-running stage
+    never holds the database. The same visit checks whether the operator pressed Stop: if so it raises
+    `JobStopped`, which is how a download or a render that is already running is actually brought to a halt.
     """
     state = {"value": -1, "at": 0.0}
 
     def write(percent: float) -> None:
         value = max(0, min(100, int(percent)))
         now = time.monotonic()
-        if value == state["value"] or (value < 100 and now - state["at"] < 2.5):
+        if value < 100 and now - state["at"] < 2.5:
             return
-        state.update(value=value, at=now)
+        state["at"] = now
+        status = None
         try:
             with session_scope() as other:
-                other.execute(update(Job).where(Job.id == job_id).values(progress=value).execution_options(synchronize_session=False))
+                status = other.scalar(select(Job.status).where(Job.id == job_id))
+                if status not in STOPPED and value != state["value"]:
+                    other.execute(update(Job).where(Job.id == job_id).values(progress=value).execution_options(synchronize_session=False))
         except Exception as exc:  # progress is a nicety: never let it break a download
             log.debug("could not store progress for job %s: %s", job_id, exc)
+        state["value"] = value
+        if status in STOPPED:
+            raise JobStopped(f"job {job_id} was stopped")
 
     return write
+
+
+def _stopped(db: Session, job: Job) -> bool:
+    """Read the job afresh: did the operator stop it while this stage was running?"""
+    db.rollback()
+    db.refresh(job)
+    return job.status in STOPPED
 
 
 def _set_progress(db: Session, job: Job, value: int | None) -> None:
@@ -245,8 +266,15 @@ def process_video(db: Session, job_id: int) -> str | None:
         try:
             path = sources.get_adapter().download(video, progress_writer(job.id))
             info = media.probe(path)
+        except JobStopped:
+            db.rollback()
+            db.refresh(job)
+            return job.status
         except (sources.SourceError, media.ProbeError) as exc:
             return _stage_failed(db, job, "Download", str(exc))
+        if _stopped(db, job):  # stopped during the last moments of the download: keep nothing, start nothing
+            os.remove(path)
+            return job.status
         video.width, video.height, video.size_bytes = info.width, info.height, os.path.getsize(path)
         video.duration_sec = round(info.duration, 2) if video.parent_id else (video.duration_sec or round(info.duration, 2))
         video.source_file_path = storage.save(path, f"source/{video.id}.mp4")
@@ -264,8 +292,15 @@ def process_video(db: Session, job_id: int) -> str | None:
     try:
         with storage.local_copy(video.source_file_path) as source_path:
             rendered = media.render(source_path, speed=speed, flip=flip, keep_audio=keep_audio, framing=framing, on_progress=progress_writer(job.id))
+    except JobStopped:
+        db.rollback()
+        db.refresh(job)
+        return job.status
     except (media.RenderError, OSError) as exc:
         return _stage_failed(db, job, "Render", str(exc))
+    if _stopped(db, job):
+        os.remove(rendered)
+        return job.status
     video.rendered_file_path = storage.save(rendered, f"videos/{video.id}.mp4")
     _set_progress(db, job, None)
     activity.record(db, "Render", f"Video #{video.id} rendered · {summary}", event="rendered", job_id=job.id)
@@ -567,8 +602,12 @@ def retry_job(db: Session, job: Job) -> str:
 def cancel_job(db: Session, job: Job) -> None:
     if job.status not in JobStatus.PROCESSING | {JobStatus.AWAITING_APPROVAL, JobStatus.READY, JobStatus.FAILED}:
         raise ValueError(f"Job cannot be cancelled while {job.status}")
+    was = job.status
     job.next_check_at = None
-    job_event(db, job, JobStatus.CANCELLED, "Cancelled by user")
+    job.progress = None
+    # A download or render that is running notices this within a few seconds and stops (see `progress_writer`).
+    note = {JobStatus.DOWNLOADING: "Download stopped by the operator", JobStatus.RENDERING: "Editing stopped by the operator"}.get(was, "Cancelled by the operator")
+    job_event(db, job, JobStatus.CANCELLED, note)
 
 
 def reject_job(db: Session, job: Job, reason: str) -> None:

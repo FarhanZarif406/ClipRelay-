@@ -20,9 +20,10 @@ STATUS_GROUPS = {
     "published": JobStatus.PUBLISHED | {JobStatus.VIOLATED},
     "review": {JobStatus.AWAITING_APPROVAL},
     "failed": {JobStatus.FAILED},
+    "cancelled": {JobStatus.CANCELLED},  # stopped or rejected by the operator; can be restarted
     "waiting": {JobStatus.READY, JobStatus.UPLOADING},  # approved or automatic, not on TikTok yet
     # Everything past the review step: the Published page shows these.
-    "outbox": JobStatus.PUBLISHED | {JobStatus.VIOLATED, JobStatus.FAILED, JobStatus.READY, JobStatus.UPLOADING},
+    "outbox": JobStatus.PUBLISHED | {JobStatus.VIOLATED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.READY, JobStatus.UPLOADING},
 }
 
 

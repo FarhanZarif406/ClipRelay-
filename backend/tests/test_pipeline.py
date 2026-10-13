@@ -6,6 +6,7 @@ import respx
 from sqlalchemy import select
 
 from tests.conftest import ME
+from app.db import SessionLocal
 from app.models import ActivityLog, CaptionStatus, Job, JobStatus, Video, VideoStatus, Violation, utcnow
 from app.services import media, pipeline, rules
 from app.services.storage import get_storage
@@ -278,3 +279,52 @@ def test_jobs_wait_for_an_account_and_go_out_when_one_connects(db, tiktok_accoun
     assert pipeline.scheduler_tick(db)["uploads"] == [(job.id, 0)]
     assert job.tiktok_account_id == tiktok_account.id and job.error is None
 
+
+def test_stop_halts_a_running_download(db, tiktok_account, monkeypatch):
+    from app.services import sources
+
+    job = _make_job(db, tiktok_account, status=JobStatus.FETCHED, rendered=False)
+    reached = {"end": False}
+
+    class Adapter:
+        name = "slow"
+
+        def download(self, video, on_progress=None):
+            on_progress(10)
+            other = SessionLocal()  # the operator presses Stop while the download is running
+            pipeline.cancel_job(other, other.get(Job, job.id))
+            other.commit()
+            other.close()
+            monkeypatch.setattr(pipeline.time, "monotonic", lambda: 1e9)  # the next progress report is due
+            on_progress(20)
+            reached["end"] = True
+            return "never"
+
+    monkeypatch.setattr(sources, "get_adapter", lambda: Adapter())
+    assert pipeline.process_video(db, job.id) == JobStatus.CANCELLED
+    db.commit()
+    db.refresh(job)
+    assert reached["end"] is False  # the download was cut short, not left to finish
+    assert job.status == JobStatus.CANCELLED and job.progress is None and job.attempts == 0 and job.video.source_file_path is None
+    assert [e.message for e in job.events][-1] == "Download stopped by the operator"
+    assert pipeline.scheduler_tick(db)["process"] == []  # and it is not picked up again
+
+
+def test_stop_halts_a_running_render(db, tiktok_account, fake_media, monkeypatch):
+    job = _make_job(db, tiktok_account, status=JobStatus.FETCHED, rendered=False)
+
+    def render(src, *, on_progress=None, **_):
+        other = SessionLocal()
+        pipeline.cancel_job(other, other.get(Job, job.id))
+        other.commit()
+        other.close()
+        on_progress(50)
+        raise AssertionError("the render should have been stopped")
+
+    monkeypatch.setattr(media, "render", render)
+    assert pipeline.process_video(db, job.id) == JobStatus.CANCELLED
+    db.commit()
+    db.refresh(job)
+    assert job.video.rendered_file_path is None and [e.message for e in job.events][-1] == "Editing stopped by the operator"
+    # A stopped video can be started again from where it was.
+    assert pipeline.retry_job(db, job) == JobStatus.FETCHED

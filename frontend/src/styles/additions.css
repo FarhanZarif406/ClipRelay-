@@ -254,3 +254,4 @@ a.button { text-decoration: none; display: inline-flex; align-items: center; }
 .status-empty { font-size: 10px; color: var(--muted); padding: 10px 0 4px; border-top: 1px solid var(--border); }
 .link-button { border: 0; background: none; padding: 0; color: var(--primary); font-size: inherit; cursor: pointer; }
 @media (max-width: 1000px) { .status-stages { grid-template-columns: 1fr; } .status-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.status-row > .button { flex: none; padding: 5px 9px; font-size: 9px; }

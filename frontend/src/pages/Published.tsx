@@ -18,6 +18,7 @@ const STATUS_OPTIONS = [
   { value: "published", label: "Published" },
   { value: "failed", label: "Failed" },
   { value: "waiting", label: "Waiting for account" },
+  { value: "cancelled", label: "Cancelled" },
 ];
 
 function statusOf(j: Job): { label: string; tone: Tone } {
@@ -49,14 +50,14 @@ export default function Published() {
   const accounts = useQuery({ queryKey: ["tiktok"], queryFn: tiktok.list });
   const retry = useMutation({
     mutationFn: (j: Job) => jobs.retry(j.id),
-    onSuccess: () => { toast({ title: "Retrying", message: "The video is back in the pipeline." }); queryClient.invalidateQueries({ queryKey: ["jobs"] }); queryClient.invalidateQueries({ queryKey: ["nav"] }); },
+    onSuccess: () => { toast({ title: "Started again", message: "The video is back in the pipeline." }); queryClient.invalidateQueries({ queryKey: ["jobs"] }); queryClient.invalidateQueries({ queryKey: ["nav"] }); },
     onError,
   });
   const items = list.data?.items ?? [];
   const total = list.data?.total ?? 0;
   const noAccounts = accounts.data && accounts.data.items.length === 0;
 
-  return <><PageHeader title="Published" description="Everything past the review step: published, waiting to go out, and failed."><Badge tone="neutral">{total} {PODCASTS ? "clips" : "videos"}</Badge></PageHeader>
+  return <><PageHeader title="Published" description="Everything past the review step: published, waiting to go out, failed, and cancelled."><Badge tone="neutral">{total} {PODCASTS ? "clips" : "videos"}</Badge></PageHeader>
     {noAccounts && <p className="note-row">No TikTok account is connected yet. Approved and automatic videos wait here as “Waiting for account” and are sent as soon as one is connected in TikTok Accounts.</p>}
     <div className="toolbar"><div className="search-field"><Icon name="search" size={16}/><input placeholder="Search videos…" value={search} onChange={e => setSearch(e.target.value)}/></div>
       <FilterSelect value={status} onChange={setStatus} options={STATUS_OPTIONS}/>
@@ -72,10 +73,11 @@ export default function Published() {
         <td><Badge tone={s.tone}>{s.label}</Badge></td>
         <td style={{ whiteSpace: "normal", minWidth: 180, maxWidth: 320 }} onClick={e => j.tiktok_url && e.stopPropagation()}>
           {j.status === "failed" ? <span className="cell-error" style={{ maxWidth: "none" }}>{j.error}</span>
+            : j.status === "cancelled" ? (j.reject_reason ? `Rejected: ${j.reject_reason}` : j.error ?? "Stopped by the operator")
             : j.tiktok_url ? <a href={j.tiktok_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>Open TikTok post</a>
             : j.status === "ready" ? j.error ?? "Next in line"
             : j.publish_mode === "inbox" ? "In the TikTok inbox — finish the post in the app" : "Processing on TikTok"}</td>
-        <td onClick={e => e.stopPropagation()}>{j.status === "failed" && <Button icon="refresh" disabled={retry.isPending} onClick={() => retry.mutate(j)}>Retry</Button>}</td>
+        <td onClick={e => e.stopPropagation()}>{(j.status === "failed" || j.status === "cancelled") && <Button icon="refresh" disabled={retry.isPending} onClick={() => retry.mutate(j)}>{j.status === "failed" ? "Retry" : "Start again"}</Button>}</td>
       </tr>; })}</tbody></table></div>
       {list.isLoading && <Spinner/>}
       {!list.isLoading && items.length === 0 && <Empty icon="arrow" title="Nothing here yet">Videos appear here once they are approved, or straight away when approval is switched off.</Empty>}
