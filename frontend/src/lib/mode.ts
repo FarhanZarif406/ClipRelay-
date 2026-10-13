@@ -1,6 +1,6 @@
 /**
  * ClipRelay has two workspaces that share one sign-in: Shorts (the main window) and Podcasts, which opens in
- * its own window under /podcasts. Each has its own channels, TikTok accounts, rules and reports.
+ * its own window under /podcasts. Each has its own channels, publishing accounts, rules and reports.
  * The window's address decides which one it is, so every page and every API call in it belongs to that workspace.
  */
 export type Workspace = "shorts" | "podcasts";

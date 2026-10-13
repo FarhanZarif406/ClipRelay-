@@ -20,7 +20,7 @@ export default function ClipRules() {
     <div className="narrow-page">
       <Card><div className="card-title">What happens to each podcast</div><div className="card-caption">The transcript is read, an AI model picks the most engaging moments, and only those sections are downloaded and edited. Without subtitles or a working AI model, the clips are spread evenly across the video instead.</div>
         <div className="edit-preview">
-          <div><span>Clips per podcast</span><strong>{v ? String(v.clips_per_video) : "—"}</strong><span>Each clip becomes one TikTok post</span></div>
+          <div><span>Clips per podcast</span><strong>{v ? String(v.clips_per_video) : "—"}</strong><span>Each clip becomes one post</span></div>
           <div><span>Clip length</span><strong>{v ? `${v.clip_min_seconds}–${v.clip_max_seconds}s` : "—"}</strong><span>Shortest and longest clip</span></div>
           <div><span>Frame</span><strong>{frame[0]}</strong><span>{frame[1]}</span></div>
         </div>

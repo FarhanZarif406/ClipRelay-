@@ -7,9 +7,9 @@ from sqlalchemy import select
 from tests.conftest import ME
 from app.integrations import youtube
 from app.integrations.youtube import VideoMeta
-from app.models import Channel, Job, JobStatus, Mode, TikTokAccount, Video, VideoStatus, utcnow
+from app.models import BufferAccount, BufferChannel, Channel, Job, JobStatus, Mode, Video, VideoStatus, utcnow
 from app.security import encrypt
-from app.services import detection, dispatch, media, pipeline, podcasts, rules
+from app.services import buffer, detection, dispatch, media, pipeline, podcasts, rules
 from tests.helpers import ANTHROPIC, claude
 
 POD = "UC" + "p" * 22
@@ -19,10 +19,10 @@ SEGMENTS = [(float(t), f"line at {t}") for t in range(0, 1200, 5)]
 
 @pytest.fixture
 def podcast_account(db):
-    account = TikTokAccount(
-        open_id="open-pod", user_id=1, username="podclips", mode=Mode.PODCASTS, access_token_enc=encrypt("a"), refresh_token_enc=encrypt("r"),
-        token_expires_at=utcnow() + timedelta(hours=20), refresh_expires_at=utcnow() + timedelta(days=300),
-    )
+    """A Buffer account switched on in the Podcasts workspace only."""
+    if not db.get(BufferAccount, 1):
+        db.add(BufferAccount(user_id=1, api_key_enc=encrypt("buf-key-0123456789abcdefghij")))
+    account = BufferChannel(user_id=1, mode=Mode.PODCASTS, buffer_id="ch-podclips", name="podclips", service="tiktok", enabled=True, daily_limit=3, times=["09:00"])
     db.add(account)
     db.commit()
     return account
@@ -101,13 +101,13 @@ def test_a_podcast_channel_takes_long_videos_only(db, podcast_channel, source):
     talk = detection.discover(db, podcast_channel, "talk1")
     job = db.scalar(select(Job).where(Job.video_id == talk.id))
     assert talk.status == VideoStatus.ACCEPTED and talk.mode == Mode.PODCASTS and talk.is_podcast_source
-    assert job.status == JobStatus.FETCHED and job.tiktok_account_id is None and job.error is None and job.caption_status == "done"
+    assert job.status == JobStatus.FETCHED and job.buffer_channel_id is None and job.error is None and job.caption_status == "done"
     rules.set_values(db, {"videos_per_channel_per_day": 1}, mode=Mode.PODCASTS, user=ME)
     assert detection.discover(db, podcast_channel, "talk2").skip_reason == "skipped_channel_cap"
 
 
 @respx.mock
-def test_podcast_becomes_clips_that_travel_the_normal_pipeline(db, podcast_channel, podcast_account, tiktok_account, source, fake_media, template):
+def test_podcast_becomes_clips_that_travel_the_normal_pipeline(db, podcast_channel, podcast_account, source, fake_media, template):
     respx.post(ANTHROPIC).mock(return_value=claude('[{"start": 60, "end": 110, "title": "The first customer"}, {"start": 300, "end": 345, "title": "Hiring"}, {"start": 600, "end": 655, "title": "Why we almost quit"}]'))
     talk = detection.discover(db, podcast_channel, "talk1")
     parent = db.scalar(select(Job).where(Job.video_id == talk.id))
@@ -119,9 +119,9 @@ def test_podcast_becomes_clips_that_travel_the_normal_pipeline(db, podcast_chann
     assert all(c.youtube_video_id is None and c.mode == Mode.PODCASTS and "line at" in c.original_caption for c in clips)
     assert clips[0].permalink == "https://www.youtube.com/watch?v=talk1&t=60s"
     jobs = [db.scalar(select(Job).where(Job.video_id == c.id)) for c in clips]
-    assert {j.tiktok_account_id for j in jobs} == {podcast_account.id}  # never the Shorts account
-    # the podcast itself is finished and never asks for an account or an upload
-    assert pipeline.assign_waiting_jobs(db) == 0 and parent.tiktok_account_id is None
+    assert {buffer.choose(db, j)[0].id for j in jobs} == {podcast_account.id}  # never the Shorts account
+    # the podcast itself is finished and is never uploaded
+    assert pipeline.upload_job(db, parent.id) == "skipped"
     due = pipeline.scheduler_tick(db)
     assert sorted(due["process"]) == sorted(j.id for j in jobs) and parent.id not in due["process"]
 
@@ -141,37 +141,30 @@ def test_section_download_and_vertical_framing(monkeypatch):
     assert "-c:v copy" in " ".join(media.render_command("in.mp4", "out.mp4", speed=1.0, flip=False, keep_audio=True, has_audio=True, framing="crop", width=1080, height=1920))
 
 
-def test_workspaces_do_not_see_each_other(client, auth, db, channel, tiktok_account, podcast_channel, podcast_account, source):
+def test_workspaces_do_not_see_each_other(client, auth, db, channel, buffer_account, podcast_channel, podcast_account, source):
     talk = detection.discover(db, podcast_channel, "talk1")
     db.commit()
     names = lambda mode: [c["display_name"] for c in client.get(f"/api/channels{mode}", headers=auth).json()["items"]]  # noqa: E731
     assert names("") == ["Northbound"] and names("?mode=podcasts") == ["Deep Talks"]
-    accounts = lambda mode: [a["username"] for a in client.get(f"/api/tiktok-accounts{mode}", headers=auth).json()["items"]]  # noqa: E731
+    accounts = lambda mode: [a["name"] for a in client.get(f"/api/buffer{mode}", headers=auth).json()["channels"] if a["enabled"]]  # noqa: E731
     assert accounts("") == ["northbound"] and accounts("?mode=podcasts") == ["podclips"]
     assert client.get("/api/jobs", headers=auth).json()["total"] == 0 and client.get("/api/jobs?mode=podcasts", headers=auth).json()["total"] == 1
     shorts, pod = client.get("/api/dashboard/summary", headers=auth).json(), client.get("/api/dashboard/summary?mode=podcasts", headers=auth).json()
     assert shorts["kpis"][0]["value"] == 0 and pod["kpis"][0]["value"] == 1 and pod["kpis"][0]["label"] == "Podcasts detected"
-    assert [a["username"] for a in pod["accounts"]] == ["podclips"] and pod["rejections"]["min_source_duration_seconds"] == 300
+    assert [a["name"] for a in pod["accounts"]] == ["podclips"] and pod["rejections"]["min_source_duration_seconds"] == 300
     nav = client.get("/api/dashboard/nav?mode=podcasts", headers=auth).json()
-    assert (nav["channels"], nav["tiktok_accounts"]) == (1, 1) and client.get("/api/dashboard/nav", headers=auth).json()["channels"] == 1
+    assert (nav["channels"], nav["buffer_accounts"]) == (1, 1) and client.get("/api/dashboard/nav", headers=auth).json()["channels"] == 1
     assert client.get("/api/reports/daily?mode=podcasts", headers=auth).json()["accepted"] == 1
 
-    # a channel or an account cannot be used from the other workspace
-    assert client.patch(f"/api/channels/{podcast_channel.id}", headers=auth, json={"default_tiktok_account_id": tiktok_account.id}).status_code == 400
-    assert client.patch(f"/api/channels/{podcast_channel.id}", headers=auth, json={"default_tiktok_account_id": podcast_account.id}).status_code == 200
+    # an account cannot be used from the other workspace
+    clip_job = db.scalar(select(Job).where(Job.video_id == talk.id))
+    assert client.patch(f"/api/jobs/{clip_job.id}", headers=auth, json={"buffer_channel_id": buffer_account.id}).status_code == 404
+    assert client.patch(f"/api/jobs/{clip_job.id}", headers=auth, json={"buffer_channel_id": podcast_account.id}).status_code == 200
     with respx.mock:
         respx.get(f"https://www.youtube.com/channel/{POD}").respond(200, text=f'<link rel="canonical" href="https://www.youtube.com/channel/{POD}"><meta property="og:title" content="Deep Talks">')
         r = client.post("/api/channels", headers=auth, json={"query": POD})
         assert r.status_code == 409 and "Podcasts workspace" in r.json()["detail"]
     assert talk.channel_id == podcast_channel.id
-    url = client.get("/api/tiktok/oauth/start?mode=podcasts", headers=auth).json()["url"]
-    from urllib.parse import parse_qs, urlparse
-
-    from app.security import oauth_state_claims
-
-    assert oauth_state_claims(parse_qs(urlparse(url).query)["state"][0], "tiktok")["mode"] == "podcasts"
-    r = client.get("/api/tiktok/oauth/callback?error=access_denied&state=" + parse_qs(urlparse(url).query)["state"][0], follow_redirects=False)
-    assert r.headers["location"].startswith("http://app.test/podcasts/tiktok?error=")
     assert dispatch.sent == []
 
 

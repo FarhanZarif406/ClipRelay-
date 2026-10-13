@@ -35,13 +35,7 @@ RULES: dict[str, Rule] = {
     "min_duration_seconds": Rule("int", 5, "Minimum duration (seconds)", "Shorter uploads are skipped.", "Detection", 0, 600),
     "videos_per_channel_per_day": Rule("int", 3, "Videos per channel per day", "Further uploads from the same channel are held as skipped.", "Detection", 1, 100),
     "approval_required": Rule("bool", True, "Require approval", "On: every video waits in the review queue. Off: videos are published straight away.", "Publishing", per_channel=False),
-    "uploads_per_tiktok_account_per_day": Rule("int", 7, "Uploads per TikTok account per day", "Applies to every account that has no cap of its own.", "Publishing", 1, 100, per_channel=False),
-    "publish_mode": Rule(
-        "choice", "inbox", "Publish mode",
-        "inbox: the video lands in the account's TikTok inbox and a person finishes the post in the app. direct: posted by the API (needs TikTok's audit).",
-        "Publishing", choices=("inbox", "direct"), per_channel=False,
-    ),
-    "cap_reset_timezone": Rule("timezone", "Asia/Karachi", "Cap reset timezone", "Daily caps reset at midnight in this timezone.", "Publishing", per_channel=False),
+    "cap_reset_timezone": Rule("timezone", "Asia/Karachi", "Timezone", "The day (for daily limits and reports) starts at midnight in this timezone.", "Publishing", per_channel=False),
     "hashtag_count": Rule("int", 8, "Hashtag count", "How many hashtags a caption gets.", "Caption", 0, 15),
     "fallback_hashtags": Rule("text", "fyp foryou viral trending shorts", "Fallback hashtags", "Used with the original title when the AI model fails.", "Caption", max=500),
     "file_retention_days": Rule("int", 7, "File retention (days)", "Days after publishing before the downloaded and rendered files are deleted.", "Storage", 1, 365),
@@ -52,7 +46,7 @@ RULES: dict[str, Rule] = {
 # workspaces never share a value. A few plumbing settings (timezone, publish mode, polling, retention)
 # are not repeated: Podcasts reads them from the Shorts rules above.
 PODCAST_PREFIX = "podcast."
-SHARED_WITH_PODCASTS = ("cap_reset_timezone", "publish_mode", "poll_interval_minutes", "file_retention_days")
+SHARED_WITH_PODCASTS = ("cap_reset_timezone", "poll_interval_minutes", "file_retention_days")
 PODCAST_RULES: dict[str, Rule] = {
     "clips_per_video": Rule("int", 3, "Clips per podcast", "How many short clips are cut from each podcast.", "Clips", 1, 10),
     "clip_min_seconds": Rule("int", 30, "Shortest clip (seconds)", "A clip is never shorter than this.", "Clips", 10, 300),
@@ -68,7 +62,6 @@ PODCAST_RULES: dict[str, Rule] = {
     "min_source_duration_seconds": Rule("int", 300, "Shortest podcast (seconds)", "Uploads shorter than this are not podcasts and are skipped.", "Detection", 60, 14400),
     "videos_per_channel_per_day": Rule("int", 2, "Podcasts per channel per day", "Further podcasts from the same channel are held as skipped.", "Detection", 1, 50),
     "approval_required": Rule("bool", True, "Require approval", "On: every clip waits in the review queue. Off: clips are published straight away.", "Publishing", per_channel=False),
-    "uploads_per_tiktok_account_per_day": Rule("int", 7, "Uploads per TikTok account per day", "Applies to every podcast account that has no cap of its own.", "Publishing", 1, 100, per_channel=False),
     "hashtag_count": Rule("int", 8, "Hashtag count", "How many hashtags a caption gets.", "Caption", 0, 15),
     "fallback_hashtags": Rule("text", "podcast clips fyp foryou viral", "Fallback hashtags", "Used with the clip title when the AI model fails.", "Caption", max=500),
 }

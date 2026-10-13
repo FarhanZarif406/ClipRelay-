@@ -125,13 +125,13 @@ def test_rules_inherit_override_and_audit(db, channel, client, auth):
 
 # ---------------------------------------------------------------- detection
 
-def test_new_upload_is_stored_once_and_gets_one_job(db, channel, tiktok_account, details):
+def test_new_upload_is_stored_once_and_gets_one_job(db, channel, details):
     video = detection.discover(db, channel, "abc")
     db.commit()
     assert video.status == VideoStatus.ACCEPTED and video.youtube_video_id == "abc" and video.channel_id == channel.id
     assert video.original_title == "Title abc" and video.original_caption == "About the trip" and video.duration_sec == 30
     job = db.scalar(select(Job))
-    assert job.status == JobStatus.FETCHED and job.tiktok_account_id == tiktok_account.id and job.approval_required is True
+    assert job.status == JobStatus.FETCHED and job.buffer_channel_id is None and job.error is None and job.approval_required is True
     # A repeat notification (YouTube sends one whenever the title is edited) changes nothing.
     assert detection.discover(db, channel, "abc") is None
     assert len(db.scalars(select(Video)).all()) == 1 and len(db.scalars(select(Job)).all()) == 1
@@ -224,18 +224,6 @@ def test_channel_cap_and_process_anyway(db, channel, details):
         detection.process_anyway(db, held)
 
 
-def test_account_cap_counts_published_and_pending(db, channel, tiktok_account, details):
-    tiktok_account.daily_cap = None
-    rules.set_values(db, {"uploads_per_tiktok_account_per_day": 2, "videos_per_channel_per_day": 10}, user=ME)
-    first = detection.discover(db, channel, "a")
-    db.scalar(select(Job).where(Job.video_id == first.id)).posted_at = utcnow()
-    detection.discover(db, channel, "b")  # still on its way: counts as well
-    blocked = detection.discover(db, channel, "c")
-    assert blocked.skip_reason == SkipReason.ACCOUNT_CAP and "@northbound" in blocked.rejection_reason
-    tiktok_account.daily_cap = 5  # the account's own cap wins over the global rule
-    assert detection.discover(db, channel, "d").status == VideoStatus.ACCEPTED
-
-
 @respx.mock
 def test_poll_finds_only_new_uploads(db, channel, details):
     old = (utcnow() - timedelta(days=5)).isoformat()
@@ -257,13 +245,13 @@ def test_due_channels_are_leased(db, channel):
 # ---------------------------------------------------------------- API
 
 @respx.mock
-def test_add_channel(client, auth, db, tiktok_account):
+def test_add_channel(client, auth, db):
     respx.get("https://www.youtube.com/@northbound").mock(return_value=httpx.Response(200, text=PAGE))
     card = client.post("/api/channels/resolve", headers=auth, json={"query": "@northbound"}).json()
     assert card["display_name"] == "Northbound & Co" and card["already_added"] is False
-    body = {"query": "@northbound", "default_tiktok_account_id": tiktok_account.id}
+    body = {"query": "@northbound"}
     r = client.post("/api/channels", headers=auth, json=body)
-    assert r.status_code == 201 and r.json()["default_tiktok_account"]["username"] == "northbound"
+    assert r.status_code == 201 and r.json()["display_name"] == "Northbound & Co" and "default_tiktok_account" not in r.json()
     row = db.scalar(select(Channel))
     assert row.added_by and row.ownership_confirmed_at is None and row.pubsub_subscription_expires_at is None
     assert client.post("/api/channels", headers=auth, json=body).status_code == 409
@@ -301,7 +289,7 @@ def test_push_webhook(client, db, channel, monkeypatch):
     assert dispatch.sent == [("discover_video", (channel.youtube_channel_id, "abc"))]
 
 
-def test_review_published_and_skipped_screens(client, auth, db, channel, tiktok_account, details):
+def test_review_published_and_skipped_screens(client, auth, db, channel, details):
     details["long"] = meta("long", 400)
     detection.discover(db, channel, "ok")
     detection.discover(db, channel, "long")
@@ -326,7 +314,7 @@ def test_review_published_and_skipped_screens(client, auth, db, channel, tiktok_
     assert nav["channels"] == 1 and nav["review_jobs"] == 0 and nav["skipped_videos"] == 0
 
 
-def test_video_file_needs_a_media_token(client, auth, db, tiktok_account):
+def test_video_file_needs_a_media_token(client, auth, db):
     import os
 
     from app.services.storage import get_storage
@@ -356,14 +344,14 @@ def test_terms_acceptance_is_recorded(client, auth, db):
 def test_removing_a_channel_stops_its_unfinished_videos_and_frees_them(client, auth, db, channel, details):
     waiting, posted = detection.discover(db, channel, "w1"), detection.discover(db, channel, "p1")
     job_posted = db.scalar(select(Job).where(Job.video_id == posted.id))
-    job_posted.status, job_posted.posted_at = JobStatus.MONITORING, utcnow()
+    job_posted.status, job_posted.buffer_due_at = JobStatus.SCHEDULED, utcnow()
     rules.set_values(db, {"speed": 1.3}, channel=channel)
     db.commit()
     old_id = channel.id
     assert client.delete(f"/api/channels/{old_id}", headers=auth).status_code == 204
     db.expire_all()
     assert db.scalar(select(Job).where(Job.video_id == waiting.id)).status == JobStatus.CANCELLED
-    assert db.get(Job, job_posted.id).status == JobStatus.MONITORING  # already on TikTok: still watched
+    assert db.get(Job, job_posted.id).status == JobStatus.SCHEDULED  # already at Buffer: it still goes out
     # The videos stay as history but belong to no channel, so a new channel that gets the same id does not inherit them.
     assert [v.channel_id for v in db.scalars(select(Video))] == [None, None]
     assert db.scalar(select(func.count()).select_from(rules.RuleSetting).where(rules.RuleSetting.channel_id == old_id)) == 0

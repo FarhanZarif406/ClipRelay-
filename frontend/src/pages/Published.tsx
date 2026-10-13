@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { channels, jobs, tiktok } from "@/api/endpoints";
+import { buffer, channels, jobs } from "@/api/endpoints";
 import type { Job, Tone } from "@/api/types";
 import { Icon } from "@/components/Icon";
 import { JobDrawer } from "@/components/JobDrawer";
@@ -17,12 +17,12 @@ const STATUS_OPTIONS = [
   { value: "outbox", label: "All statuses" },
   { value: "published", label: "Published" },
   { value: "failed", label: "Failed" },
-  { value: "waiting", label: "Waiting for account" },
+  { value: "waiting", label: "Waiting to go out" },
   { value: "cancelled", label: "Cancelled" },
 ];
 
 function statusOf(j: Job): { label: string; tone: Tone } {
-  if (j.waiting_for_account) return { label: "Waiting for account", tone: "warning" };
+  if (j.waiting_for_account) return { label: "Waiting for Buffer", tone: "warning" };
   if (j.status === "ready") return { label: "Waiting to upload", tone: "primary" };
   return JOB_STATUS[j.status];
 }
@@ -43,11 +43,11 @@ export default function Published() {
   useEffect(() => setPage(1), [q, status, channelId, accountId]);
   const list = useQuery({
     queryKey: ["jobs", "published", q, status, channelId, accountId, page],
-    queryFn: () => jobs.list({ status, order: "posted", q, channel_id: channelId ? Number(channelId) : undefined, tiktok_account_id: accountId ? Number(accountId) : undefined, page, page_size: PAGE_SIZE }),
+    queryFn: () => jobs.list({ status, order: "posted", q, channel_id: channelId ? Number(channelId) : undefined, buffer_channel_id: accountId ? Number(accountId) : undefined, page, page_size: PAGE_SIZE }),
     refetchInterval: 20_000,
   });
   const channelList = useQuery({ queryKey: ["channels"], queryFn: channels.list });
-  const accounts = useQuery({ queryKey: ["tiktok"], queryFn: tiktok.list });
+  const accounts = useQuery({ queryKey: ["buffer"], queryFn: buffer.info });
   const retry = useMutation({
     mutationFn: (j: Job) => jobs.retry(j.id),
     onSuccess: () => { toast({ title: "Started again", message: "The video is back in the pipeline." }); queryClient.invalidateQueries({ queryKey: ["jobs"] }); queryClient.invalidateQueries({ queryKey: ["nav"] }); },
@@ -55,28 +55,29 @@ export default function Published() {
   });
   const items = list.data?.items ?? [];
   const total = list.data?.total ?? 0;
-  const noAccounts = accounts.data && accounts.data.items.length === 0;
+  const noKey = accounts.data && !accounts.data.connected;
 
   return <><PageHeader title="Published" description="Everything past the review step: published, waiting to go out, failed, and cancelled."><Badge tone="neutral">{total} {PODCASTS ? "clips" : "videos"}</Badge></PageHeader>
-    {noAccounts && <p className="note-row">No TikTok account is connected yet. Approved and automatic videos wait here as “Waiting for account” and are sent as soon as one is connected in TikTok Accounts.</p>}
+    {noKey && <p className="note-row">No Buffer key is saved yet. Approved and automatic videos wait here as “Waiting for Buffer” and are sent as soon as you add your key under Buffer Settings.</p>}
     <div className="toolbar"><div className="search-field"><Icon name="search" size={16}/><input placeholder="Search videos…" value={search} onChange={e => setSearch(e.target.value)}/></div>
       <FilterSelect value={status} onChange={setStatus} options={STATUS_OPTIONS}/>
       <FilterSelect value={channelId} onChange={setChannelId} options={[{ value: "", label: "All channels" }, ...(channelList.data?.items ?? []).map(c => ({ value: String(c.id), label: c.display_name }))]}/>
-      <FilterSelect value={accountId} onChange={setAccountId} options={[{ value: "", label: "All accounts" }, ...(accounts.data?.items ?? []).map(a => ({ value: String(a.id), label: `@${a.username}` }))]}/></div>
-    <Card className="table-card"><div className="table-wrap"><table><thead><tr><th/><th>Date</th><th>Channel</th><th>TikTok account</th><th>Caption</th><th>Status</th><th>Detail</th><th/></tr></thead><tbody>
+      <FilterSelect value={accountId} onChange={setAccountId} options={[{ value: "", label: "All accounts" }, ...(accounts.data?.channels ?? []).map(a => ({ value: String(a.id), label: a.name }))]}/></div>
+    <Card className="table-card"><div className="table-wrap"><table><thead><tr><th/><th>Date</th><th>Channel</th><th>Account</th><th>Caption</th><th>Status</th><th>Detail</th><th/></tr></thead><tbody>
       {items.map(j => { const s = statusOf(j); return <tr key={j.id} onClick={() => setOpenJob(j.id)}>
         <td><VideoThumb index={j.id} image={j.video.thumbnail_url}/></td>
         <td>{dayTime(j.posted_at ?? j.updated_at)}</td>
         <td>{j.video.channel?.display_name ?? "—"}</td>
-        <td>{j.tiktok_account ? `@${j.tiktok_account.username}` : "—"}</td>
+        <td>{j.buffer_channel?.name ?? (j.status === "ready" || j.status === "uploading" ? "Auto" : "—")}</td>
         <td className="truncate">{j.rewritten_caption || j.video.original_title}</td>
         <td><Badge tone={s.tone}>{s.label}</Badge></td>
-        <td style={{ whiteSpace: "normal", minWidth: 180, maxWidth: 320 }} onClick={e => j.tiktok_url && e.stopPropagation()}>
+        <td style={{ whiteSpace: "normal", minWidth: 180, maxWidth: 320 }} onClick={e => j.post_url && e.stopPropagation()}>
           {j.status === "failed" ? <span className="cell-error" style={{ maxWidth: "none" }}>{j.error}</span>
             : j.status === "cancelled" ? (j.reject_reason ? `Rejected: ${j.reject_reason}` : j.error ?? "Stopped by the operator")
-            : j.tiktok_url ? <a href={j.tiktok_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>Open TikTok post</a>
+            : j.post_url ? <a href={j.post_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>Open the post</a>
             : j.status === "ready" ? j.error ?? "Next in line"
-            : j.publish_mode === "inbox" ? "In the TikTok inbox — finish the post in the app" : "Processing on TikTok"}</td>
+            : j.status === "scheduled" ? `At Buffer${j.buffer_due_at ? ` — goes out ${dayTime(j.buffer_due_at)}` : ""}`
+            : "Published"}</td>
         <td onClick={e => e.stopPropagation()}>{(j.status === "failed" || j.status === "cancelled") && <Button icon="refresh" disabled={retry.isPending} onClick={() => retry.mutate(j)}>{j.status === "failed" ? "Retry" : "Start again"}</Button>}</td>
       </tr>; })}</tbody></table></div>
       {list.isLoading && <Spinner/>}

@@ -3,9 +3,6 @@ ok=True valid · ok=False invalid · ok=None can't be verified yet (stays unveri
 
 from app.integrations.http import ApiError, request
 
-TIKTOK_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/"
-
-
 def _error_text(response) -> str:
     try:
         body = response.json()
@@ -15,30 +12,6 @@ def _error_text(response) -> str:
     if isinstance(err, dict):
         return err.get("message") or err.get("code") or str(err)
     return body.get("error_description") or (err if isinstance(err, str) else None) or f"HTTP {response.status_code}"
-
-
-def check_tiktok(values: dict[str, str]) -> tuple[bool | None, str]:
-    key, secret = values.get("client_key", ""), values.get("client_secret", "")
-    if not key or not secret:
-        return False, "Client key and client secret are both required"
-    try:
-        response = request(
-            "POST",
-            TIKTOK_TOKEN_URL,
-            data={"client_key": key, "client_secret": secret, "grant_type": "client_credentials"},
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            retries=2,
-            timeout=15,
-        )
-    except ApiError as exc:
-        return False, str(exc)
-    if response.status_code == 200:
-        try:
-            if response.json().get("access_token"):
-                return True, "TikTok accepted the client key and secret"
-        except ValueError:
-            pass
-    return False, f"TikTok rejected the credentials: {_error_text(response)}"
 
 
 def check_youtube(values: dict[str, str]) -> tuple[bool | None, str]:
@@ -57,7 +30,7 @@ def check_youtube(values: dict[str, str]) -> tuple[bool | None, str]:
     return False, f"YouTube rejected the API key: {_error_text(response)}"
 
 
-VALIDATORS = {"tiktok": check_tiktok, "youtube": check_youtube}
+VALIDATORS = {"youtube": check_youtube}
 
 
 def check_smtp(values: dict[str, str]) -> tuple[bool | None, str]:

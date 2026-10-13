@@ -1,7 +1,10 @@
 """Model → JSON shapes consumed by the React frontend."""
 
-from app.models import ActivityLog, CaptionStatus, Channel, Job, TikTokAccount, Video, Violation
-from app.services.detection import push_status
+from app.models import ActivityLog, CaptionStatus, Channel, Job, Video
+from sqlalchemy.orm import object_session
+
+from app.services import buffer
+from app.services.detection import push_detail, push_status
 
 
 def initials(handle: str) -> str:
@@ -10,33 +13,6 @@ def initials(handle: str) -> str:
     if len(parts) >= 2:
         return (parts[0][0] + parts[1][0]).upper()
     return clean[:2].upper() or "?"
-
-
-def tiktok_ref(account: TikTokAccount | None) -> dict | None:
-    if not account:
-        return None
-    return {"id": account.id, "username": account.username, "color": account.color, "initials": initials(account.username), "status": account.status}
-
-
-def tiktok_account(a: TikTokAccount, stats: dict | None = None, default_cap: int = 7) -> dict:
-    stats = stats or {}
-    return {
-        **tiktok_ref(a),
-        "display_name": a.display_name,
-        "avatar_url": a.avatar_url,
-        "daily_cap": a.daily_cap or default_cap,
-        "daily_cap_override": a.daily_cap,  # None = follows the uploads_per_tiktok_account_per_day rule
-        "default_privacy": a.default_privacy,
-        "token_expires_at": a.token_expires_at,
-        "refresh_expires_at": a.refresh_expires_at,
-        "last_error": a.last_error,
-        "last_posted_at": a.last_posted_at,
-        "created_at": a.created_at,
-        "posts_today": stats.get("posts_today", 0),
-        "failed_today": stats.get("failed_today", 0),
-        "lifetime_posts": stats.get("lifetime_posts", 0),
-        "violations": stats.get("violations", 0),
-    }
 
 
 def channel_ref(c: Channel | None) -> dict | None:
@@ -53,10 +29,10 @@ def channel(c: Channel, stats: dict | None = None, overrides: int = 0) -> dict:
         "mode": c.mode,
         "url": f"https://www.youtube.com/channel/{c.youtube_channel_id}",
         "active": c.active,
-        "default_tiktok_account": tiktok_ref(c.default_tiktok_account),
         "push_status": push_status(c),
         "push_expires_at": c.pubsub_subscription_expires_at,
         "push_error": c.pubsub_error,
+        "push_detail": push_detail(c),
         "last_checked_at": c.last_checked_at,
         "last_upload_at": c.last_upload_at,
         "last_error": c.last_error,
@@ -96,6 +72,8 @@ def video(v: Video) -> dict:
 
 
 def job(j: Job, *, detail: bool = False) -> dict:
+    session = object_session(j)
+    connected = session is None or buffer.uses_buffer(session, j.video.user_id)
     data = {
         "id": j.id,
         "status": j.status,
@@ -110,37 +88,20 @@ def job(j: Job, *, detail: bool = False) -> dict:
         "caption_fallback": j.caption_status == CaptionStatus.FALLBACK,
         "publish_mode": j.publish_mode,
         "reject_reason": j.reject_reason,
-        "waiting_for_account": j.status == "ready" and (j.tiktok_account is None or j.tiktok_account.status not in ("active", "expiring")),
-        "tiktok_url": f"https://www.tiktok.com/@{j.tiktok_account.username}/video/{j.tiktok_post_id}" if j.tiktok_post_id and j.tiktok_account else None,
-        "privacy_level": j.privacy_level,
-        "tiktok_post_id": j.tiktok_post_id,
+        "waiting_for_account": j.status == "ready" and not connected,  # no Buffer key saved yet
+        "post_url": j.buffer_link,
+        "buffer_channel": buffer.channel_ref(j.buffer_channel),
+        "buffer_due_at": j.buffer_due_at,
         "error": j.error,
         "progress": j.progress,
         "attempts": j.attempts,
-        "violation_reason": j.violation_reason,
-        "check_count": j.check_count,
         "next_check_at": j.next_check_at,
-        "monitor_until": j.monitor_until,
         "prompt_template_id": j.prompt_template_id,
         "video": video(j.video),
-        "tiktok_account": tiktok_ref(j.tiktok_account),
     }
     if detail:
         data["events"] = [{"id": e.id, "status": e.status, "message": e.message, "created_at": e.created_at} for e in j.events]
     return data
-
-
-def violation(v: Violation) -> dict:
-    return {
-        "id": v.id,
-        "job_id": v.job_id,
-        "reason": v.reason,
-        "removal_status": v.removal_status,
-        "acknowledged": v.acknowledged,
-        "detected_at": v.detected_at,
-        "tiktok_account": tiktok_ref(v.tiktok_account),
-        "title": (v.job.rewritten_title or v.job.video.original_title) if v.job else "",
-    }
 
 
 def log(entry: ActivityLog) -> dict:

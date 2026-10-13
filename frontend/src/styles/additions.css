@@ -297,3 +297,69 @@ a.button { text-decoration: none; display: inline-flex; align-items: center; }
 .source-card .warn { color: var(--warning, #d39b2a); }
 .source-card .good { color: var(--success); }
 @media (max-width: 800px) { .source-grid { grid-template-columns: 1fr; } .source-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .source-metric { border-left: 0; padding-left: 0; } .source-diagnosis-head, .source-test { flex-direction: column; align-items: flex-start; } }
+
+/* Integrations → YouTube Data API and Push Notifications (same card as Video Source) */
+.source-card.errored { border-color: var(--danger); }
+.source-metrics.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.source-bar { height: 3px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+.source-bar i { display: block; height: 100%; background: var(--primary); }
+.source-secret, .source-readonly { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--border); background: var(--surface-2); border-radius: 9px; padding: 7px 10px; }
+.source-secret.empty { border-style: dashed; font-size: 10px; color: var(--muted); }
+.source-secret > div { display: grid; gap: 3px; flex: 1; min-width: 0; }
+.source-secret code { font-size: 11px; letter-spacing: .05em; }
+.source-readonly code { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+.source-card .source-secret .link-button, .source-card .source-readonly .link-button { font-size: 10px; flex: none; }
+.source-card .source-readonly .link-button, .source-card .link-button.source-link { color: var(--primary); }
+.source-card .link-button.source-link { font-size: 10px; justify-self: start; }
+.source-card .form-error .link-button { font-size: inherit; color: inherit; text-decoration: underline; }
+.source-hint { font-size: 10px; color: var(--muted); }
+.push-list { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.push-list > div { display: grid; grid-template-columns: minmax(0, 210px) 130px minmax(0, 1fr); gap: 12px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 10px; color: var(--muted); }
+.push-list > div:last-child { border-bottom: 0; }
+.push-list code { font-size: 9px; overflow: hidden; text-overflow: ellipsis; user-select: text; }
+@media (max-width: 800px) { .source-metrics.three { grid-template-columns: 1fr; } .push-list > div { grid-template-columns: 1fr; gap: 4px; } }
+
+/* Channels: the add box */
+.card.add-channel { padding: 14px; margin-bottom: 14px; }
+.add-channel .lookup-row input { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-radius: 9px; padding: 10px 12px; font-size: 12px; outline: 0; }
+.add-channel .lookup-row input:focus { border-color: var(--primary); }
+.add-channel .lookup-row input.invalid { border-color: var(--danger); }
+.add-channel-note { margin: 8px 0 0; font-size: 10px; color: var(--muted); }
+.add-channel-note.bad { color: var(--danger); }
+
+/* Buffer Settings */
+.buffer-page { max-width: 900px; display: flex; flex-direction: column; gap: 14px; }
+.buffer-page > .card { padding: 20px; }
+.form-note.warn { border-color: var(--warning, #d39b2a); color: var(--text); margin-top: 0; }
+.buffer-page .source-secret .button { flex: none; }
+.buffer-card { display: grid; gap: 14px; }
+.buffer-card-head { display: flex; align-items: center; gap: 12px; }
+.buffer-card-head > div:nth-child(2) { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.buffer-card-head strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.buffer-card-head span, .buffer-card-foot small { font-size: 10px; color: var(--muted); }
+.buffer-card-head label { display: flex; align-items: center; gap: 8px; cursor: pointer; flex: none; }
+.buffer-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); padding-top: 14px; flex-wrap: wrap; }
+.buffer-card-foot > div { display: grid; gap: 6px; min-width: 0; }
+.buffer-card-foot > span { display: flex; gap: 8px; }
+.buffer-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 26px; font-size: 10px; }
+.buffer-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--surface-2); border-radius: 999px; padding: 4px 10px; font-size: 10px; color: var(--text); }
+.buffer-chip button { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0; font-size: 13px; line-height: 1; }
+.buffer-chip button:hover { color: var(--danger); }
+.buffer-time-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.field .buffer-time-row select { width: 72px; }
+.buffer-page .bad, .buffer-chips .bad, .buffer-status .bad { color: var(--danger); }
+.buffer-status .good { color: var(--success); }
+.buffer-status .warn { color: var(--primary); }
+.modal.wide { width: min(720px, calc(100vw - 32px)); }
+.buffer-status { display: grid; gap: 14px; }
+.buffer-status-now { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.buffer-status-now > div { border: 1px solid var(--border); background: var(--surface-2); border-radius: 10px; padding: 12px; display: grid; gap: 4px; }
+.buffer-status-now small, .buffer-recent small { font-size: 9px; color: var(--muted); }
+.buffer-status-now b { font-size: 20px; }
+.buffer-recent { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+.buffer-recent li { display: grid; gap: 2px; padding: 8px 12px; border-top: 1px solid var(--border); }
+.buffer-recent li:first-child { border-top: 0; }
+.buffer-recent li > span { display: flex; justify-content: space-between; gap: 12px; font-size: 10px; }
+.buffer-recent li > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.buffer-recent b { font-size: 9px; flex: none; }
+.buffer-page .source-secret small { font-size: 9px; color: var(--muted); }

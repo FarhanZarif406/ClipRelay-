@@ -1,13 +1,12 @@
 import type { ReactNode } from "react";
 
 export type IconName =
-  | "grid" | "tiktok" | "rules" | "sparkles" | "queue" | "shield" | "logs" | "settings" | "search"
+  | "grid" | "rules" | "sparkles" | "queue" | "shield" | "logs" | "settings" | "search"
   | "play" | "bell" | "chevron" | "arrow" | "more" | "plus" | "clock" | "check" | "alert" | "close" | "filter"
   | "download" | "sun" | "moon" | "menu" | "link" | "code" | "refresh";
 
 const iconPaths: Record<IconName, ReactNode> = {
   grid: <><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></>,
-  tiktok: <><path d="M14 4v11.2a4.2 4.2 0 1 1-3-4"/><path d="M14 4c1 3 2.8 4.2 5 4.4"/></>,
   rules: <><path d="M4 6h16M7 12h10M10 18h4"/><circle cx="8" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="12" cy="18" r="2"/></>,
   sparkles: <><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2L12 3Z"/><path d="m5 14 .8 2.2L8 17l-2.2.8L5 20l-.8-2.2L2 17l2.2-.8L5 14Zm13-1 1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1 1-2.5Z"/></>,
   queue: <><path d="M6 5h15M6 12h15M6 19h15"/><circle cx="3" cy="5" r=".5"/><circle cx="3" cy="12" r=".5"/><circle cx="3" cy="19" r=".5"/></>,

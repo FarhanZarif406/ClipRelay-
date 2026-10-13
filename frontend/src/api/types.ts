@@ -2,8 +2,6 @@ export type Tone = "success" | "warning" | "danger" | "primary" | "neutral";
 
 export type User = { id: number; email: string; name: string; workspace_name: string; role: "owner" | "member"; created_at: string; terms_accepted_at?: string | null };
 
-export type Ref = { id: number; username: string; color: string; initials: string; status?: string };
-
 export type ActivityLog = {
   id: number;
   created_at: string;
@@ -40,7 +38,7 @@ export type Video = {
 };
 
 export type JobStatus =
-  | "fetched" | "downloading" | "rendering" | "rewriting" | "awaiting_approval" | "ready" | "uploading" | "posted"
+  | "fetched" | "downloading" | "rendering" | "rewriting" | "awaiting_approval" | "ready" | "uploading" | "scheduled" | "posted"
   | "monitoring" | "clean" | "violated" | "failed" | "cancelled" | "clipped";
 
 export type Job = {
@@ -55,20 +53,17 @@ export type Job = {
   rewritten_tags: string[];
   caption_status: "pending" | "done" | "caption_fallback";
   caption_fallback: boolean;
-  publish_mode: "inbox" | "direct" | null;
   reject_reason: string | null;
+  /** Approved but no Buffer key is saved yet, so it cannot go out. */
   waiting_for_account: boolean;
-  tiktok_url: string | null;
-  privacy_level: string | null;
-  tiktok_post_id: string | null;
+  post_url: string | null;
   error: string | null;
-  violation_reason: string | null;
-  check_count: number;
   next_check_at: string | null;
-  monitor_until: string | null;
   prompt_template_id: number | null;
   video: Video;
-  tiktok_account: Ref | null;
+  /** The Buffer account chosen for it (null = the one whose next free time comes first), and when Buffer publishes it. */
+  buffer_channel: BufferRef | null;
+  buffer_due_at: string | null;
   events?: { id: number; status: JobStatus; message: string; created_at: string }[];
 };
 
@@ -76,53 +71,22 @@ export type Kpi = { key: string; label: string; value: number; delta?: number | 
 
 export type Summary = {
   kpis: Kpi[];
-  distribution: { published: number; pending: number; failed: number; removed: number };
-  attention: { username: string; status: string; refresh_expires_at: string | null }[];
-  unacknowledged_violations: number;
+  distribution: { published: number; pending: number; failed: number };
   recent_activity: ActivityLog[];
   timezone: string;
   rejections: { items: Video[]; removed_today: number; acceptance_rate: number | null; max_duration_seconds: number | null; min_source_duration_seconds: number | null };
-  accounts: (Ref & { posts_today: number; lifetime_posts: number })[];
+  accounts: (AccountRef & { posts_today: number; lifetime_posts: number })[];
 };
 
 export type Nav = {
   pending_jobs: number;
-  unacknowledged_violations: number;
   failed_jobs: number;
   onboarding_completed: boolean;
-  tiktok_accounts: number;
+  buffer_connected: boolean;
+  buffer_accounts: number;
   review_jobs: number;
   skipped_videos: number;
   channels: number;
-};
-
-export type TikTokAccount = Ref & {
-  status: "active" | "expiring" | "expired" | "revoked";
-  display_name: string | null;
-  avatar_url: string | null;
-  daily_cap: number;
-  daily_cap_override: number | null;
-  default_privacy: string;
-  token_expires_at: string | null;
-  refresh_expires_at: string | null;
-  last_error: string | null;
-  last_posted_at: string | null;
-  created_at: string;
-  posts_today: number;
-  failed_today: number;
-  lifetime_posts: number;
-  violations: number;
-};
-
-export type Violation = {
-  id: number;
-  job_id: number;
-  reason: string;
-  removal_status: string;
-  acknowledged: boolean;
-  detected_at: string;
-  tiktok_account: Ref | null;
-  title: string;
 };
 
 export type Prompt = {
@@ -140,25 +104,14 @@ export type Prompt = {
   updated_at: string;
 };
 
-export type Policy = { tiktok_app_audited: boolean };
-
-export type AuditSettings = { check_hours: number[]; auto_remove: boolean; notifications_enabled: boolean };
-export type NotificationSettings = { webhook_url: string; email: string; notify_violations: boolean; notify_failures: boolean; notify_tokens: boolean };
-
-export type AuditItem = Job & {
-  display_status: "Checking" | "Warning" | "Clear" | "Violation";
-  elapsed_hours: number;
-  hours_left: number;
-  progress: number;
-  checkpoints: { label: string; hours: number; done: boolean }[];
-};
+export type NotificationSettings = { webhook_url: string; email: string; notify_failures: boolean; notify_tokens: boolean };
 
 export type DailyReport = {
   date: string;
   timezone: string;
   uploaded: number;
   failed: number;
-  accounts: (Ref & { posts_today: number; failed_today: number; lifetime_posts: number })[];
+  accounts: (AccountRef & { posts_today: number; failed_today: number; lifetime_posts: number })[];
   active_accounts: number;
   lifetime_uploads: number;
   accepted: number;
@@ -210,10 +163,10 @@ export type Channel = ChannelRef & {
   youtube_channel_id: string;
   url: string;
   active: boolean;
-  default_tiktok_account: Ref | null;
   push_status: "subscribed" | "pending" | "expired" | "failed" | "unavailable" | "off";
   push_expires_at: string | null;
   push_error: string | null;
+  push_detail: string | null;
   last_checked_at: string | null;
   last_upload_at: string | null;
   last_error: string | null;
@@ -223,7 +176,6 @@ export type Channel = ChannelRef & {
   videos_skipped: number;
   override_count: number;
 };
-export type ChannelCard = { youtube_channel_id: string; display_name: string; handle: string | null; thumbnail_url: string | null; url: string; already_added: boolean; added_in: "shorts" | "podcasts" | null; added_by: string | null };
 
 export type RuleValue = boolean | number | string;
 export type RuleValues = Record<string, RuleValue>;
@@ -237,7 +189,7 @@ export type ChannelRules = { overrides: RuleValues; effective: RuleValues; globa
 export type StatusItem = {
   id: number; video_id: number; title: string; channel: string | null; thumbnail_url: string | null; permalink: string | null; duration_sec: number | null;
   progress: number | null; since: string; attempts: number; note: string | null; retry_at: string | null; podcast: boolean;
-  clip: { start: number; end: number; podcast_title: string } | null; tiktok_account: Ref | null;
+  clip: { start: number; end: number; podcast_title: string } | null; buffer_channel: BufferRef | null; due_at: string | null;
 };
 export type PipelineStatus = {
   mode: "shorts" | "podcasts"; timezone: string; podcasts_analysing: number;
@@ -255,4 +207,33 @@ export type DiagnosisRow = { client: string; cookies: boolean; ipv6: boolean; ok
 export type SourceDiagnosis = {
   id: string; status: "running" | "done" | "failed"; stage: string | null; cookies: boolean; proxy: boolean; player_client: string;
   rows: DiagnosisRow[]; total: number; verdict?: string; version?: string | null; js_runtime?: string | null; verbose?: string; command?: string;
+};
+
+export type YouTubeApiInfo = {
+  has_key: boolean; key_last4: string; source: "app" | "env" | "default" | null; project_id: string; updated_at: string | null;
+  usage: { units_today: number; video_calls_today: number; last_ok_at: string | null; daily_quota: number };
+};
+export type YouTubeApiTest = { ok: boolean; status: number; reason: string | null; message: string; status_info: YouTubeApiInfo };
+export type PushSubscription = { channel_id: string; status: "verified" | "pending" | "failed"; detail: string; expires_at: string | null };
+/** The verify token itself never reaches the page: only its last four characters. */
+export type PushInfo = {
+  public_base_url: string; base_source: "app" | "env" | null; callback_url: string; available: boolean; has_token: boolean; token_last4: string;
+  updated_at: string | null; subscriptions: PushSubscription[]; notifications: { today: number; last_at: string | null };
+};
+
+export type BufferRef = { id: number; name: string; service: string };
+/** A publishing account as the Dashboard and the Daily Report list it. */
+export type AccountRef = BufferRef & { initials: string; enabled: boolean };
+/** One of the member's Buffer channels: a social account connected in Buffer, as this workspace schedules it. */
+export type BufferChannel = BufferRef & {
+  avatar: string | null; enabled: boolean; daily_limit: number; times: string[]; time_zone: string; own_time_zone: boolean; start_date: string | null;
+  used_today: number; uploaded: number; waiting: number; next_slot: string | null;
+};
+/** What the Buffer page shows. The API key itself never reaches the page. */
+export type BufferStatus = { connected: boolean; last4: string; saved_at: string | null; synced_at: string | null; error: string | null; public_url: boolean; time_zone: string; channels: BufferChannel[] };
+export type BufferChannelChanges = { enabled?: boolean; daily_limit?: number; times?: string[]; time_zone?: string; start_date?: string | null };
+type PeriodCounts = { today: number; week: number; month: number; lifetime: number };
+export type BufferChannelStatus = {
+  id: number; name: string; time_zone: string; uploaded: PeriodCounts; failed: PeriodCounts; waiting: number; sending: number;
+  recent: { id: number; title: string; state: "scheduled" | "published" | "failed"; due_at: string | null; done_at: string | null; error: string | null }[];
 };

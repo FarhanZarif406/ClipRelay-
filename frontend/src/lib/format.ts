@@ -47,6 +47,7 @@ export const JOB_STATUS: Record<JobStatus, { label: string; tone: Tone }> = {
   awaiting_approval: { label: "Needs approval", tone: "warning" },
   ready: { label: "Ready", tone: "primary" },
   uploading: { label: "Uploading", tone: "primary" },
+  scheduled: { label: "Scheduled at Buffer", tone: "primary" },
   posted: { label: "Posted", tone: "success" },
   monitoring: { label: "Monitoring", tone: "primary" },
   clean: { label: "Clean", tone: "success" },
@@ -54,13 +55,6 @@ export const JOB_STATUS: Record<JobStatus, { label: string; tone: Tone }> = {
   failed: { label: "Failed", tone: "danger" },
   cancelled: { label: "Cancelled", tone: "neutral" },
   clipped: { label: "Clips made", tone: "success" },
-};
-
-export const ACCOUNT_STATUS: Record<string, { label: string; tone: Tone }> = {
-  active: { label: "Active", tone: "success" },
-  expiring: { label: "Expiring", tone: "warning" },
-  expired: { label: "Expired", tone: "danger" },
-  revoked: { label: "Disconnected", tone: "neutral" },
 };
 
 export function greeting(): string {
@@ -78,7 +72,7 @@ export const SKIP_REASON: Record<string, string> = {
   not_a_podcast: "Not a podcast (too short)",
   too_short: "Too short",
   skipped_channel_cap: "Channel daily cap",
-  skipped_account_cap: "TikTok account daily cap",
+  skipped_account_cap: "Account daily cap",
 };
 
 /** 75 → "01:15", 3725 → "1:02:05". */

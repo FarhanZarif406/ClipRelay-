@@ -22,16 +22,14 @@ const KPI_LINKS: Record<string, [string, string][]> = {
   published: [["View published videos", "/published?status=published"], ["Open daily report", "/report"]],
   pending: [["Open review queue", "/review"], ["View videos waiting to upload", "/published?status=waiting"]],
   failed: [["View failed videos", "/published?status=failed"], ["Open logs", "/logs"]],
-  removed: [["Open compliance audit", "/audit"]],
 };
 
 /** Pages the Podcasts window does not have. */
-const HIDDEN_IN_PODCASTS = ["/audit", "/logs", "/channels?"];
+const HIDDEN_IN_PODCASTS = ["/logs", "/channels?"];
 
 const EVENT_TITLES: Record<string, string> = {
   published: "Video published", rewritten: "Caption rewritten", video_skipped: "Video skipped", video_detected: "New upload detected", downloaded: "Video downloaded", rendered: "Video rendered", caption_fallback: "Caption fallback used", channel_added: "Channel added", job_failed: "Upload failed",
-  violation: "Violation detected", token_expired: "Token expired",
-  tiktok_connected: "TikTok account connected", rate_limited: "Rate limit reached",
+  buffer_scheduled: "Handed to Buffer",
 };
 
 function activityVisual(entry: ActivityLog): [IconName, string] {
@@ -57,7 +55,7 @@ function PerformanceChart() {
   const line = points.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
   const labelEvery = Math.ceil(labels.length / 7);
   return <Card className="chart-card">
-    <div className="card-header"><div><div className="card-title">{PODCASTS ? "Clips published" : "Publishing performance"}</div><div className="card-caption">Uploads across all TikTok accounts</div></div><div className="segmented"><button className={days === 7 ? "active" : ""} onClick={() => setDays(7)}>7 days</button><button className={days === 30 ? "active" : ""} onClick={() => setDays(30)}>30 days</button></div></div>
+    <div className="card-header"><div><div className="card-title">{PODCASTS ? "Clips published" : "Publishing performance"}</div><div className="card-caption">Uploads across all accounts</div></div><div className="segmented"><button className={days === 7 ? "active" : ""} onClick={() => setDays(7)}>7 days</button><button className={days === 30 ? "active" : ""} onClick={() => setDays(30)}>30 days</button></div></div>
     <div className="chart">
       <div className="y-labels">{[max, (max * 2) / 3, max / 3, 0].map(v => <span key={v}>{Math.round(v)}</span>)}</div>
       <div className="plot">
@@ -71,28 +69,25 @@ function PerformanceChart() {
 
 function JobStatusCard({ summary }: { summary: Summary }) {
   const d = summary.distribution;
-  const total = d.published + d.pending + d.failed + d.removed;
+  const total = d.published + d.pending + d.failed;
   const pct = (n: number) => (total ? (n / total) * 100 : 0);
   const a = pct(d.published), b = a + pct(d.pending), c = b + pct(d.failed);
-  const background = total ? `conic-gradient(var(--success) 0 ${a}%,var(--primary) ${a}% ${b}%,var(--danger) ${b}% ${c}%,var(--warning) ${c}%)` : "var(--surface-3)";
+  const background = total ? `conic-gradient(var(--success) 0 ${a}%,var(--primary) ${a}% ${b}%,var(--danger) ${b}% ${c}%)` : "var(--surface-3)";
   return <Card className="status-card">
     <div className="card-header"><div><div className="card-title">{PODCASTS ? "Clip status" : "Video status"}</div><div className="card-caption">Today’s distribution</div></div></div>
     <div className="donut-wrap"><div className="donut" style={{ background }}><div><strong>{total}</strong><span>{PODCASTS ? "Total clips" : "Total videos"}</span></div></div></div>
-    <div className="legend">{([["Published", d.published, "success"], ["Pending", d.pending, "primary"], ["Failed", d.failed, "danger"], ["Removed", d.removed, "warning"]] as const).map(([x, n, cl]) => <div key={x}><span><i className={cl}/>{x}</span><strong>{n}</strong></div>)}</div>
+    <div className="legend">{([["Published", d.published, "success"], ["Pending", d.pending, "primary"], ["Failed", d.failed, "danger"]] as const).map(([x, n, cl]) => <div key={x}><span><i className={cl}/>{x}</span><strong>{n}</strong></div>)}</div>
   </Card>;
 }
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [dismissed, setDismissed] = useState(false);
   const { data: summary } = useQuery({ queryKey: ["dashboard", "summary"], queryFn: dashboard.summary, refetchInterval: 30_000 });
   const firstName = (user?.name || "").split(" ")[0];
 
   return <>
-    <PageHeader title={`${greeting()}${firstName ? `, ${firstName}` : ""}`} description={PODCASTS ? "Podcasts workspace: long videos are cut into short clips and published to its own TikTok accounts." : "Here’s what your content network is doing today."}/>
-    {summary && summary.attention.length > 0 && !dismissed && <div className="alert-banner"><div className="alert-icon"><Icon name="alert"/></div><div><strong>{summary.attention.length} TikTok token{summary.attention.length === 1 ? " needs" : "s need"} attention</strong><span>{summary.attention.map(a => a.status === "expiring" ? `@${a.username} expires ${relativeTime(a.refresh_expires_at)}` : `@${a.username} has expired`).join(" · ")}</span></div><button onClick={() => navigate("/tiktok")}>Review accounts <Icon name="arrow" size={15}/></button><button className="icon-button" onClick={() => setDismissed(true)}><Icon name="close" size={16}/></button></div>}
-    {summary && !PODCASTS && summary.unacknowledged_violations > 0 && <div className="violation-list"><div className="violation-alert"><div className="alert-icon"><Icon name="shield"/></div><div><strong>{summary.unacknowledged_violations} video{summary.unacknowledged_violations === 1 ? " was" : "s were"} flagged by TikTok</strong><span>Review the violations and confirm removal in the Compliance Audit.</span></div><Button variant="danger" onClick={() => navigate("/audit")}>Review</Button></div></div>}
+    <PageHeader title={`${greeting()}${firstName ? `, ${firstName}` : ""}`} description={PODCASTS ? "Podcasts workspace: long videos are cut into short clips and published to this workspace’s own accounts." : "Here’s what your content network is doing today."}/>
     <div className="kpi-grid">
       {(summary?.kpis ?? []).map(k => <Card className="kpi" key={k.key}><div className="kpi-label">{k.label}<Menu items={(KPI_LINKS[k.key] ?? []).filter(([, to]) => !PODCASTS || !HIDDEN_IN_PODCASTS.some(p => to.startsWith(p))).map(([label, to]) => ({ label, icon: "arrow" as const, onSelect: () => navigate(to) }))} trigger={toggle => <button type="button" className="kpi-more" aria-label={`${k.label} options`} onClick={toggle}><Icon name="more" size={16}/></button>}/></div><div className="kpi-value">{k.value.toLocaleString()}</div><div className={`kpi-meta ${k.tone}`}><span>{kpiMeta(k)}</span> vs. yesterday <MiniBars series={k.series}/></div></Card>)}
     </div>
@@ -117,9 +112,9 @@ export default function Dashboard() {
       </tbody></table></div>}
     </Card>}
     {summary && <Card className="account-totals-card">
-      <div className="card-header"><div><div className="card-title">Total uploads by connected account</div><div className="card-caption">Lifetime published video count for every TikTok account currently linked to this workspace.</div></div><Button variant="ghost" onClick={() => navigate("/report")}>Open daily report <Icon name="arrow" size={14}/></Button></div>
-      {summary.accounts.length === 0 && <Empty icon="tiktok" title="No TikTok accounts connected"><Button variant="primary" icon="plus" onClick={() => navigate("/tiktok")}>Connect account</Button></Empty>}
-      <div className="account-totals-grid">{summary.accounts.map(account => <div className="account-total" key={account.id}><Avatar label={account.initials} color={account.color}/><div><strong>@{account.username}</strong><span>{account.posts_today} uploaded today</span></div><div><strong>{account.lifetime_posts.toLocaleString()}</strong><span>Total uploads</span></div></div>)}</div>
+      <div className="card-header"><div><div className="card-title">Total uploads by connected account</div><div className="card-caption">Lifetime published video count for every account connected in Buffer for this workspace.</div></div><Button variant="ghost" onClick={() => navigate("/report")}>Open daily report <Icon name="arrow" size={14}/></Button></div>
+      {summary.accounts.length === 0 && <Empty icon="arrow" title="No publishing accounts yet">Add your Buffer key, then switch on the accounts your videos should go to.<Button variant="primary" onClick={() => navigate("/buffer")}>Open Buffer Settings</Button></Empty>}
+      <div className="account-totals-grid">{summary.accounts.map(account => <div className="account-total" key={account.id}><Avatar label={account.initials}/><div><strong>{account.name}</strong><span>{account.enabled ? `${account.posts_today} uploaded today` : "Switched off"}</span></div><div><strong>{account.lifetime_posts.toLocaleString()}</strong><span>Total uploads</span></div></div>)}</div>
     </Card>}
   </>;
 }

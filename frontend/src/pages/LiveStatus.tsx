@@ -5,7 +5,7 @@ import type { StatusItem } from "@/api/types";
 import { Icon, type IconName } from "@/components/Icon";
 import { useErrorToast, useToast } from "@/components/Toast";
 import { Badge, Button, Card, PageHeader, Spinner, VideoThumb } from "@/components/ui";
-import { duration, relativeTime, timecode } from "@/lib/format";
+import { dayTime, duration, relativeTime, timecode } from "@/lib/format";
 import { PODCASTS } from "@/lib/mode";
 
 /** What each stage looks like, and where to go to act on it. */
@@ -16,7 +16,8 @@ const STAGE: Record<string, { icon: IconName; empty: string; bar: boolean; link?
   caption: { icon: "sparkles", empty: "No video is waiting for its caption.", bar: false, stop: ["Cancel", "Cancel this video?"] },
   review: { icon: "check", empty: "Nothing is waiting for approval.", bar: false, link: ["Open review queue", "/review"] },
   upload_wait: { icon: "arrow", empty: "Nothing is waiting to be uploaded.", bar: false, link: ["Open published", "/published?status=waiting"], stop: ["Cancel upload", "Cancel this video so it is not uploaded?"] },
-  uploading: { icon: "tiktok", empty: "Nothing is uploading right now.", bar: false },
+  uploading: { icon: "arrow", empty: "Nothing is being handed to Buffer right now.", bar: false },
+  scheduled: { icon: "clock", empty: "Nothing is waiting at Buffer.", bar: false, link: ["Open Buffer Settings", "/buffer"] },
 };
 
 function Tile({ label, done, left, of, tone }: { label: string; done: number; left: number; of: number; tone: string }) {
@@ -33,7 +34,8 @@ function Row({ item, bar, showNote, stop, onStop, stopping }: { item: StatusItem
     <VideoThumb index={item.id} image={item.thumbnail_url}/>
     <div className="status-row-main">
       <strong>{item.title}</strong>
-      <span>{item.podcast ? "Podcast · reading the transcript and choosing clips" : item.clip ? `Clip ${timecode(item.clip.start)}–${timecode(item.clip.end)} of “${item.clip.podcast_title}”` : item.channel ?? "—"}{!item.clip && !item.podcast && item.duration_sec ? ` · ${duration(item.duration_sec)}` : ""}</span>
+      <span>{item.podcast ? "Podcast · reading the transcript and choosing clips" : item.clip ? `Clip ${timecode(item.clip.start)}–${timecode(item.clip.end)} of “${item.clip.podcast_title}”` : item.channel ?? "—"}{!item.clip && !item.podcast && item.duration_sec ? ` · ${duration(item.duration_sec)}` : ""}{item.buffer_channel ? ` · Buffer: ${item.buffer_channel.name}` : ""}</span>
+      {item.due_at && <span className="status-note">Goes out {dayTime(item.due_at)}</span>}
       {bar && !item.podcast && <div className="status-bar"><i className="primary" style={{ width: `${Math.max(2, percent)}%` }}/></div>}
       {item.note && (showNote || item.attempts > 0) && <span className={item.attempts ? "status-note warn" : "status-note"}>{item.attempts ? `Attempt ${item.attempts} failed${retrying ? `, retrying ${relativeTime(item.retry_at, { suffix: true })}` : ""}: ` : ""}{item.note}</span>}
     </div>
@@ -71,7 +73,7 @@ export default function LiveStatus() {
       <div className="status-tiles">
         <Tile label="Downloaded" done={today.downloaded} left={today.download_left} of={today.total} tone="primary"/>
         <Tile label="Edited" done={today.edited} left={today.edit_left} of={today.total} tone="primary"/>
-        <Tile label="Uploaded to TikTok" done={today.uploaded} left={today.upload_left} of={today.total} tone="success"/>
+        <Tile label="Uploaded" done={today.uploaded} left={today.upload_left} of={today.total} tone="success"/>
         <Card className="status-tile"><span>Failed</span><strong className={today.failed ? "bad" : ""}>{today.failed}</strong><div className="status-bar"/><small>{today.failed ? <button type="button" className="link-button" onClick={() => navigate("/published?status=failed")}>See why and retry</button> : "Nothing failed today"}</small></Card>
       </div>
       {PODCASTS && !!data?.podcasts_analysing && <p className="note-row">{data.podcasts_analysing} podcast{data.podcasts_analysing === 1 ? " is" : "s are"} being analysed. Its clips appear below once the moments are chosen.</p>}

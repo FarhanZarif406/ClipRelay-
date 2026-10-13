@@ -1,9 +1,6 @@
 import httpx
 import respx
 
-from app.models import TikTokAccount
-from app.services import credentials
-from app.services.credential_checks import TIKTOK_TOKEN_URL
 
 
 
@@ -15,64 +12,13 @@ def test_api_keys_are_for_the_admin_only(client, auth, member_auth):
     # A member cannot see the API keys section at all, let alone change it.
     assert client.get("/api/credentials", headers=member_auth).status_code == 403
     assert client.get("/api/settings/integrations", headers=member_auth).status_code == 403
-    assert client.put("/api/credentials/tiktok", headers=member_auth, json={"values": {"client_key": "x"}}).status_code == 403
-    assert client.post("/api/credentials/tiktok/validate", headers=member_auth, json={}).status_code == 403
-    assert client.delete("/api/credentials/tiktok", headers=member_auth).status_code == 403
+    assert client.put("/api/credentials/youtube", headers=member_auth, json={"values": {"api_key": "x"}}).status_code == 403
+    assert client.post("/api/credentials/youtube/validate", headers=member_auth, json={}).status_code == 403
+    assert client.delete("/api/credentials/youtube", headers=member_auth).status_code == 403
     assert client.post("/api/settings/integrations/ffmpeg/test", headers=member_auth).status_code == 403
     assert client.put("/api/settings/notifications", headers=member_auth, json={"email": "x@example.com"}).status_code == 403
-    card = _card(client, auth, "tiktok")
-    assert card["configured"] is True and "fields" in card
-
-
-def test_owner_card_masks_secrets_and_shows_redirect(client, auth):
-    card = _card(client, auth, "tiktok")
-    fields = {f["key"]: f for f in card["fields"]}
-    assert fields["client_key"]["value"] == "tt-key" and fields["client_key"]["source"] == "env"
-    assert fields["client_secret"]["value"] == "" and "tt-secret" not in str(card)
-    assert card["redirect_uri"] == "http://api.test/api/tiktok/oauth/callback"
-    assert card["state"] == "env"
-
-
-@respx.mock
-def test_tiktok_client_credentials_validation(client, auth):
-    route = respx.post(TIKTOK_TOKEN_URL).mock(side_effect=[
-        httpx.Response(200, json={"access_token": "clt.x", "expires_in": 7200, "token_type": "Bearer"}),
-        httpx.Response(401, json={"error": "invalid_client", "error_description": "Client key or secret is incorrect."}),
-    ])
-    good = client.post("/api/credentials/tiktok/validate", headers=auth, json={"values": {"client_key": "k1", "client_secret": "s1"}}).json()
-    assert good["ok"] is True
-    assert b"grant_type=client_credentials" in route.calls[0].request.content
-    bad = client.post("/api/credentials/tiktok/validate", headers=auth, json={"values": {"client_key": "k1", "client_secret": "nope"}}).json()
-    assert bad["ok"] is False and "incorrect" in bad["message"]
-
-
-@respx.mock
-def test_save_validates_and_falls_back_on_remove(client, auth):
-    respx.post(TIKTOK_TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": "clt.x"}))
-    r = client.put("/api/credentials/tiktok", headers=auth, json={"values": {"client_key": "new-key", "client_secret": "new-secret"}})
-    assert r.status_code == 200 and r.json()["card"]["state"] == "valid"
-    assert credentials.get("tiktok.client_key") == "new-key"
-    assert "new-secret" not in r.text
-    # blank secret keeps the stored one
-    r = client.put("/api/credentials/tiktok", headers=auth, json={"values": {"client_key": "new-key-2", "client_secret": ""}})
-    assert credentials.get("tiktok.client_secret") == "new-secret"
-    r = client.delete("/api/credentials/tiktok", headers=auth)
-    assert r.json()["fallback"] == "env" and credentials.get("tiktok.client_key") == "tt-key"
-    logs = client.get("/api/logs?service=Settings", headers=auth).json()["items"]
-    assert logs and all("new-secret" not in entry["message"] for entry in logs)
-
-
-@respx.mock
-def test_changing_app_with_connected_accounts_requires_reconnect(client, auth, db, tiktok_account):
-    respx.post(TIKTOK_TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": "clt.x"}))
-    body = {"values": {"client_key": "other-app", "client_secret": "other-secret"}}
-    r = client.put("/api/credentials/tiktok", headers=auth, json=body)
-    assert r.status_code == 409 and r.json()["detail"]["code"] == "reconnect_required"
-    assert credentials.get("tiktok.client_key") == "tt-key"  # nothing saved
-    r = client.put("/api/credentials/tiktok", headers=auth, json={**body, "confirm_reconnect": True})
-    assert r.status_code == 200
-    db.expire_all()
-    assert db.get(TikTokAccount, tiktok_account.id).status == "expired"
+    card = _card(client, auth, "youtube")
+    assert card["configured"] is False and "fields" in card and "redirect_uri" not in card
 
 
 def test_transcription_and_instagram_cards_are_gone(client, auth):
@@ -124,8 +70,8 @@ def test_smtp_card_validation_and_test_email(client, auth, monkeypatch, db):
     sent = client.post("/api/settings/notifications/test-email", headers=auth).json()
     assert sent["ok"] is True and FakeSMTP.sent[-1]["To"] == "ops@example.com, owner@example.com"
 
-    assert notify.send(db, "violation", "Video flagged on @northbound") is True
-    assert "flagged" in FakeSMTP.sent[-1]["Subject"]
+    assert notify.send(db, "failure", "Job #1 failed for northbound") is True
+    assert "failed" in FakeSMTP.sent[-1]["Subject"]
 
     FakeSMTP.fail_login = True
     bad = client.post("/api/credentials/smtp/validate", headers=auth, json={}).json()

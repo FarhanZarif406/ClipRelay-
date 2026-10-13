@@ -13,8 +13,7 @@ os.environ.update(
         "LLM_PROVIDER": "anthropic",
         "LLM_MODEL": "claude-test",
         "LLM_API_KEY": "sk-test",
-        "TIKTOK_CLIENT_KEY": "tt-key",
-        "TIKTOK_CLIENT_SECRET": "tt-secret",
+        "SMTP_USERNAME": "env-user",
         "STORAGE_BACKEND": "local",
         "STORAGE_LOCAL_PATH": os.path.join(_TMP, "media"),
         "PUBLIC_BASE_URL": "http://api.test",
@@ -30,7 +29,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.integrations import http as http_module  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import PromptTemplate, TikTokAccount, utcnow  # noqa: E402
+from app.models import BufferAccount, BufferChannel, PromptTemplate, utcnow  # noqa: E402
 from app.security import encrypt  # noqa: E402
 from app.services import credentials, dispatch, llm_registry, media  # noqa: E402
 from app.services.prompts import DEFAULT_TEMPLATE  # noqa: E402
@@ -76,29 +75,21 @@ def template(db):
 
 
 @pytest.fixture
-def tiktok_account(db):
-    account = TikTokAccount(
-        open_id="open-1",
-        user_id=1,  # the first registered user (the `auth` fixture)
-        username="northbound",
-        access_token_enc=encrypt("tt-access"),
-        refresh_token_enc=encrypt("tt-refresh"),
-        token_expires_at=utcnow() + timedelta(hours=20),
-        refresh_expires_at=utcnow() + timedelta(days=300),
-        daily_cap=10,
-    )
+def buffer_account(db):
+    """The first user's Buffer key and one TikTok account connected there, switched on in the Shorts workspace."""
+    db.add(BufferAccount(user_id=1, api_key_enc=encrypt("buf-key-0123456789abcdefghij")))
+    account = BufferChannel(user_id=1, mode="shorts", buffer_id="ch-northbound", name="northbound", service="tiktok", enabled=True, daily_limit=3, times=["09:00", "18:00"])
     db.add(account)
     db.commit()
     return account
 
 
 @pytest.fixture
-def channel(db, tiktok_account):
+def channel(db):
     from app.models import Channel
 
     row = Channel(
         youtube_channel_id="UC" + "a" * 22, user_id=1, handle="@northbound", display_name="Northbound", active=True,
-        default_tiktok_account_id=tiktok_account.id,
         monitoring_since=utcnow() - timedelta(days=1),
     )
     db.add(row)

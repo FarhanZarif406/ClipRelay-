@@ -6,8 +6,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import func, or_, select
 
 from app.api.deps import DB, CurrentUser, Workspace
-from app.integrations.http import ApiError
-from app.models import Job, JobStatus, Mode, TikTokAccount, User, Video
+from app.models import BufferChannel, Job, JobStatus, Mode, User, Video
 from app.schemas import JobUpdate, RejectIn
 from app.security import decode_token
 from app.services import activity, detection, dispatch, pipeline, serializers
@@ -21,9 +20,9 @@ STATUS_GROUPS = {
     "review": {JobStatus.AWAITING_APPROVAL},
     "failed": {JobStatus.FAILED},
     "cancelled": {JobStatus.CANCELLED},  # stopped or rejected by the operator; can be restarted
-    "waiting": {JobStatus.READY, JobStatus.UPLOADING},  # approved or automatic, not on TikTok yet
+    "waiting": {JobStatus.READY, JobStatus.UPLOADING, JobStatus.SCHEDULED},  # approved or automatic, not published yet
     # Everything past the review step: the Published page shows these.
-    "outbox": JobStatus.PUBLISHED | {JobStatus.VIOLATED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.READY, JobStatus.UPLOADING},
+    "outbox": JobStatus.PUBLISHED | {JobStatus.VIOLATED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.READY, JobStatus.UPLOADING, JobStatus.SCHEDULED},
 }
 
 
@@ -40,7 +39,7 @@ def list_jobs(
     user: CurrentUser,
     q: str | None = None,
     status: str | None = None,
-    tiktok_account_id: int | None = None,
+    buffer_channel_id: int | None = None,
     channel_id: int | None = None,
     order: str = Query("newest", pattern="^(newest|oldest|posted)$"),
     period: str | None = Query(None, pattern="^(today|7d|30d)$"),
@@ -52,8 +51,8 @@ def list_jobs(
     if status:
         statuses = STATUS_GROUPS.get(status, {status})
         stmt = stmt.where(Job.status.in_(statuses))
-    if tiktok_account_id:
-        stmt = stmt.where(Job.tiktok_account_id == tiktok_account_id)
+    if buffer_channel_id:
+        stmt = stmt.where(Job.buffer_channel_id == buffer_channel_id)
     if channel_id:
         stmt = stmt.where(Video.channel_id == channel_id)
     if period:
@@ -68,11 +67,11 @@ def list_jobs(
             Video.original_title.ilike(like),
             Job.rewritten_caption.ilike(like),
             Job.rewritten_title.ilike(like),
-            TikTokAccount.username.ilike(like),
+            BufferChannel.name.ilike(like),
         ]
         if term.isdigit():
             conditions.append(Job.id == int(term))
-        stmt = stmt.outerjoin(TikTokAccount, Job.tiktok_account_id == TikTokAccount.id).where(or_(*conditions))
+        stmt = stmt.outerjoin(BufferChannel, Job.buffer_channel_id == BufferChannel.id).where(or_(*conditions))
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
     ordering = {"newest": Job.id.desc(), "oldest": Job.id.asc(), "posted": func.coalesce(Job.posted_at, Job.updated_at).desc()}[order]
     jobs = db.scalars(stmt.order_by(ordering).offset((page - 1) * page_size).limit(page_size)).unique().all()
@@ -90,27 +89,23 @@ def edit_job(job_id: int, body: JobUpdate, db: DB, user: CurrentUser):
     if job.status not in JobStatus.PROCESSING | {JobStatus.AWAITING_APPROVAL, JobStatus.READY, JobStatus.FAILED}:
         raise HTTPException(409, f"Job can't be edited while {job.status}")
     data = body.model_dump(exclude_unset=True)
-    if "tiktok_account_id" in data:
-        if job.tiktok_publish_id:
-            raise HTTPException(409, "Job was already sent to TikTok")
-        account = db.get(TikTokAccount, data["tiktok_account_id"]) if data["tiktok_account_id"] else None
-        if data["tiktok_account_id"] and not account:
-            raise HTTPException(404, "TikTok account not found")
-        if account and account.user_id != user.id:
-            raise HTTPException(404, "TikTok account not found")
-        if account and account.mode != job.video.mode:
-            raise HTTPException(400, "That TikTok account belongs to the other workspace")
-        clash = db.scalar(select(Job.id).where(Job.video_id == job.video_id, Job.tiktok_account_id == data["tiktok_account_id"], Job.id != job.id))
-        if clash:
-            raise HTTPException(409, "This video is already assigned to that account")
+    if "buffer_channel_id" in data:
+        if job.buffer_post_id:
+            raise HTTPException(409, "Job was already handed to Buffer")
+        chosen = db.get(BufferChannel, data["buffer_channel_id"]) if data["buffer_channel_id"] else None
+        if data["buffer_channel_id"] and (not chosen or chosen.user_id != user.id or chosen.mode != job.video.mode):
+            raise HTTPException(404, "Buffer account not found")
+        if chosen and not chosen.enabled:
+            raise HTTPException(400, "That Buffer account is switched off")
     if "rewritten_tags" in data and data["rewritten_tags"] is not None:
         data["rewritten_tags"] = [t.strip().lstrip("#") for t in data["rewritten_tags"] if t.strip()]
     for field, value in data.items():
         setattr(job, field, value)
-    if "tiktok_account_id" in data:
+    if "buffer_channel_id" in data:
         job.error = None
         job.next_check_at = None
     db.commit()
+    db.refresh(job)  # the account it now points at
     return serializers.job(job, detail=True)
 
 
@@ -134,13 +129,11 @@ def retry(job_id: int, db: DB, user: CurrentUser):
         status = pipeline.retry_job(db, job)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    except ApiError as exc:
-        raise HTTPException(502, f"Could not verify TikTok status before retrying: {exc}") from exc
     activity.record(db, "Publisher", f"Job #{job.id} retried", event="job_retried", job_id=job.id)
     db.commit()
     {
         JobStatus.FETCHED: dispatch.start_job, JobStatus.REWRITING: dispatch.rewrite_job,
-        JobStatus.READY: dispatch.upload_job, JobStatus.MONITORING: dispatch.check_job,
+        JobStatus.READY: dispatch.upload_job,
     }[status](job.id)
     return serializers.job(job, detail=True)
 

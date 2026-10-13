@@ -46,7 +46,7 @@ def daily_csv(db: DB, user: CurrentUser, day: date | None = None, mode: Workspac
     writer.writerow(["date", "account", "status", "uploaded_today", "share_pct", "failed_today", "total_uploaded"])
     for row in report["accounts"]:
         share = round(row["posts_today"] / report["uploaded"] * 100) if report["uploaded"] else 0
-        writer.writerow([report["date"], f"@{row['username']}", row["status"], row["posts_today"], share, row["failed_today"], row["lifetime_posts"]])
+        writer.writerow([report["date"], row["name"], "on" if row["enabled"] else "off", row["posts_today"], share, row["failed_today"], row["lifetime_posts"]])
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv",

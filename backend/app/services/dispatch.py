@@ -41,10 +41,6 @@ def upload_job(job_id: int) -> None:
     _send("upload_job", job_id)
 
 
-def check_job(job_id: int) -> None:
-    _send("check_job", job_id)
-
-
 def poll_channel(channel_id: int) -> None:
     _send("poll_channel", channel_id)
 

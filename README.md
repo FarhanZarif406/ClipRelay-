@@ -1,15 +1,15 @@
 # ClipRelay
 
-ClipRelay watches a set of YouTube channels that publish short-form video and republishes every new upload to TikTok,
-with only a light edit in between. When a watched channel posts a new short, ClipRelay detects it, reads its details,
-downloads the file, applies two small edits (a slight speed-up and a horizontal flip), rewrites the caption for TikTok,
+ClipRelay watches a set of YouTube channels that publish short-form video and republishes every new upload through
+[Buffer](https://buffer.com), with only a light edit in between. When a watched channel posts a new short, ClipRelay detects it, reads its details,
+downloads the file, applies two small edits (a slight speed-up and a horizontal flip), rewrites the caption,
 and then either holds it for one-click approval or publishes it straight away.
 
 YouTube is the only source. Only add channels whose videos you have the right to republish.
 
 ```
-Detected → Downloading → Rendering → (Writing caption) → (Needs approval) → Ready → Uploading → Posted → Monitoring
-                                                                              → Clean / Violated / Failed
+Detected → Downloading → Rendering → (Writing caption) → (Needs approval) → Ready → Uploading → Scheduled at Buffer
+                                                                              → Posted / Failed
 ```
 
 The caption is written alongside the download and the edit, because it needs only the video's details, not the file.
@@ -36,7 +36,7 @@ cp .env.example .env
 python -c "import secrets;print('SECRET_KEY='+secrets.token_urlsafe(48))"
 python -c "from cryptography.fernet import Fernet;print('ENCRYPTION_KEY='+Fernet.generate_key().decode())"
 # Paste them into .env and set PUBLIC_BASE_URL / FRONTEND_URL. API keys can be added later in the app
-# (Settings → API keys / AI models), or put in .env as TIKTOK_*, LLM_*, SMTP_*.
+# (Settings → API keys / AI models), or put in .env as LLM_*, SMTP_*.
 
 docker compose up -d --build
 ```
@@ -53,14 +53,15 @@ docker compose exec backend python -m app.cli create-user you@example.com 'a-str
 Services: `postgres`, `redis`, `backend` (FastAPI, which runs migrations on start), `worker` (Celery), `beat`
 (the scheduler tick), and `frontend` (nginx serving the SPA and proxying `/api`).
 
-> **HTTPS is required for OAuth.** TikTok only redirects to HTTPS URLs that you have registered. In production,
+> **A public HTTPS address is required.** Buffer fetches each clip from this server, and YouTube sends its push
+> notifications to it. In production,
 > put the `frontend` service behind your TLS proxy (Caddy, Traefik, a load balancer). For local testing, run a tunnel such as
 > `ngrok http 8080` or `cloudflared tunnel --url http://localhost:8080`, and set `PUBLIC_BASE_URL` and `FRONTEND_URL`
 > to the tunnel URL.
 
 ### Integrations page
-The **Integrations** page in the app has everything in one place, with step-by-step instructions: the TikTok app keys,
-the AI model for captions (Gemini), the optional YouTube Data API key, and the status of the downloader (yt-dlp) and the
+The **Integrations** page in the app has everything in one place, with step-by-step instructions: the YouTube
+Data API key and push notifications, for captions (Gemini), and the status of the downloader (yt-dlp) and the
 editor (FFmpeg). Each has a **Test** button: the editor test renders a real two-second clip with the current edit, and
 the downloader test reads a real YouTube video. The edit itself (speed, flip, audio) is on the **Editing Rules** page.
 
@@ -87,7 +88,8 @@ Every third-party credential can be managed from the UI **without a restart**. V
 
 | Credential | Where in the app | `.env` fallback |
 |---|---|---|
-| TikTok client key / secret | Settings → API keys | `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET` |
+| YouTube Data API key (optional) | Integrations → YouTube Data API | `YOUTUBE_API_KEY` |
+| Buffer API key (one per member) | Buffer Settings | — |
 | AI models (any number, one default) | Settings → AI models | `LLM_*` (used only when no model is added) |
 | SMTP for email alerts | Settings → Notifications | `SMTP_*` |
 
@@ -98,19 +100,25 @@ and OAuth scopes. Saved credentials and AI models are re-validated daily, and yo
 
 ## 2. Channels and detection
 
-Open **Channels → Add channel**, paste the channel's URL or `@handle`, click **Find channel**, pick the TikTok account
-it posts to, and click **Add channel**. Channels are added one at a time.
+Open **Channels**, paste the channel's URL or `@handle` into the box at the top and click **Add channel**. The channel
+is looked up, saved and subscribed in one step. Its videos go to the Buffer account whose next free time comes first
+(or the one chosen for a video in the review queue).
 
 - **Only new uploads are republished.** Videos published before the channel was added (or while it was switched off)
   are ignored.
-- **Push notifications.** When `PUBLIC_BASE_URL` is a public HTTPS address, ClipRelay subscribes to YouTube's push hub
-  (PubSubHubbub) at `{PUBLIC_BASE_URL}/api/youtube/webhook`. Subscriptions expire, so they are renewed every day.
+- **Push notifications.** With a public HTTPS address, ClipRelay subscribes each channel to YouTube's push hub
+  (PubSubHubbub) at `{address}/api/youtube/webhook`. The address is set in **Integrations → YouTube Push
+  Notifications** (*Public base URL*); until one is saved there, `PUBLIC_BASE_URL` from `.env` is used. The same card
+  holds the **verify token** (made by itself, replaceable; sent when subscribing and checked when the hub verifies),
+  the callback URL to copy, each channel's subscription state, today's notification count, and a button that
+  re-subscribes only the channels that failed. Subscriptions expire, so they are renewed before they lapse.
 - **Polling fallback.** Every channel's uploads feed is also checked every few minutes (*Polling interval* in
   Settings), so a missed push never means a missed video. On a local install polling is the only method.
 - **One video, once.** `videos.youtube_video_id` is unique. YouTube sends a notification again whenever a title or
   description is edited; the repeat finds the existing row and nothing happens.
-- **No API key is required.** With `YOUTUBE_API_KEY` set, lookups use the YouTube Data API; without it they read the
-  public channel page and yt-dlp.
+- **No API key is required.** With a key saved in **Integrations → YouTube Data API** (or `YOUTUBE_API_KEY` in `.env`),
+  lookups use the YouTube Data API; without it they read the public channel page and yt-dlp. The card shows only the
+  key's last four characters, tests it against Google (one quota unit) and counts the quota ClipRelay has used today.
 
 Downloads use **yt-dlp**, which is outside YouTube's terms of service — YouTube offers no download mechanism, so this is
 an accepted condition, not a solved problem. The downloader sits behind an adapter (`backend/app/services/sources.py`,
@@ -121,9 +129,9 @@ an accepted condition, not a solved problem. The downloader sits behind an adapt
 ## Podcasts workspace
 
 **For Podcasts** in the sidebar opens a second workspace in its own window (`/podcasts`). It turns long videos into
-short clips and is kept apart from Shorts: it has its own channels, its own TikTok accounts, its own rules (**Clip
-Rules**), its own review queue, and its own dashboard and daily report. A channel or a TikTok account belongs to one
-workspace only. API keys (TikTok app, AI model) are shared and set once on the Integrations page.
+short clips and is kept apart from Shorts: it has its own channels, its own switch and schedule for each Buffer account, its own rules (**Clip
+Rules**), its own review queue, and its own dashboard and daily report. A channel belongs to one
+workspace only. API keys (YouTube, AI model) are shared and set once on the Integrations page.
 
 How a podcast becomes clips:
 
@@ -135,52 +143,35 @@ How a podcast becomes clips:
    never downloaded whole. If a video has no such stream, the whole video is downloaded once and the clips are cut
    from it.
 4. Each clip is reframed for a vertical screen (*Frame*: `crop`, `blur` or `original`), gets its own caption, and then
-   travels the normal pipeline: review queue, approval, upload to a Podcasts TikTok account.
+   travels the normal pipeline: review queue, approval, and Buffer.
 
-Each clip is one TikTok post, so three clips from one podcast count as three uploads against the daily caps.
-
----
-
-## 3. Create the TikTok app
-
-1. Go to <https://developers.tiktok.com> → **Manage apps → Connect an app** (you may need to create an organization first).
-2. Fill in the **basic information**: icon, name, category, description, **Terms of Service URL**, **Privacy Policy URL**, and
-   **Platforms → Web** with your website URL.
-3. **Add products:**
-   - **Login Kit.** Set the **Redirect URI** (Web) to `https://YOUR_DOMAIN/api/tiktok/oauth/callback`. It must match exactly.
-   - **Content Posting API.** Upload-to-inbox works straight away; turn on **Direct Post** as well for later.
-4. **Scopes.** Request these:
-   | Scope | Why |
-   |---|---|
-   | `user.info.basic` | Account display name and avatar |
-   | `video.upload` | Send videos to the account's TikTok inbox (the launch mode) |
-   | `video.publish` | Direct-post videos, once the app is audited |
-   | `video.list` | Confirm a published video is still live (violation check) |
-   | `user.info.profile` *(optional)* | Show the real `@username`. Add it to `TIKTOK_SCOPES` once approved |
-5. Copy the **Client key** and **Client secret** into **Settings → API keys → TikTok app** (owner only) and click
-   **Validate** then **Save**. ClipRelay checks them with TikTok's `client_credentials` grant. (Or set
-   `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET` in `.env`.)
-6. **Inbox mode first.** Until TikTok's audit is approved, every direct post is forced private and the API gives no
-   signal that this is happening. So ClipRelay launches with *Publish mode* = `inbox` (Settings → Pipeline rules): the
-   video lands in the account's TikTok inbox and a person finishes the post in the TikTok app. **Submit the audit
-   application early**, and switch *Publish mode* to `direct` once it is approved. Accounts connected before
-   `video.upload` was added to the scopes must be reconnected.
-7. **Sandbox and audit.** While the app is in Sandbox, add your TikTok accounts as **target users**. **Unaudited apps can
-   only post with `SELF_ONLY` (private) visibility.** ClipRelay picks a privacy level from what TikTok's
-   `creator_info` returns, so private posting works automatically. To post publicly, submit the app for TikTok's
-   Content Posting **audit**, then turn on **App audited** on the TikTok card. Until then, *TikTok Accounts* shows a reminder
-   that posts will be private.
-8. **Rate limits.** The video init endpoint allows about 6 requests per minute per user token, and TikTok caps the number of
-   API posts per creator per day. ClipRelay enforces a per-account **daily cap** (default 7, counted from midnight Asia/Karachi)
-   and exponential backoff on `rate_limit_exceeded` / HTTP 429.
-
-Click **Connect account** in *TikTok Accounts* to run Login Kit OAuth. Access tokens (24 h) are refreshed automatically
-with the refresh token (365 days). Accounts are shown as **Expiring** 3 days before the refresh token expires and as
-**Expired** after that. Expired accounts need **Reconnect**.
+Each clip is one post, so three clips from one podcast take three of an account's posting times.
 
 ---
 
-## 4. LLM and storage
+## Publishing through Buffer
+
+Finished clips go out through [Buffer](https://buffer.com). Each member opens
+**Buffer Settings** and saves their own Buffer API key (Buffer → Settings → API, with the permissions `account:read`,
+`posts:read` and `posts:write`). The key is checked with Buffer before it is kept, stored encrypted, and only its
+last four characters are ever shown.
+
+- **Accounts.** The social accounts connected in Buffer are listed, each with a switch (*Clips go here*), a
+  **Schedule** (time zone, start date, posting times, daily limit) and a **Live status** (uploaded and failed today,
+  7 days, 30 days and in all; what is waiting; the latest clips). TikTok accounts are switched on from the start.
+  Each workspace (Shorts, Podcasts) has its own switch and schedule for the same account.
+- **How a clip is sent.** An approved clip is handed to Buffer
+  as a post scheduled for the account's next free time — the chosen account, or with *Auto* the one whose next time
+  comes first. A full day is not a dead end: the clip goes out on the next day. Buffer fetches the video from
+  `{public base URL}/api/public/clip/{token}/clip.mp4`, a private link that works only until the clip is published,
+  so the server needs a public HTTPS address (Integrations → YouTube Push Notifications → *Public base URL*).
+- **Afterwards.** The clip shows as *Scheduled at Buffer* (Live Status, Published). A few minutes after its time
+  ClipRelay asks Buffer what became of it: published, or failed with Buffer's reason (Retry hands it over afresh).
+- **Without a key** a member's finished clips wait ("Waiting for Buffer") and go out once the key is saved.
+
+---
+
+## 3. LLM and storage
 
 **AI models** (Settings → AI models, owner only). Add as many as you like: **Anthropic, OpenAI, Google Gemini,
 OpenRouter, Groq, Mistral**, or any **custom** OpenAI-compatible endpoint (with a base URL). Paste the key, click
@@ -208,14 +199,14 @@ Alerts always appear in the dashboard. Under **Settings → Notifications** you 
 any HTTPS endpoint) and/or **alert email addresses**. For email, fill in the **Email (SMTP)** card. The **Gmail preset**
 fills `smtp.gmail.com:587` with STARTTLS; use your Gmail address as the username and from address, and a 16-character
 **app password** (Google Account → Security → 2-Step Verification → App passwords). Click **Send test email** to confirm.
-Violations, failed jobs and token problems are emailed according to the toggles on that tab.
+Failed jobs and key problems are emailed according to the toggles on that tab.
 
 **Storage.** `STORAGE_BACKEND=local` stores files under `STORAGE_LOCAL_PATH` (a Docker volume in compose).
 `STORAGE_BACKEND=s3` works with AWS S3, Cloudflare R2, MinIO and Backblaze B2. Set `S3_ENDPOINT_URL` for non-AWS providers.
 
 ---
 
-## 5. How it works
+## 4. How it works
 
 ### Scheduling (no restarts needed)
 Celery **beat** fires only one lightweight task, `tick`, every `SCHEDULER_TICK_SECONDS` (default 30 s). Each tick reads
@@ -223,9 +214,9 @@ PostgreSQL:
 - **Channels** whose poll is due have their uploads feed checked.
 - **Detected** jobs are sent to download and render, and to the caption rewrite, side by side. A stage that failed is
   retried from where it broke: three attempts with a growing delay, then the job is marked failed.
-- **Ready** jobs are uploaded straight away, subject only to the daily caps. There is no schedule: the pipeline runs
-  around the clock. A job with no connected TikTok account waits ("Waiting for account") and goes out once one is connected.
-- **Monitoring** jobs whose next checkpoint is due are re-checked.
+- **Ready** jobs are handed to Buffer straight away, for the account's next free posting time. The pipeline itself
+  runs around the clock.
+- **Scheduled** jobs whose time has passed are asked about: Buffer says whether the post went out.
 
 Because windows, caps and checkpoints are all rows in the database, changes made in the UI apply on the next tick.
 
@@ -241,9 +232,7 @@ Channel overrides). Every change is recorded with who made it and when (Settings
 | `keep_audio` | on | off removes the sound |
 | `max_duration_seconds` / `min_duration_seconds` | 180 / 5 | short-form = up to the maximum, or any YouTube Short; anything longer is skipped as `long-form` |
 | `videos_per_channel_per_day` | 3 | further uploads are held as `skipped_channel_cap` |
-| `uploads_per_tiktok_account_per_day` | 7 | global only; an account can also have its own cap. Held as `skipped_account_cap` |
 | `approval_required` | on | global only; the **Require approval** switch on the Review Queue page |
-| `publish_mode` | inbox | global only; `inbox` or `direct` (see section 3) |
 | `cap_reset_timezone` | Asia/Karachi | global only; caps reset at midnight in this timezone |
 | `hashtag_count` | 8 | 0 to 15 |
 | `fallback_hashtags` | fyp foryou viral trending shorts | used when the AI model fails |
@@ -258,10 +247,10 @@ The output is H.264 / AAC in an MP4 at the source resolution and frame rate. A s
 not re-encoded.
 
 ### Caption and approval
-The AI model receives the YouTube title, description, tags and channel name, and returns a TikTok caption and hashtags.
+The AI model receives the YouTube title, description, tags and channel name, and returns a caption and hashtags.
 If the model fails, the job does **not** fail: the original title and the fallback hashtags are used, the job is flagged
 `caption_fallback`, and the operator fixes it in the review queue. With approval on, the job waits in **Review Queue**,
-where the rendered video plays inline and the caption, hashtags and TikTok account can be edited. Keyboard: `A` approve,
+where the rendered video plays inline and the caption, hashtags and the account it goes to can be edited. Keyboard: `A` approve,
 `E` edit caption, `R` reject, `J`/`K` next and previous. With approval off, the job is published straight away and
 appears under **Published**.
 
@@ -270,32 +259,15 @@ Downloaded and rendered files are deleted `file_retention_days` after publishing
 The database rows are kept forever as the record of what was published.
 
 ### Never posting the same video twice
-- The database enforces a unique constraint on `(video_id, tiktok_account_id)`.
-- Uploads claim jobs atomically (`UPDATE … WHERE status='ready' AND tiktok_publish_id IS NULL`), so two workers can never upload the same job.
-- The TikTok `publish_id` is committed **before** the bytes are sent. A job with a `publish_id` is never initialized again.
-- **Retry** first asks TikTok for the status of the existing `publish_id`. If the post went through, monitoring resumes instead of posting again.
-- One YouTube video becomes exactly one TikTok post, on the channel's default account (or the least-busy account when it has none).
-
-### 24-hour violation check
-After upload, the publish status is polled until TikTok finishes processing. The post is then re-checked at
-configurable checkpoints (default **1 h, 6 h, 12 h, 24 h**; *Compliance Audit → Check frequency*). A video is marked
-**Violated** when:
-- the publish status is `FAILED` with a moderation or spam reason (`spam_risk_*`, violations), or
-- the post no longer comes back from `video/query` (TikTok removed or restricted it).
-
-A violation saves the reason, writes an error to the activity log, sends the optional webhook, and shows alerts on the
-dashboard, the bell icon and the Compliance Audit page. **Account health** (compliance rate and violation history) is in
-*TikTok Accounts → ⋯ → Health & violations*.
-
-> ⚠️ **About removal:** TikTok's public API has **no endpoint to delete a published post**. If TikTok already removed the
-> video, ClipRelay records `removed_by_tiktok`. Otherwise, with *Auto-remove violations* on, it records
-> `manual_required` and the alert asks you to delete the video in the TikTok app, then click **Mark removed**. The
-> removal hook (`integrations/tiktok.py: delete_video`) is in one place, so it can be filled in if TikTok ever exposes such an endpoint.
+- One YouTube video becomes exactly one job, and one job becomes one post.
+- A job is claimed atomically (`UPDATE … WHERE status='ready' AND buffer_post_id IS NULL`), so two workers can never hand
+  over the same job, and a job that already has a Buffer post is never handed over again.
+- **Retry** on a failed post hands the clip to Buffer afresh, as a new post.
 
 ### Reliability
-- Every external call (TikTok, LLM, downloads, webhooks) goes through `integrations/http.py`,
+- Every external call (YouTube, LLM, webhooks) goes through `integrations/http.py`,
   which retries network errors, 429 and 5xx with **exponential backoff and jitter** (honoring `Retry-After`).
-- Celery tasks retry with backoff. Auth errors are not retried; they mark the account as needing reconnection.
+- Celery tasks retry with backoff.
 
 ### Live updates
 Pipeline events are published to Redis and streamed to the browser over **Server-Sent Events** (`/api/events`). The UI
@@ -303,7 +275,7 @@ refreshes affected queries as soon as an event arrives, and also polls every 15�
 
 ---
 
-## 6. Local development (without Docker)
+## 5. Local development (without Docker)
 
 Requirements: Python 3.12+, Node 20+, FFmpeg, PostgreSQL 14+, Redis 6+.
 
@@ -340,29 +312,26 @@ Interactive API docs are at `http://localhost:8000/api/docs` (also linked from "
 
 ---
 
-## 7. Tests
+## 6. Tests
 
 ```bash
 cd backend
 pytest -q
 ```
 
-The suite (115 tests) uses SQLite and mocks **YouTube, TikTok and the LLM** with `respx`, and stubs FFmpeg and downloads. It
+The suite (115 tests) uses SQLite and mocks **YouTube, Buffer and the LLM** with `respx`, and stubs FFmpeg and downloads. It
 covers:
 - auth
 - channel lookup, adding a channel, the uploads feed and the push webhook
 - detection: one video once, duration and cap checks, and processing a skipped video by hand
 - rules: global values, channel overrides and the change history
-- download and render with retries, the caption fallback, and inbox mode
+- download and render with retries, and the caption fallback
 - rewriting and manual approval
-- uploading with chunk headers, plus the never-twice guarantees
-- daily caps and rate-limit deferral
-- violation detection, checkpoints and retry safety
-- token refresh and expiry
+- Buffer: the key, accounts and schedules, posting times, handing a clip over, and what became of it
 - backoff
 - owner/member permissions
 - the credential store (DB over `.env`, fallback on removal, encryption, cache busting) and its validators
-  (TikTok `client_credentials`, SMTP)
+  (YouTube, SMTP)
 - every LLM adapter (`list_models` and `complete`, including 401/403 → auth error), default and per-template model
   resolution, and the `.env` fallback
 - the daily credential check
@@ -374,16 +343,16 @@ cd frontend && npm run build   # type-checks and builds the SPA
 
 ---
 
-## 8. Project structure
+## 7. Project structure
 
 ```
 backend/
   app/
-    api/           FastAPI routers (auth, dashboard, channels, tiktok, prompts, jobs, audit, logs, settings, users, events)
+    api/           FastAPI routers (auth, dashboard, channels, buffer, integrations, prompts, jobs, logs, settings, users, events)
     models/        SQLAlchemy 2.0 models
     schemas/       Pydantic v2 request models
-    services/      detection, pipeline, rules, sources (download adapter), media (FFmpeg), tokens, prompts, stats, storage, …
-    integrations/  youtube.py, tiktok.py, llm.py, http.py (retry/backoff)
+    services/      detection, pipeline, rules, sources (download adapter), media (FFmpeg), buffer, slots, prompts, stats, storage, …
+    integrations/  youtube.py, buffer.py, llm.py, http.py (retry/backoff)
     workers/       Celery app + tasks
     cli.py         gen-key / create-user
   alembic/         migrations
@@ -400,11 +369,10 @@ docs/
   design-reference/  original Figma Make source + reference screenshots (the first design, kept for reference only)
 ```
 
-## 9. Compliance notes
+## 8. Notes on republishing
 
 - Only add channels whose videos you have the right to republish. Nothing in the app checks this; reposting someone
-  else's videos invites copyright strikes and TikTok account termination.
+  else's videos invites copyright strikes and the termination of the accounts it is posted to.
 - A horizontal flip is a weak originality signal. Expect lower reach on republished videos than on native uploads.
-- Respect TikTok's Content Posting guidelines: show creators what is being posted, honor the privacy options that
-  `creator_info` returns, and don't exceed posting limits.
-- Tokens are encrypted at rest with `ENCRYPTION_KEY`. Back it up, because losing it means every account has to reconnect.
+- Respect the posting rules of the networks your Buffer accounts publish to, and keep each account's daily limit modest.
+- API keys are encrypted at rest with `ENCRYPTION_KEY`. Back it up, because losing it means every key has to be entered again.

@@ -108,7 +108,7 @@ def test_complete_uses_default_provider(db):
 
 
 @respx.mock
-def test_template_uses_its_own_model(db, tiktok_account, template):
+def test_template_uses_its_own_model(db, template):
     from tests.test_pipeline import _make_job
     from app.services import pipeline
 
@@ -121,6 +121,6 @@ def test_template_uses_its_own_model(db, tiktok_account, template):
         return_value=httpx.Response(200, json={"choices": [{"message": {"content": "#a #b"}}]})
     )
     openai_route = respx.post("https://api.openai.com/v1/chat/completions")
-    job = _make_job(db, tiktok_account, status="rewriting", caption="pending")
+    job = _make_job(db, status="rewriting", caption="pending")
     assert pipeline.rewrite_job(db, job.id) == "awaiting_approval"
     assert groq_route.call_count == 3 and openai_route.call_count == 0

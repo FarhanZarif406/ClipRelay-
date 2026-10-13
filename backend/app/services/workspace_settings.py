@@ -8,16 +8,9 @@ from sqlalchemy.orm import Session
 from app.models import AppSetting
 
 DEFAULTS: dict[str, dict[str, Any]] = {
-    "policy": {"tiktok_app_audited": False},
-    "audit": {
-        "check_hours": [1, 6, 12, 24],
-        "auto_remove": True,
-        "notifications_enabled": True,
-    },
     "notifications": {
         "webhook_url": "",
         "email": "",
-        "notify_violations": True,
         "notify_failures": True,
         "notify_tokens": True,
     },

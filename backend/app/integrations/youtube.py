@@ -94,7 +94,10 @@ def _parse_time(value: str | None) -> datetime | None:
 
 
 def _api(path: str, **params) -> dict:
+    from app.services import youtube_usage
+
     response = request("GET", f"{API}/{path}", params={**params, "key": api_key()}, retries=2)
+    youtube_usage.note(path, response.status_code < 400)
     if response.status_code >= 400:
         try:
             message = response.json()["error"]["message"]
@@ -102,6 +105,27 @@ def _api(path: str, **params) -> dict:
             message = response.text[:200]
         raise YouTubeError(f"YouTube Data API error {response.status_code}: {message}", status=response.status_code)
     return response.json()
+
+
+def test_key(key: str) -> dict:
+    """The cheapest real call (one quota unit) with the given key; Google's own answer is reported."""
+    from app.services import youtube_usage
+
+    if not key:
+        return {"ok": False, "status": 0, "reason": None, "message": "No API key saved."}
+    try:
+        response = request("GET", f"{API}/i18nLanguages", params={"part": "snippet", "key": key}, retries=1, timeout=10)
+    except ApiError:
+        return {"ok": False, "status": 0, "reason": None, "message": "Could not reach Google."}
+    youtube_usage.note("i18nLanguages", response.status_code < 400)
+    if response.status_code < 400:
+        return {"ok": True, "status": response.status_code, "reason": None, "message": "OK"}
+    try:
+        error = response.json().get("error") or {}
+    except ValueError:
+        error = {}
+    reason = ((error.get("errors") or [{}])[0].get("reason")) or error.get("status")
+    return {"ok": False, "status": response.status_code, "reason": reason, "message": error.get("message") or f"Google answered HTTP {response.status_code}"}
 
 
 # ---------------------------------------------------------------- channel lookup
@@ -334,13 +358,16 @@ def video_details(video_id: str) -> VideoMeta:
 # ---------------------------------------------------------------- push notifications (PubSubHubbub)
 
 def callback_url() -> str:
-    return f"{get_settings().public_base_url.rstrip('/')}/api/youtube/webhook"
+    from app.services import push  # the address saved on the Integrations page, else PUBLIC_BASE_URL
+
+    return f"{push.base_url()}/api/youtube/webhook"
 
 
 def push_available() -> bool:
     """The hub can only reach a public HTTPS address, so local installs rely on polling alone."""
-    parsed = urlparse(get_settings().public_base_url)
-    return parsed.scheme == "https" and parsed.hostname not in (None, "localhost", "127.0.0.1")
+    from app.services import push
+
+    return push.is_public(push.base_url())
 
 
 def hub_secret() -> str:
@@ -356,15 +383,15 @@ def channel_id_from_topic(topic: str) -> str | None:
     return values[0] if values else None
 
 
-def subscribe(youtube_channel_id: str, *, mode: str = "subscribe") -> None:
+def subscribe(youtube_channel_id: str, *, mode: str = "subscribe", verify_token: str = "") -> None:
     """Ask the hub to (un)subscribe. The hub then calls our webhook to verify, which stores the expiry."""
-    response = request(
-        "POST", HUB_URL, retries=2,
-        data={
-            "hub.mode": mode, "hub.topic": topic_url(youtube_channel_id), "hub.callback": callback_url(),
-            "hub.verify": "async", "hub.lease_seconds": str(LEASE_SECONDS), "hub.secret": hub_secret(),
-        },
-    )
+    data = {
+        "hub.mode": mode, "hub.topic": topic_url(youtube_channel_id), "hub.callback": callback_url(),
+        "hub.verify": "async", "hub.lease_seconds": str(LEASE_SECONDS), "hub.secret": hub_secret(),
+    }
+    if verify_token:
+        data["hub.verify_token"] = verify_token  # sent back by the hub when it verifies, and checked there
+    response = request("POST", HUB_URL, retries=2, data=data)
     if response.status_code not in (202, 204):
         raise YouTubeError(f"The YouTube push hub refused the request ({response.status_code}): {response.text[:200]}", status=response.status_code)
 

@@ -1,4 +1,4 @@
-"""Outbound alerts: webhook and email. Dashboard alerts come from the violations table itself."""
+"""Outbound alerts: webhook and email."""
 
 import logging
 
@@ -9,8 +9,8 @@ from app.services import mailer, workspace_settings
 
 log = logging.getLogger(__name__)
 
-KIND_FLAGS = {"violation": "notify_violations", "failure": "notify_failures", "token": "notify_tokens"}
-SUBJECTS = {"violation": "Video flagged on TikTok", "failure": "Job failed", "token": "Account needs attention"}
+KIND_FLAGS = {"failure": "notify_failures", "token": "notify_tokens"}
+SUBJECTS = {"failure": "Job failed", "token": "A key needs attention"}
 
 
 def recipients(config: dict) -> list[str]:
@@ -20,8 +20,7 @@ def recipients(config: dict) -> list[str]:
 def send(db: Session, kind: str, text: str, **extra) -> bool:
     """Send an alert to every configured channel. Never raises — notifications must not break the pipeline."""
     config = workspace_settings.get(db, "notifications")
-    audit = workspace_settings.get(db, "audit")
-    if not audit.get("notifications_enabled", True) or not config.get(KIND_FLAGS.get(kind, ""), True):
+    if not config.get(KIND_FLAGS.get(kind, ""), True):
         return False
     sent = False
     url = config.get("webhook_url")

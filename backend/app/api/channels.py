@@ -1,5 +1,8 @@
 """Channels: the monitored YouTube channels, their rule overrides, and YouTube's push webhook."""
 
+import hmac
+from datetime import timedelta
+
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select, update
@@ -7,8 +10,8 @@ from sqlalchemy import delete, func, select, update
 from app.api.deps import DB, CurrentUser, Workspace
 from app.integrations import youtube
 from app.integrations.http import ApiError
-from app.models import Channel, Job, JobStatus, Mode, RuleSetting, User, TikTokAccount, TikTokStatus, Video, VideoStatus, utcnow
-from app.services import activity, detection, dispatch, rules, serializers
+from app.models import Channel, Job, JobStatus, Mode, RuleSetting, User, Video, VideoStatus, utcnow
+from app.services import activity, detection, dispatch, push, rules, serializers
 
 router = APIRouter(tags=["channels"])
 
@@ -18,12 +21,11 @@ class ResolveIn(BaseModel):
 
 
 class ChannelCreate(ResolveIn):
-    default_tiktok_account_id: int | None = None
+    pass
 
 
 class ChannelUpdate(BaseModel):
     active: bool | None = None
-    default_tiktok_account_id: int | None = None
 
 
 class RulesIn(BaseModel):
@@ -40,15 +42,6 @@ def _get(db, channel_id: int, user: User) -> Channel:
     if not channel or channel.user_id != user.id:  # another member's channel does not exist as far as this one can tell
         raise HTTPException(404, "Channel not found")
     return channel
-
-
-def _account(db, account_id: int | None, user: User) -> TikTokAccount | None:
-    if not account_id:
-        return None
-    account = db.get(TikTokAccount, account_id)
-    if not account or account.status == TikTokStatus.REVOKED or account.user_id != user.id:
-        raise HTTPException(404, "TikTok account not found")
-    return account
 
 
 def _stats(db) -> dict[int, dict]:
@@ -78,6 +71,7 @@ def list_channels(db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
     return {
         "items": [serializers.channel(c, stats.get(c.id), overrides.get(c.id, 0)) for c in channels],
         "push_available": youtube.push_available(),
+        "poll_minutes": int(rules.global_values(db, user_id=user.id)["poll_interval_minutes"]),
     }
 
 
@@ -95,9 +89,6 @@ def resolve(body: ResolveIn, db: DB, user: CurrentUser):
 
 @router.post("/channels", status_code=201)
 def add_channel(body: ChannelCreate, db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
-    account = _account(db, body.default_tiktok_account_id, user)
-    if account and account.mode != mode:
-        raise HTTPException(400, "That TikTok account belongs to the other workspace")
     info = _resolve(body.query)
     existing = db.scalar(select(Channel).where(Channel.youtube_channel_id == info.youtube_channel_id))
     if existing:
@@ -109,7 +100,7 @@ def add_channel(body: ChannelCreate, db: DB, user: CurrentUser, mode: Workspace 
     now = utcnow()
     channel = Channel(
         youtube_channel_id=info.youtube_channel_id, mode=mode, user_id=user.id, handle=info.handle, display_name=info.display_name or info.youtube_channel_id,
-        thumbnail_url=info.thumbnail_url, default_tiktok_account_id=account.id if account else None,
+        thumbnail_url=info.thumbnail_url,
         added_by=user.id, monitoring_since=now, next_poll_at=now,
     )
     db.add(channel)
@@ -124,11 +115,6 @@ def add_channel(body: ChannelCreate, db: DB, user: CurrentUser, mode: Workspace 
 def update_channel(channel_id: int, body: ChannelUpdate, db: DB, user: CurrentUser):
     channel = _get(db, channel_id, user)
     data = body.model_dump(exclude_unset=True)
-    if "default_tiktok_account_id" in data:
-        account = _account(db, data["default_tiktok_account_id"], user)
-        if account and account.mode != channel.mode:
-            raise HTTPException(400, "That TikTok account belongs to the other workspace")
-        channel.default_tiktok_account_id = account.id if account else None
     if data.get("active") is not None and data["active"] != channel.active:
         channel.active = data["active"]
         if channel.active:
@@ -213,14 +199,28 @@ def webhook_verify(
     topic: str = Query("", alias="hub.topic"),
     challenge: str = Query("", alias="hub.challenge"),
     lease_seconds: int | None = Query(None, alias="hub.lease_seconds"),
+    verify_token: str = Query("", alias="hub.verify_token"),
+    reason: str = Query("", alias="hub.reason"),
 ):
     """The hub checks that we really asked for a subscription; echoing the challenge confirms it."""
     youtube_channel_id = youtube.channel_id_from_topic(topic)
     channel = db.scalar(select(Channel).where(Channel.youtube_channel_id == youtube_channel_id)) if youtube_channel_id else None
     wanted = bool(channel and channel.active)
+    # Only a subscription that is still waiting can be marked failed, so a stranger calling this public
+    # address cannot break one that already works.
+    waiting = wanted and (channel.pubsub_subscription_expires_at is None or channel.pubsub_subscription_expires_at <= utcnow())
+    if mode == "denied":
+        if waiting:
+            channel.pubsub_error = f"Hub denied: {reason[:200] or 'no reason given'}"
+            db.commit()
+        return Response("", media_type="text/plain")
+    expected = push.verify_token()
+    if expected and not hmac.compare_digest(verify_token.encode(), expected.encode()):
+        if waiting and mode == "subscribe":
+            channel.pubsub_error = "The hub's verify token did not match the saved one."
+            db.commit()
+        raise HTTPException(404, "Verify token mismatch")
     if mode == "subscribe" and wanted:
-        from datetime import timedelta
-
         channel.pubsub_subscription_expires_at = utcnow() + timedelta(seconds=lease_seconds or youtube.LEASE_SECONDS)
         channel.pubsub_error = None
         db.commit()
@@ -230,7 +230,7 @@ def webhook_verify(
 
 
 @router.post("/youtube/webhook", include_in_schema=False, status_code=204)
-async def webhook_notify(request: Request):
+async def webhook_notify(request: Request, db: DB):
     """A new upload (or an edit of an old one). Only signed notifications are accepted; the work is queued."""
     body = await request.body()
     if not youtube.verify_signature(body, request.headers.get("x-hub-signature")):
@@ -239,6 +239,9 @@ async def webhook_notify(request: Request):
         pairs = youtube.parse_notification(body)
     except ApiError:
         return Response(status_code=204)
+    if pairs:
+        push.note_notification(db, len(pairs))
+        db.commit()
     for youtube_channel_id, video_id in pairs:
         dispatch.discover_video(youtube_channel_id, video_id)
     return Response(status_code=204)

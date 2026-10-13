@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { channels, rules, tiktok } from "@/api/endpoints";
+import { channels, rules } from "@/api/endpoints";
 import type { RuleDef, RuleValue, RuleValues } from "@/api/types";
 import { useErrorToast, useToast } from "@/components/Toast";
 import { Badge, Button, Card, Empty, Toggle } from "@/components/ui";
-import { ACCOUNT_STATUS, dayTime } from "@/lib/format";
+import { dayTime } from "@/lib/format";
 
 const show = (v: RuleValue | null | undefined) => (v === null || v === undefined ? "inherits" : typeof v === "boolean" ? (v ? "on" : "off") : v === "" ? "(empty)" : String(v));
 
@@ -94,16 +93,5 @@ export function RuleHistory() {
       {(data ?? []).map(c => <tr key={c.id}><td style={{ whiteSpace: "nowrap" }}>{dayTime(c.changed_at)}</td><td>{c.changed_by ?? "—"}</td><td>{c.label}</td><td>{c.channel_id ? c.channel_name ?? `Channel #${c.channel_id}` : "Global"}</td><td><code>{show(c.old_value).slice(0, 80)}</code></td><td><code>{show(c.new_value).slice(0, 80)}</code></td></tr>)}
     </tbody></table></div>
     {data && data.length === 0 && <Empty icon="logs" title="No changes yet">Every rule is at its default.</Empty>}
-  </Card>;
-}
-
-export function TikTokSummary() {
-  const navigate = useNavigate();
-  const { data } = useQuery({ queryKey: ["tiktok"], queryFn: tiktok.list });
-  const items = data?.items ?? [];
-  return <Card><div className="card-title">Connected TikTok accounts</div><div className="card-caption">Each channel posts to its default account. Daily caps count per account and reset at midnight in the cap reset timezone.</div>
-    <div style={{ marginTop: 10 }}>{items.map(a => { const s = ACCOUNT_STATUS[a.status] ?? { label: a.status, tone: "neutral" as const }; return <div className="api-row" key={a.id}><div><strong>@{a.username}</strong><span>{a.posts_today} / {a.daily_cap} uploads today{a.daily_cap_override ? " (own cap)" : " (global rule)"}</span></div><Badge tone={s.tone}>{s.label}</Badge></div>; })}</div>
-    {items.length === 0 && <Empty icon="tiktok" title="No TikTok account connected">Connect one to start publishing.</Empty>}
-    <div className="modal-foot"><Button variant="primary" onClick={() => navigate("/tiktok")}>Manage TikTok accounts</Button></div>
   </Card>;
 }

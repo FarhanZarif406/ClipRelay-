@@ -15,12 +15,13 @@ from sqlalchemy.orm import Session
 
 from app.integrations import youtube
 from app.integrations.http import ApiError
-from app.models import Channel, Job, Mode, SkipReason, TikTokAccount, Video, VideoStatus, utcnow
-from app.services import activity, pipeline, rules
+from app.models import Channel, Job, Mode, SkipReason, Video, VideoStatus, utcnow
+from app.services import activity, pipeline, push, rules
 
 log = logging.getLogger(__name__)
 
 RENEW_BEFORE = timedelta(days=2)
+VERIFY_TIMEOUT = timedelta(seconds=60)  # how long the hub is given to verify before a pending subscription counts as failed
 
 
 def _skip(db: Session, video: Video, code: str, reason: str) -> Video:
@@ -31,7 +32,7 @@ def _skip(db: Session, video: Video, code: str, reason: str) -> Video:
     return video
 
 
-def _check(db: Session, video: Video, channel: Channel, account: TikTokAccount | None) -> tuple[str, str] | None:
+def _check(db: Session, video: Video, channel: Channel) -> tuple[str, str] | None:
     """The short-form and cap checks, counted against the videos table inside the caller's transaction."""
     values = rules.effective(db, channel.id, channel.mode, channel.user_id)
     duration = video.duration_sec or 0
@@ -42,7 +43,7 @@ def _check(db: Session, video: Video, channel: Channel, account: TikTokAccount |
         )
     ) or 0
     if channel.mode == Mode.PODCASTS:
-        # The opposite of Shorts: only long videos are podcasts. Account caps are applied to each clip when it uploads.
+        # The opposite of Shorts: only long videos are podcasts. Each account's own daily limit decides when a clip goes out.
         shortest = values["min_source_duration_seconds"]
         if duration < shortest:
             return SkipReason.NOT_PODCAST, f"Too short for a podcast: {duration:.0f}s, under the {shortest}s minimum"
@@ -58,10 +59,6 @@ def _check(db: Session, video: Video, channel: Channel, account: TikTokAccount |
 
     if taken >= values["videos_per_channel_per_day"]:
         return SkipReason.CHANNEL_CAP, f"{channel.display_name} already has {taken} videos today (limit {values['videos_per_channel_per_day']})"
-    if account is not None:
-        cap = pipeline.account_cap(account, values)
-        if pipeline.account_load(db, account.id, since) >= cap:
-            return SkipReason.ACCOUNT_CAP, f"@{account.username} already has {cap} uploads today (limit {cap})"
     return None
 
 
@@ -94,7 +91,7 @@ def discover(db: Session, channel: Channel, video_id: str, *, meta: youtube.Vide
         return None
     video.channel = channel
     try:
-        failed = _check(db, video, channel, pipeline.pick_account(db, video))
+        failed = _check(db, video, channel)
     except ApiError:
         db.delete(video)  # YouTube gave no answer yet: forget the video so the next poll or push tries again
         db.flush()
@@ -109,7 +106,7 @@ def discover(db: Session, channel: Channel, video_id: str, *, meta: youtube.Vide
     if video.is_podcast_source:
         pipeline.create_podcast_job(db, video)
     else:
-        pipeline.create_job(db, video, pipeline.pick_account(db, video))
+        pipeline.create_job(db, video)
     return video
 
 
@@ -120,7 +117,7 @@ def process_anyway(db: Session, video: Video) -> Job:
     video.status = VideoStatus.ACCEPTED
     video.forced = True
     video.skip_reason = video.rejection_reason = None
-    job = pipeline.create_podcast_job(db, video) if video.is_podcast_source else pipeline.create_job(db, video, pipeline.pick_account(db, video))
+    job = pipeline.create_podcast_job(db, video) if video.is_podcast_source else pipeline.create_job(db, video)
     activity.record(db, "Detection", f"Video #{video.id} processed by hand", event="video_forced", job_id=job.id)
     return job
 
@@ -177,7 +174,7 @@ def subscribe(db: Session, channel: Channel) -> bool:
         return False
     channel.pubsub_requested_at = utcnow()
     try:
-        youtube.subscribe(channel.youtube_channel_id)
+        youtube.subscribe(channel.youtube_channel_id, verify_token=push.ensure_token(db))
     except ApiError as exc:
         channel.pubsub_error = str(exc)[:500]
         activity.record(db, "Detection", f"Push subscription failed for {channel.display_name}: {exc}", level="warning", event="pubsub_failed", user_id=channel.user_id)
@@ -196,14 +193,32 @@ def push_status(channel: Channel) -> str:
         return "failed"
     if channel.pubsub_subscription_expires_at:
         return "subscribed" if channel.pubsub_subscription_expires_at > utcnow() else "expired"
+    if channel.pubsub_requested_at and utcnow() - channel.pubsub_requested_at > VERIFY_TIMEOUT:
+        return "failed"  # the hub accepted the request but never came back to verify it
     return "pending"
+
+
+def push_detail(channel: Channel) -> str | None:
+    """One line saying why the push status is what it is."""
+    status = push_status(channel)
+    if status == "failed":
+        return channel.pubsub_error or "The hub accepted the request but never verified it — no request reached the callback URL. Is the public address right?"
+    if status == "subscribed":
+        return "Verified by the hub."
+    if status == "expired":
+        return "The subscription ran out; it is renewed within the hour."
+    if status == "pending":
+        return "Hub accepted the request; waiting for it to verify the callback." if channel.pubsub_requested_at else "Not subscribed yet; it is requested within the hour."
+    if status == "unavailable":
+        return "No public address is set, so the upload feed is checked instead."
+    return None
 
 
 def unsubscribe(channel: Channel) -> None:
     channel.pubsub_subscription_expires_at = channel.pubsub_requested_at = channel.pubsub_error = None
     if youtube.push_available():
         try:
-            youtube.subscribe(channel.youtube_channel_id, mode="unsubscribe")
+            youtube.subscribe(channel.youtube_channel_id, mode="unsubscribe", verify_token=push.verify_token())
         except ApiError as exc:
             log.warning("unsubscribe failed for %s: %s", channel.youtube_channel_id, exc)
 

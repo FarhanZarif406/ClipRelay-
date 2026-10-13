@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { auth, jobs, rules, tiktok } from "@/api/endpoints";
+import { auth, jobs, rules } from "@/api/endpoints";
 import { apiUrl } from "@/api/client";
 import type { Job } from "@/api/types";
 import { useErrorToast, useToast } from "@/components/Toast";
 import { Badge, Button, Card, Empty, PageHeader, Spinner, Toggle, VideoThumb } from "@/components/ui";
+import { useBufferChannels } from "@/hooks/usePublishing";
 import { duration, relativeTime, timecode } from "@/lib/format";
 import { PODCASTS } from "@/lib/mode";
 
@@ -16,7 +17,9 @@ export default function ReviewQueue() {
   const toast = useToast();
   const onError = useErrorToast();
   const list = useQuery({ queryKey: ["jobs", "review"], queryFn: () => jobs.list({ status: "review", order: "oldest", page_size: 100 }), refetchInterval: 15_000 });
-  const accounts = useQuery({ queryKey: ["tiktok"], queryFn: tiktok.list });
+  // The Buffer accounts a clip can go to; "" is the one whose next free time comes first.
+  const { connected, channels: bufferChannels } = useBufferChannels();
+  const accountOf = (j: Job) => String(j.buffer_channel?.id ?? "");
   const media = useQuery({ queryKey: ["media-token"], queryFn: auth.mediaToken, staleTime: 60 * 60_000 });
   // The one approval switch for the whole app; it is read when each video finishes its edit and caption.
   const ruleValues = useQuery({ queryKey: ["rules"], queryFn: rules.get });
@@ -47,7 +50,7 @@ export default function ReviewQueue() {
     if (!job) return;
     setCaption(job.rewritten_caption ?? job.video.original_title);
     setTags(tagText(job.rewritten_tags));
-    setAccountId(job.tiktok_account ? String(job.tiktok_account.id) : "");
+    setAccountId(accountOf(job));
     setRejecting(false);
     setReason("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -58,13 +61,13 @@ export default function ReviewQueue() {
     queryClient.invalidateQueries({ queryKey: ["jobs"] });
     queryClient.invalidateQueries({ queryKey: ["nav"] });
   };
-  const dirty = !!job && (caption !== (job.rewritten_caption ?? job.video.original_title) || tags !== tagText(job.rewritten_tags) || accountId !== (job.tiktok_account ? String(job.tiktok_account.id) : ""));
+  const dirty = !!job && (caption !== (job.rewritten_caption ?? job.video.original_title) || tags !== tagText(job.rewritten_tags) || accountId !== accountOf(job));
   const approve = useMutation({
     mutationFn: async (j: Job) => {
-      if (dirty) await jobs.update(j.id, { rewritten_caption: caption, rewritten_tags: parseTags(tags), tiktok_account_id: accountId ? Number(accountId) : null });
+      if (dirty) await jobs.update(j.id, { rewritten_caption: caption, rewritten_tags: parseTags(tags), buffer_channel_id: accountId ? Number(accountId) : null });
       return jobs.approve(j.id);
     },
-    onSuccess: j => { toast(j.tiktok_account ? { title: "Approved", message: `Publishing to @${j.tiktok_account.username}.` } : { title: "Approved — waiting for account", message: "It is sent as soon as a TikTok account is connected." }); done(j.id); },
+    onSuccess: j => { toast({ title: "Approved", message: `Handing over to Buffer${j.buffer_channel ? ` for ${j.buffer_channel.name}` : ""}. It goes out at the account’s next free time.` }); done(j.id); },
     onError,
   });
   const reject = useMutation({ mutationFn: (j: Job) => jobs.reject(j.id, reason.trim()), onSuccess: j => { toast({ title: "Rejected" }); done(j.id); }, onError });
@@ -115,7 +118,7 @@ export default function ReviewQueue() {
                 <span>Clip</span><div>{timecode(job.video.clip.start)} – {timecode(job.video.clip.end)} · “{job.video.original_title}”</div></>
               : <><span>Original title</span><div style={{ whiteSpace: "normal" }}>{job.video.original_title}</div></>}
             <span>YouTube</span><div>{job.video.permalink ? <a href={job.video.permalink} target="_blank" rel="noreferrer">{job.video.clip ? "Open the podcast at this moment" : "Open the original video"}</a> : "—"} · {duration(job.video.duration_sec)}</div>
-            <span>Post to</span><div><select className="cell-select" value={accountId} onChange={e => setAccountId(e.target.value)}><option value="">No account yet (waits)</option>{(accounts.data?.items ?? []).map(a => <option key={a.id} value={a.id}>@{a.username}</option>)}</select></div>
+            <span>Post to</span><div><select className="cell-select" value={accountId} onChange={e => setAccountId(e.target.value)}><option value="">Auto (next free time)</option>{bufferChannels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           </div>
           {job.caption_fallback && <div className="fallback-note"><strong>Caption fallback.</strong> The AI model failed for this video, so the original YouTube title and the default hashtags are shown. Edit them before publishing.</div>}
           <div className="field"><label>Caption</label><textarea ref={captionRef} value={caption} maxLength={2200} onChange={e => setCaption(e.target.value)}/><small>{caption.length} / 2200</small></div>
@@ -124,7 +127,7 @@ export default function ReviewQueue() {
             <Button variant="primary" icon="check" disabled={busy} onClick={() => approve.mutate(job)}>{dirty ? "Save edits and publish" : "Approve and publish"}<kbd>A</kbd></Button>
             <Button disabled={busy} onClick={() => captionRef.current?.focus()}>Edit caption<kbd>E</kbd></Button>
             <Button variant="danger" disabled={busy} onClick={() => { setRejecting(true); setTimeout(() => reasonRef.current?.focus(), 0); }}>Reject<kbd>R</kbd></Button>
-            {!accountId && <span className="cell-sub">No TikTok account yet: an approved video waits as “Waiting for account”.</span>}
+            {connected === false && <span className="cell-sub">No Buffer key yet: an approved video waits until you add it under Buffer Settings.</span>}
           </div>}
           {rejecting && <div className="reject-box"><div className="field"><label>Reason for rejecting</label><textarea ref={reasonRef} value={reason} maxLength={1000} onChange={e => setReason(e.target.value)} placeholder="Why is this video not published?"/></div>
             <div className="review-actions"><Button variant="danger" disabled={busy || !reason.trim()} onClick={() => reject.mutate(job)}>Reject video</Button><Button disabled={busy} onClick={() => setRejecting(false)}>Back</Button></div></div>}

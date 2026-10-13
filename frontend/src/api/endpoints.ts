@@ -1,7 +1,7 @@
 import { ApiError, api, apiUrl, getToken } from "./client";
 import type {
-  ActivityLog, AuditItem, AuditSettings, Channel, ChannelCard, ChannelRules, CredentialCard, CredentialResult, DailyReport, LLMProvider, LLMProviderList, LLMProviderName, Integration, Job, Nav, NotificationSettings, Page, Policy, Prompt,
-  PipelineStatus, SourceDiagnosis, SourceInfo, CookiesInfo, RuleChange, RuleDef, RuleValue, RuleValues, Summary, TikTokAccount, User, Video, Violation,
+  ActivityLog, Channel, ChannelRules, CredentialCard, CredentialResult, DailyReport, LLMProvider, LLMProviderList, LLMProviderName, Integration, Job, Nav, NotificationSettings, Page, Prompt,
+  PipelineStatus, BufferChannelChanges, BufferChannelStatus, BufferStatus, PushInfo, YouTubeApiInfo, YouTubeApiTest, SourceDiagnosis, SourceInfo, CookiesInfo, RuleChange, RuleDef, RuleValue, RuleValues, Summary, User, Video,
 } from "./types";
 
 export const auth = {
@@ -21,19 +21,6 @@ export const dashboard = {
   daily: (day?: string) => api<DailyReport>("/reports/daily", { query: { day } }),
 };
 
-export const tiktok = {
-  list: () => api<{ items: TikTokAccount[]; capacity: number }>("/tiktok-accounts"),
-  update: (id: number, body: Partial<{ daily_cap: number | null; default_privacy: string; color: string }>) =>
-    api<TikTokAccount>(`/tiktok-accounts/${id}`, { method: "PATCH", body }),
-  disconnect: (id: number) => api<void>(`/tiktok-accounts/${id}`, { method: "DELETE" }),
-  health: (id: number) =>
-    api<{ account: TikTokAccount; published: number; failed: number; violation_count: number; compliance_rate: number; health: string; violations: Violation[] }>(
-      `/tiktok-accounts/${id}/health`),
-  routes: () => api<{ job_id: number; title: string; video_id: number; tiktok_account: TikTokAccount; status: string }[]>(
-    "/tiktok-accounts/routes-preview"),
-  oauthStart: () => api<{ url: string }>("/tiktok/oauth/start"),
-};
-
 export type PromptBody = Omit<Prompt, "id" | "is_default" | "created_at" | "updated_at">;
 
 export const prompts = {
@@ -49,12 +36,12 @@ export const prompts = {
     api<{ title: string; caption: string; tags: string[] }>("/prompts/test", { method: "POST", body }),
 };
 
-export type JobQuery = { q?: string; status?: string; tiktok_account_id?: number; channel_id?: number; order?: "newest" | "oldest" | "posted"; period?: string; page?: number; page_size?: number };
+export type JobQuery = { q?: string; status?: string; buffer_channel_id?: number; channel_id?: number; order?: "newest" | "oldest" | "posted"; period?: string; page?: number; page_size?: number };
 
 export const jobs = {
   list: (query: JobQuery) => api<Page<Job>>("/jobs", { query }),
   get: (id: number) => api<Job>(`/jobs/${id}`),
-  update: (id: number, body: Partial<{ rewritten_title: string; rewritten_caption: string; rewritten_tags: string[]; privacy_level: string; tiktok_account_id: number | null }>) =>
+  update: (id: number, body: Partial<{ rewritten_title: string; rewritten_caption: string; rewritten_tags: string[]; buffer_channel_id: number | null }>) =>
     api<Job>(`/jobs/${id}`, { method: "PATCH", body }),
   approve: (id: number) => api<Job>(`/jobs/${id}/approve`, { method: "POST" }),
   retry: (id: number) => api<Job>(`/jobs/${id}/retry`, { method: "POST" }),
@@ -65,10 +52,9 @@ export const jobs = {
 };
 
 export const channels = {
-  list: () => api<{ items: Channel[]; push_available: boolean }>("/channels"),
-  resolve: (query: string) => api<ChannelCard>("/channels/resolve", { method: "POST", body: { query } }),
-  create: (body: { query: string; default_tiktok_account_id: number | null }) => api<Channel>("/channels", { method: "POST", body }),
-  update: (id: number, body: Partial<{ active: boolean; default_tiktok_account_id: number | null }>) => api<Channel>(`/channels/${id}`, { method: "PATCH", body }),
+  list: () => api<{ items: Channel[]; push_available: boolean; poll_minutes: number }>("/channels"),
+  create: (body: { query: string }) => api<Channel>("/channels", { method: "POST", body }),
+  update: (id: number, body: { active: boolean }) => api<Channel>(`/channels/${id}`, { method: "PATCH", body }),
   remove: (id: number) => api<void>(`/channels/${id}`, { method: "DELETE" }),
   check: (id: number) => api<{ found: number; queued: number; skipped: number; error: string | null }>(`/channels/${id}/check`, { method: "POST" }),
   rules: (id: number) => api<ChannelRules>(`/channels/${id}/rules`),
@@ -81,22 +67,12 @@ export const rules = {
   history: (channel_id?: number) => api<RuleChange[]>("/settings/rules/history", { query: { channel_id, limit: 100 } }),
 };
 
-export const audit = {
-  list: () => api<{ items: AuditItem[]; settings: AuditSettings; compliance_rate: number | null; monitoring: number }>("/audit"),
-  violations: (unacknowledged = false) => api<Violation[]>("/violations", { query: { unacknowledged } }),
-  ack: (id: number) => api<Violation>(`/violations/${id}/ack`, { method: "POST" }),
-};
-
 export const logs = {
   list: (query: { q?: string; level?: string; service?: string; page?: number; page_size?: number; limit?: number }) =>
     api<Page<ActivityLog> & { services: string[] }>("/logs", { query }),
 };
 
 export const settings = {
-  policy: () => api<Policy>("/settings/policy"),
-  savePolicy: (body: Partial<Policy>) => api<Policy>("/settings/policy", { method: "PUT", body }),
-  audit: () => api<AuditSettings>("/settings/audit"),
-  saveAudit: (body: Partial<AuditSettings>) => api<AuditSettings>("/settings/audit", { method: "PUT", body }),
   notifications: () => api<NotificationSettings>("/settings/notifications"),
   saveNotifications: (body: Partial<NotificationSettings>) => api<NotificationSettings>("/settings/notifications", { method: "PUT", body }),
   testNotification: () => api<{ ok: boolean; message: string }>("/settings/notifications/test", { method: "POST" }),
@@ -151,4 +127,31 @@ export const source = {
   test: (url: string) => api<{ ok: boolean; message: string }>("/integrations/source/test", { method: "POST", body: { url } }),
   diagnose: (url: string) => api<SourceDiagnosis>("/integrations/source/diagnose", { method: "POST", body: { url } }),
   diagnosis: (id: string) => api<SourceDiagnosis>(`/integrations/source/diagnose/${id}`),
+};
+
+/** Integrations → YouTube Data API: the key, the project ID and a live test (admin only). */
+export const youtubeApi = {
+  info: () => api<YouTubeApiInfo>("/integrations/youtube"),
+  save: (body: { api_key?: string; project_id?: string }) => api<YouTubeApiInfo>("/integrations/youtube", { method: "PUT", body }),
+  removeKey: () => api<YouTubeApiInfo>("/integrations/youtube/key", { method: "DELETE" }),
+  test: () => api<YouTubeApiTest>("/integrations/youtube/test", { method: "POST" }),
+};
+
+/** Integrations → YouTube Push Notifications: the public address, the verify token and the subscriptions (admin only). */
+export const push = {
+  info: () => api<PushInfo>("/integrations/push"),
+  save: (body: { public_base_url?: string; verify_token?: string }) => api<PushInfo>("/integrations/push", { method: "PUT", body }),
+  subscribe: (channelId: string) => api<PushInfo>("/integrations/push/subscribe", { method: "POST", body: { channel_id: channelId } }),
+  retryFailed: () => api<PushInfo>("/integrations/push/retry-failed", { method: "POST" }),
+};
+
+/** Buffer Settings: the member's own Buffer key and the accounts connected there. */
+export const buffer = {
+  info: () => api<BufferStatus>("/buffer"),
+  /** The key is checked with Buffer first, and refused if Buffer does not accept it. */
+  saveKey: (apiKey: string) => api<BufferStatus>("/buffer/key", { method: "PUT", body: { api_key: apiKey } }),
+  removeKey: () => api<BufferStatus>("/buffer/key", { method: "DELETE" }),
+  refresh: () => api<BufferStatus>("/buffer/refresh", { method: "POST" }),
+  updateChannel: (id: number, changes: BufferChannelChanges) => api<BufferStatus>(`/buffer/channels/${id}`, { method: "PATCH", body: changes }),
+  channelStatus: (id: number) => api<BufferChannelStatus>(`/buffer/channels/${id}/status`),
 };

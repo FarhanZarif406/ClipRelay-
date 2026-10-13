@@ -5,7 +5,7 @@ import { credentials, settings, users } from "@/api/endpoints";
 import type { NotificationSettings } from "@/api/types";
 import { AIModels } from "@/components/AIModels";
 import { CredentialCard } from "@/components/CredentialCard";
-import { ChannelOverrides, GlobalRules, RuleHistory, TikTokSummary } from "@/components/RulesEditor";
+import { ChannelOverrides, GlobalRules, RuleHistory } from "@/components/RulesEditor";
 import { Icon } from "@/components/Icon";
 import { Field } from "@/components/Modal";
 import { useErrorToast, useToast } from "@/components/Toast";
@@ -14,21 +14,12 @@ import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { initialsOf } from "@/lib/format";
 
-const TABS = ["Pipeline rules", "Channel overrides", "TikTok accounts", "Change history", "API keys", "AI models", "Notifications", "Team members", "Appearance"] as const;
+const TABS = ["Pipeline rules", "Channel overrides", "Change history", "API keys", "AI models", "Notifications", "Team members", "Appearance"] as const;
 /** Tabs only the admin sees: API keys and everything else that belongs to the whole workspace. */
 const ADMIN_TABS: readonly string[] = ["API keys", "AI models", "Notifications", "Team members"];
 type Tab = (typeof TABS)[number];
 
-function TikTokAuditToggle() {
-  const queryClient = useQueryClient();
-  const onError = useErrorToast();
-  const { data: policy } = useQuery({ queryKey: ["policy"], queryFn: settings.policy });
-  const save = useMutation({ mutationFn: (v: boolean) => settings.savePolicy({ tiktok_app_audited: v }), onSuccess: p => queryClient.setQueryData(["policy"], p), onError });
-  return <div className="setting-inline"><div><strong>App audited</strong><span>Turn on once TikTok approves the app in the Content Posting audit. Until then posts are private (SELF_ONLY).</span></div><Toggle checked={!!policy?.tiktok_app_audited} onChange={() => policy && save.mutate(!policy.tiktok_app_audited)} label="App audited"/></div>;
-}
-
-/** Tools that live on the server: the downloader (yt-dlp), the editor (FFmpeg) and storage. */
-const CARD_KEYS = new Set(["tiktok", "llm", "ytdlp"]);  // the downloader has its own Video Source card
+const CARD_KEYS = new Set(["llm", "ytdlp"]);  // the downloader has its own Video Source card
 
 export function OtherIntegrations({ isOwner }: { isOwner: boolean }) {
   const { data } = useQuery({ queryKey: ["settings", "integrations"], queryFn: settings.integrations });
@@ -45,7 +36,7 @@ export function ApiKeys() {
   const { data } = useQuery({ queryKey: ["credentials"], queryFn: credentials.list });
   return <>
     {!isOwner && <div className="form-note" style={{ marginTop: 0 }}>Only workspace owners can view or change API keys.</div>}
-    {data?.filter(card => card.group !== "smtp").map(card => <CredentialCard key={card.group} card={card} isOwner={isOwner}>{card.group === "tiktok" && isOwner ? <TikTokAuditToggle/> : null}</CredentialCard>)}
+    {data?.filter(card => card.group !== "smtp").map(card => <CredentialCard key={card.group} card={card} isOwner={isOwner}></CredentialCard>)}
     <OtherIntegrations isOwner={isOwner}/>
   </>;
 }
@@ -69,13 +60,12 @@ function Notifications() {
   const isOwner = user?.role === "owner";
   const smtpCard = useQuery({ queryKey: ["credentials"], queryFn: credentials.list }).data?.find(c => c.group === "smtp");
   if (!draft) return null;
-  const flag = (k: "notify_violations" | "notify_failures" | "notify_tokens", label: string, help: string) => <div className="setting-row"><div><strong>{label}</strong><span>{help}</span></div><Toggle checked={draft[k]} onChange={() => setDraft({ ...draft, [k]: !draft[k] })}/></div>;
+  const flag = (k: "notify_failures" | "notify_tokens", label: string, help: string) => <div className="setting-row"><div><strong>{label}</strong><span>{help}</span></div><Toggle checked={draft[k]} onChange={() => setDraft({ ...draft, [k]: !draft[k] })}/></div>;
   return <><Card><div className="card-title">Notifications</div><div className="card-caption">Alerts always appear in the dashboard. Add a webhook (Slack, Discord, or any HTTPS endpoint) and/or email to get them elsewhere.</div>
     <div style={{ marginTop: 16 }} className="field-row"><Field label="Webhook URL" hint="Receives JSON: {text, content, kind}."><input value={draft.webhook_url} onChange={e => setDraft({ ...draft, webhook_url: e.target.value })} placeholder="https://hooks.slack.com/services/…"/></Field>
       <Field label="Alert email" hint="Comma-separated. Needs the SMTP settings below."><input value={draft.email} onChange={e => setDraft({ ...draft, email: e.target.value })} placeholder="ops@example.com"/></Field></div>
-    {flag("notify_violations", "Violations", "When TikTok flags or removes a video")}
     {flag("notify_failures", "Failed jobs", "When a job fails after all retries")}
-    {flag("notify_tokens", "Token problems", "When a TikTok account needs reconnecting")}
+    {flag("notify_tokens", "Key problems", "When a saved API key or an AI model stops working")}
     <div className="modal-foot"><Button onClick={() => test.mutate()} disabled={!data?.webhook_url || test.isPending}>Test webhook</Button><Button onClick={() => testEmail.mutate()} disabled={!data?.email || testEmail.isPending}>{testEmail.isPending ? "Sending…" : "Send test email"}</Button><Button variant="primary" onClick={() => save.mutate(draft)} disabled={save.isPending}>Save</Button></div>
   </Card>
   {smtpCard && <CredentialCard card={smtpCard} isOwner={isOwner} presets={[{ label: "Gmail preset", values: { host: "smtp.gmail.com", port: "587", security: "starttls" }, hint: "Gmail: use your full address as username and from address, and a 16-character app password (Google Account → Security → 2-Step Verification → App passwords)." }]}/>}
@@ -113,7 +103,7 @@ export default function Settings() {
   const wanted: Tab = params.get("tab") === "keys" ? "API keys" : "Pipeline rules";
   const [chosen, setTab] = useState<Tab>(wanted);
   const tab: Tab = tabs.includes(chosen) ? chosen : "Pipeline rules";
-  return <><PageHeader title="Settings" description={isAdmin ? "Your own rules and accounts, plus the workspace's API keys, AI models and team." : "Your own rules, channel overrides and TikTok accounts. They apply only to your channels."}/><div className="settings-layout"><div className="settings-nav">{tabs.map(x => <button className={tab === x ? "active" : ""} key={x} onClick={() => setTab(x)}>{x}</button>)}</div><div className="settings-content">
+  return <><PageHeader title="Settings" description={isAdmin ? "Your own rules and accounts, plus the workspace's API keys, AI models and team." : "Your own rules and channel overrides. They apply only to your channels."}/><div className="settings-layout"><div className="settings-nav">{tabs.map(x => <button className={tab === x ? "active" : ""} key={x} onClick={() => setTab(x)}>{x}</button>)}</div><div className="settings-content">
     {tab === "Pipeline rules" && <>
       <Card><div className="card-title">Set in one place</div><div className="card-caption">These are not repeated here, so there is only one place to change each of them.</div>
         <div className="api-row"><div><strong>Speed, flip and audio</strong><span>The edit every video gets</span></div><Link className="button secondary" to="/editing">Open Editing Rules</Link></div>
@@ -122,7 +112,6 @@ export default function Settings() {
       <GlobalRules groups={["Detection", "Publishing", "Caption", "Storage"]} hideKeys={["approval_required"]} caption="Your own defaults: they apply to your channels only, not to other members. A change applies to the next video, with no restart. One of your channels can override most of them under “Channel overrides”."/>
     </>}
     {tab === "Channel overrides" && <ChannelOverrides/>}
-    {tab === "TikTok accounts" && <TikTokSummary/>}
     {tab === "Change history" && <RuleHistory/>}
     {tab === "API keys" && <ApiKeys/>}
     {tab === "AI models" && <AIModels isOwner={user?.role === "owner"}/>}

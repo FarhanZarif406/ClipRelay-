@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ApiError } from "@/api/client";
 import { credentials } from "@/api/endpoints";
 import type { CredentialCard as Card_, CredentialResult, CredentialState } from "@/api/types";
 import { dayTime } from "@/lib/format";
@@ -47,7 +46,6 @@ export function CredentialCard({ card, isOwner, children, presets }: { card: Car
   const onError = useErrorToast();
   const [values, setValues] = useState<Record<string, string>>({});
   const [result, setResult] = useState<{ ok: boolean | null; message: string } | null>(null);
-  const [confirm, setConfirm] = useState<null | { kind: "save" | "remove"; message: string }>(null);
   const [removing, setRemoving] = useState(false);
 
   useEffect(() => {
@@ -65,14 +63,14 @@ export function CredentialCard({ card, isOwner, children, presets }: { card: Car
 
   const validate = useMutation({ mutationFn: () => credentials.validate(card.group, changed()), onSuccess: report, onError });
   const save = useMutation({
-    mutationFn: (confirmReconnect: boolean) => credentials.save(card.group, changed(), confirmReconnect),
-    onSuccess: r => { report(r); setConfirm(null); toast({ title: `${card.title} saved`, message: r.ok === false ? "Saved, but validation failed — see the card." : "Takes effect immediately." }); },
-    onError: e => { if (e instanceof ApiError && e.code === "reconnect_required") setConfirm({ kind: "save", message: e.message }); else onError(e); },
+    mutationFn: () => credentials.save(card.group, changed()),
+    onSuccess: r => { report(r); toast({ title: `${card.title} saved`, message: r.ok === false ? "Saved, but validation failed — see the card." : "Takes effect immediately." }); },
+    onError,
   });
   const remove = useMutation({
-    mutationFn: (confirmReconnect: boolean) => credentials.remove(card.group, confirmReconnect),
-    onSuccess: r => { setConfirm(null); setRemoving(false); setResult(null); refresh(r.card); toast({ title: `${card.title} removed`, message: r.fallback === "env" ? "Now using the values from .env." : "This integration is no longer configured." }); },
-    onError: e => { if (e instanceof ApiError && e.code === "reconnect_required") { setRemoving(false); setConfirm({ kind: "remove", message: e.message }); } else onError(e); },
+    mutationFn: () => credentials.remove(card.group),
+    onSuccess: r => { setRemoving(false); setResult(null); refresh(r.card); toast({ title: `${card.title} removed`, message: r.fallback === "env" ? "Now using the values from .env." : "This integration is no longer configured." }); },
+    onError,
   });
 
   if (!isOwner || !card.fields) return <MemberCard card={card}/>;
@@ -89,8 +87,6 @@ export function CredentialCard({ card, isOwner, children, presets }: { card: Car
         {f.secret ? <SecretInput value={values[f.key] ?? ""} onChange={v => setValues(x => ({ ...x, [f.key]: v }))} placeholder={f.masked ? `${f.masked} — leave blank to keep` : "Not set"}/>
           : <input value={values[f.key] ?? ""} onChange={e => setValues(x => ({ ...x, [f.key]: e.target.value }))} placeholder="Not set" spellCheck={false}/>}
       </Field>)}
-      {card.redirect_uri && <div className="span-2"><Field label="Redirect URI" hint="Register this exact URL in the developer app."><CopyField value={card.redirect_uri}/></Field></div>}
-      {card.scopes && <div className="span-2"><Field label="Scopes"><code className="scope-list">{card.scopes}</code></Field></div>}
     </div>
     {children}
     {result && <div className={result.ok === false ? "form-error" : "form-note"}>{result.ok === true && <strong>Valid. </strong>}{result.ok === null && <strong>Unverified. </strong>}{result.message}</div>}
@@ -99,15 +95,11 @@ export function CredentialCard({ card, isOwner, children, presets }: { card: Car
       <span style={{ flex: 1 }}/>
       {savedInApp && <Button variant="danger" onClick={() => setRemoving(true)} disabled={remove.isPending}>Remove</Button>}
       <Button onClick={() => validate.mutate()} disabled={busy}>{validate.isPending ? "Validating…" : "Validate"}</Button>
-      <Button variant="primary" onClick={() => save.mutate(false)} disabled={!dirty || busy}>{save.isPending ? "Saving…" : "Save"}</Button>
+      <Button variant="primary" onClick={() => save.mutate()} disabled={!dirty || busy}>{save.isPending ? "Saving…" : "Save"}</Button>
     </div>
     {removing && <Modal title={`Remove ${card.title.toLowerCase()} credentials?`} caption="The values saved in the app are deleted." onClose={() => setRemoving(false)}
-      footer={<><Button onClick={() => setRemoving(false)}>Cancel</Button><Button variant="danger" onClick={() => remove.mutate(false)} disabled={remove.isPending}>Remove</Button></>}>
+      footer={<><Button onClick={() => setRemoving(false)}>Cancel</Button><Button variant="danger" onClick={() => remove.mutate()} disabled={remove.isPending}>Remove</Button></>}>
       <div className="form-note">If the server’s <code>.env</code> has values for this integration, ClipRelay falls back to them right away. Otherwise the integration becomes not configured.</div>
-    </Modal>}
-    {confirm && <Modal title="Connected accounts must reconnect" caption={confirm.message} onClose={() => setConfirm(null)}
-      footer={<><Button onClick={() => setConfirm(null)}>Cancel</Button><Button variant="danger" onClick={() => confirm.kind === "save" ? save.mutate(true) : remove.mutate(true)} disabled={save.isPending || remove.isPending}>{confirm.kind === "save" ? "Save and require reconnect" : "Remove and require reconnect"}</Button></>}>
-      <div className="form-note">Tokens issued under the old app stop matching the configured app. Affected accounts are marked <strong>needs reconnect</strong> and skipped until someone signs in again from TikTok Accounts.</div>
     </Modal>}
   </Card>;
 }

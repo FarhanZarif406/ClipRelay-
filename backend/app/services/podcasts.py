@@ -161,7 +161,7 @@ def split(db: Session, job: Job) -> str:
         db.add(clip)
         db.flush()
         clip.channel, clip.parent = video.channel, video
-        clip_job = pipeline.create_job(db, clip, pipeline.pick_account(db, clip))
+        clip_job = pipeline.create_job(db, clip)
         clip_job.next_check_at = None  # picked up by the next scheduler tick
     job.next_check_at = None
     job.attempts = 0

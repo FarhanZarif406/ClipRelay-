@@ -2,9 +2,9 @@ import logging
 
 from app.config import get_settings
 from app.db import session_scope
-from app.integrations.http import ApiError, AuthError, backoff_delay
+from app.integrations.http import ApiError, backoff_delay
 from app.models import Channel, Job, JobStatus
-from app.services import credential_checks, credentials, detection, pipeline, tokens
+from app.services import buffer, credential_checks, credentials, detection, pipeline, youtube_usage
 from app.workers.celery_app import celery_app
 
 log = logging.getLogger(__name__)
@@ -25,6 +25,7 @@ def tick() -> dict:
     with session_scope() as db:
         due = pipeline.scheduler_tick(db)
         due["polls"] = detection.due_channels(db)
+        youtube_usage.flush(db)
     for channel_id in due["polls"]:
         enqueue(poll_channel, channel_id)
     for job_id in due["process"]:
@@ -33,8 +34,8 @@ def tick() -> dict:
         enqueue(rewrite_job, job_id)
     for job_id, delay in due["uploads"]:
         enqueue(upload_job, job_id, countdown=delay)
-    for job_id in due["checks"]:
-        enqueue(check_job, job_id)
+    for job_id in due["buffer_checks"]:
+        enqueue(check_buffer, job_id)
     return {k: len(v) for k, v in due.items()}
 
 
@@ -96,21 +97,11 @@ def upload_job(job_id: int) -> str:
         return pipeline.upload_job(db, job_id)
 
 
-@celery_app.task(bind=True, max_retries=5)
-def check_job(self, job_id: int) -> str | None:
-    try:
-        with session_scope() as db:
-            return pipeline.check_job(db, job_id)
-    except AuthError:
-        return None  # account must be reconnected; the lease re-queues the check later
-    except ApiError as exc:
-        raise self.retry(exc=exc, countdown=backoff_delay(self.request.retries, base=60))
-
-
 @celery_app.task
-def refresh_tokens() -> dict:
+def check_buffer(job_id: int) -> str | None:
+    """A post handed to Buffer: has it been published yet?"""
     with session_scope() as db:
-        return tokens.refresh_all(db)
+        return buffer.check(db, job_id)
 
 
 @celery_app.task

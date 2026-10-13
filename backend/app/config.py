@@ -22,10 +22,6 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://cliprelay:cliprelay@localhost:5432/cliprelay"
     redis_url: str = "redis://localhost:6379/0"
 
-    # TikTok (Login Kit + Content Posting API)
-    tiktok_client_key: str = ""
-    tiktok_client_secret: str = ""
-    tiktok_scopes: str = "user.info.basic,video.upload,video.publish,video.list"  # video.upload = inbox mode
 
     # YouTube
     youtube_api_key: str = ""  # optional: YouTube Data API key; without it lookups use the public pages and yt-dlp
@@ -59,7 +55,6 @@ class Settings(BaseSettings):
     ffmpeg_path: str = "ffmpeg"
 
     # Limits from the design
-    max_tiktok_accounts: int = 20
 
     # Scheduler
     scheduler_tick_seconds: int = 30

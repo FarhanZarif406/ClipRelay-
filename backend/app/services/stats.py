@@ -17,13 +17,10 @@ from app.models import (
     Job,
     JobStatus,
     Mode,
-    TikTokAccount,
-    TikTokStatus,
     Video,
     VideoStatus,
-    Violation,
 )
-from app.services import rules, serializers, workspace_settings
+from app.services import buffer, rules, serializers, workspace_settings
 from app.services.pipeline import cap_day_start
 
 
@@ -60,6 +57,7 @@ def _daily_series(timestamps: list[datetime], end_day: datetime, days: int, zone
 
 
 def account_stats(db: Session, start: datetime | None = None, user_id: int | None = None) -> dict[int, dict]:
+    """Per Buffer account: published and failed on the day that starts at `start`, and published in all."""
     start = start or day_start(db, user_id=user_id)
     end = start + timedelta(days=1)
     out: dict[int, dict] = {}
@@ -69,19 +67,18 @@ def account_stats(db: Session, start: datetime | None = None, user_id: int | Non
             if account_id is not None:
                 out.setdefault(account_id, {})[key] = count
 
-    put(db.execute(select(Job.tiktok_account_id, func.count()).where(Job.posted_at >= start, Job.posted_at < end).group_by(Job.tiktok_account_id)), "posts_today")
-    put(db.execute(select(Job.tiktok_account_id, func.count()).where(Job.status == JobStatus.FAILED, Job.updated_at >= start, Job.updated_at < end).group_by(Job.tiktok_account_id)), "failed_today")
-    put(db.execute(select(Job.tiktok_account_id, func.count()).where(Job.posted_at.is_not(None)).group_by(Job.tiktok_account_id)), "lifetime_posts")
-    put(db.execute(select(Violation.tiktok_account_id, func.count()).group_by(Violation.tiktok_account_id)), "violations")
+    put(db.execute(select(Job.buffer_channel_id, func.count()).where(Job.posted_at >= start, Job.posted_at < end).group_by(Job.buffer_channel_id)), "posts_today")
+    put(db.execute(select(Job.buffer_channel_id, func.count()).where(Job.status == JobStatus.FAILED, Job.updated_at >= start, Job.updated_at < end).group_by(Job.buffer_channel_id)), "failed_today")
+    put(db.execute(select(Job.buffer_channel_id, func.count()).where(Job.posted_at.is_not(None)).group_by(Job.buffer_channel_id)), "lifetime_posts")
     return out
 
 
 def nav(db: Session, mode: str = Mode.SHORTS, user_id: int | None = None) -> dict:
     return {
         "pending_jobs": _count(db, select(func.count(Job.id)).where(Job.status.in_(JobStatus.PENDING), _in(mode, user_id))),
-        "unacknowledged_violations": _count(db, select(func.count(Violation.id)).where(Violation.acknowledged.is_(False), Violation.job_id.in_(select(Job.id).join(Video, Job.video_id == Video.id).where(Video.user_id == user_id)))),
         "onboarding_completed": workspace_settings.get(db, "onboarding")["completed"],
-        "tiktok_accounts": _count(db, select(func.count(TikTokAccount.id)).where(TikTokAccount.status != TikTokStatus.REVOKED, TikTokAccount.mode == mode, TikTokAccount.user_id == user_id)),
+        "buffer_connected": buffer.uses_buffer(db, user_id),
+        "buffer_accounts": sum(1 for c in buffer.channels(db, user_id, mode) if c.enabled) if user_id else 0,
         "review_jobs": _count(db, select(func.count(Job.id)).where(Job.status == JobStatus.AWAITING_APPROVAL, _in(mode, user_id))),
         "failed_jobs": _count(db, select(func.count(Job.id)).where(Job.status == JobStatus.FAILED, _in(mode, user_id))),
         "skipped_videos": _count(db, select(func.count(Video.id)).where(Video.status == VideoStatus.SKIPPED, *_uploads(mode, user_id))),
@@ -99,7 +96,6 @@ def summary(db: Session, mode: str = Mode.SHORTS, user_id: int | None = None) ->
     fetched_ts = list(db.scalars(select(Video.created_at).where(Video.created_at >= spark_start, *_uploads(mode, user_id))))
     posted_ts = list(db.scalars(select(Job.posted_at).where(Job.posted_at >= spark_start, mine)))
     failed_ts = list(db.scalars(select(Job.updated_at).where(Job.status == JobStatus.FAILED, Job.updated_at >= spark_start, mine)))
-    violation_ts = list(db.scalars(select(Violation.detected_at).where(Violation.detected_at >= spark_start, Violation.job_id.in_(select(Job.id).where(mine)))))
     pending_ts = list(db.scalars(select(Job.created_at).where(Job.created_at >= spark_start, Job.status.in_(JobStatus.PENDING), mine)))
 
     def today_yesterday(ts):
@@ -116,7 +112,6 @@ def summary(db: Session, mode: str = Mode.SHORTS, user_id: int | None = None) ->
     fetched, fetched_y = today_yesterday(fetched_ts)
     published, published_y = today_yesterday(posted_ts)
     failed, failed_y = today_yesterday(failed_ts)
-    removed, _ = today_yesterday(violation_ts)
     pending = _count(db, select(func.count(Job.id)).where(Job.status.in_(JobStatus.PENDING), mine))
     processing = _count(db, select(func.count(Job.id)).where(Job.status.in_(JobStatus.PROCESSING | {JobStatus.UPLOADING}), mine))
     podcasts = mode == Mode.PODCASTS
@@ -126,7 +121,6 @@ def summary(db: Session, mode: str = Mode.SHORTS, user_id: int | None = None) ->
         {"key": "published", "label": "Clips published" if podcasts else "Published", "value": published, "delta": delta(published, published_y), "tone": "success", "series": series(posted_ts)},
         {"key": "pending", "label": "Pending", "value": pending, "meta": f"{processing} processing", "tone": "warning", "series": series(pending_ts)},
         {"key": "failed", "label": "Failed", "value": failed, "delta": delta(failed, failed_y), "tone": "danger", "series": series(failed_ts)},
-        {"key": "removed", "label": "Removed by audit", "value": removed, "meta": f"{(removed / published * 100) if published else 0:.1f}% rate", "tone": "neutral", "series": series(violation_ts)},
     ]
 
     statuses = Counter(db.scalars(select(Job.status).where(Job.created_at >= today, mine)))
@@ -134,16 +128,10 @@ def summary(db: Session, mode: str = Mode.SHORTS, user_id: int | None = None) ->
         "published": sum(statuses[s] for s in JobStatus.PUBLISHED),
         "pending": sum(statuses[s] for s in JobStatus.PENDING),
         "failed": statuses[JobStatus.FAILED],
-        "removed": statuses[JobStatus.VIOLATED],
     }
 
-    accounts = db.scalars(select(TikTokAccount).where(TikTokAccount.mode == mode, TikTokAccount.user_id == user_id).order_by(TikTokAccount.id)).all()
+    accounts = buffer.channels(db, user_id, mode) if user_id else []
     per_account = account_stats(db, today)
-    attention = [
-        {"username": a.username, "status": a.status, "refresh_expires_at": a.refresh_expires_at}
-        for a in accounts
-        if a.status in (TikTokStatus.EXPIRING, TikTokStatus.EXPIRED, TikTokStatus.REVOKED)
-    ]
 
     skipped = db.scalars(select(Video).where(Video.status == VideoStatus.SKIPPED, *_uploads(mode, user_id)).order_by(Video.id.desc()).limit(5)).unique().all()
     accepted_today = _count(db, select(func.count(Video.id)).where(Video.created_at >= today, Video.status == VideoStatus.ACCEPTED, *_uploads(mode, user_id)))
@@ -157,8 +145,6 @@ def summary(db: Session, mode: str = Mode.SHORTS, user_id: int | None = None) ->
     return {
         "kpis": kpis,
         "distribution": distribution,
-        "attention": attention,
-        "unacknowledged_violations": _count(db, select(func.count(Violation.id)).where(Violation.acknowledged.is_(False), Violation.job_id.in_(select(Job.id).join(Video, Job.video_id == Video.id).where(Video.user_id == user_id)))),
         "recent_activity": [serializers.log(e) for e in db.scalars(activity_log.order_by(ActivityLog.id.desc()).limit(4))],
         "mode": mode,
         "timezone": zone.key,
@@ -170,7 +156,7 @@ def summary(db: Session, mode: str = Mode.SHORTS, user_id: int | None = None) ->
             "min_source_duration_seconds": values.get("min_source_duration_seconds"),
         },
         "accounts": [
-            {**serializers.tiktok_ref(a), "posts_today": per_account.get(a.id, {}).get("posts_today", 0), "lifetime_posts": per_account.get(a.id, {}).get("lifetime_posts", 0)}
+            {**buffer.account_ref(a), "posts_today": per_account.get(a.id, {}).get("posts_today", 0), "lifetime_posts": per_account.get(a.id, {}).get("lifetime_posts", 0)}
             for a in accounts
         ],
     }
@@ -189,7 +175,7 @@ def daily_report(db: Session, day: date | None = None, mode: str = Mode.SHORTS, 
     zone = ZoneInfo(timezone_name(db, user_id))
     start = day_start(db, day, user_id)
     end = start + timedelta(days=1)
-    accounts = db.scalars(select(TikTokAccount).where(TikTokAccount.mode == mode, TikTokAccount.user_id == user_id).order_by(TikTokAccount.id)).all()
+    accounts = buffer.channels(db, user_id, mode) if user_id else []
     per_account = account_stats(db, start)
 
     posted = [t.astimezone(zone) for t in db.scalars(select(Job.posted_at).where(Job.posted_at >= start, Job.posted_at < end, _in(mode, user_id)))]
@@ -204,7 +190,7 @@ def daily_report(db: Session, day: date | None = None, mode: str = Mode.SHORTS, 
         stats = per_account.get(a.id, {})
         rows.append(
             {
-                **serializers.tiktok_ref(a),
+                **buffer.account_ref(a),
                 "posts_today": stats.get("posts_today", 0),
                 "failed_today": stats.get("failed_today", 0),
                 "lifetime_posts": stats.get("lifetime_posts", 0),
@@ -216,7 +202,7 @@ def daily_report(db: Session, day: date | None = None, mode: str = Mode.SHORTS, 
         "uploaded": len(posted),
         "failed": len(failed),
         "accounts": rows,
-        "active_accounts": sum(1 for a in accounts if a.status in (TikTokStatus.ACTIVE, TikTokStatus.EXPIRING)),
+        "active_accounts": sum(1 for a in accounts if a.enabled),
         "lifetime_uploads": sum(r["lifetime_posts"] for r in rows),
         "accepted": _count(db, select(func.count(Video.id)).where(*in_day, Video.status == VideoStatus.ACCEPTED)),
         "filtered_out": _count(db, select(func.count(Video.id)).where(*in_day, Video.status == VideoStatus.SKIPPED)),
@@ -233,7 +219,8 @@ STAGES = [
     ("caption", "Writing caption", JobStatus.REWRITING),
     ("review", "Waiting for approval", JobStatus.AWAITING_APPROVAL),
     ("upload_wait", "Waiting to upload", JobStatus.READY),
-    ("uploading", "Uploading to TikTok", JobStatus.UPLOADING),
+    ("uploading", "Uploading", JobStatus.UPLOADING),
+    ("scheduled", "At Buffer, waiting for its time", JobStatus.SCHEDULED),
 ]
 STAGE_LIMIT = 100
 
@@ -255,7 +242,8 @@ def _status_item(job: Job) -> dict:
         "retry_at": job.next_check_at if job.attempts and job.status in (JobStatus.DOWNLOADING, JobStatus.RENDERING) else None,
         "podcast": video.is_podcast_source,  # a whole podcast being analysed, not a clip
         "clip": {"start": video.clip_start, "end": video.clip_end, "podcast_title": video.parent.original_title if video.parent else ""} if video.parent_id else None,
-        "tiktok_account": serializers.tiktok_ref(job.tiktok_account),
+        "buffer_channel": serializers.buffer.channel_ref(job.buffer_channel),
+        "due_at": job.buffer_due_at,
     }
 
 
@@ -288,7 +276,7 @@ def pipeline_status(db: Session, mode: str = Mode.SHORTS, user_id: int | None = 
             "total": total,
             "downloaded": downloaded, "download_left": total - downloaded - sum(1 for r in alive if r.status == JobStatus.FAILED and not r.source_file_path and not r.rendered_file_path),
             "edited": edited, "edit_left": max(0, downloaded - edited - sum(1 for r in alive if r.status == JobStatus.FAILED and r.source_file_path and not r.rendered_file_path)),
-            "uploaded": uploaded, "upload_left": sum(1 for r in alive if not r.posted_at and r.status in (JobStatus.AWAITING_APPROVAL, JobStatus.READY, JobStatus.UPLOADING, JobStatus.REWRITING)),
+            "uploaded": uploaded, "upload_left": sum(1 for r in alive if not r.posted_at and r.status in (JobStatus.AWAITING_APPROVAL, JobStatus.READY, JobStatus.UPLOADING, JobStatus.SCHEDULED, JobStatus.REWRITING)),
             "failed": failed,
         },
         "stages": stages,

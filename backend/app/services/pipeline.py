@@ -1,7 +1,7 @@
 """Processing pipeline.
 
 Detected → Downloading → Rendering → (Rewriting) → (Awaiting approval) → Ready → Uploading → Posted → Monitoring
-→ Clean / Violated / Failed
+→ Scheduled at Buffer → Posted / Failed
 
 The caption is rewritten alongside the download and the edit, because it needs only the metadata. Detection
 (which videos enter the pipeline) lives in `app.services.detection`.
@@ -16,23 +16,19 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
-from app.integrations import tiktok
-from app.integrations.http import ApiError, AuthError, RateLimitError, backoff_delay
+from app.integrations.http import ApiError
 from app.models import (
     CaptionStatus,
     Job,
     JobStatus,
-    TikTokAccount,
-    TikTokStatus,
     Video,
-    Violation,
     utcnow,
 )
 from app.db import session_scope
-from app.services import activity, media, notify, prompts, rules, sources, tokens, workspace_settings
+from app.services import activity, buffer, media, notify, prompts, rules, sources
 from app.services.activity import job_event
 from app.services.storage import get_storage
 
@@ -40,10 +36,7 @@ log = logging.getLogger(__name__)
 
 LEASE = timedelta(minutes=10)
 PROCESS_LEASE = timedelta(minutes=45)  # a download plus a render may take a while
-MAX_UPLOAD_ATTEMPTS = 3
 MAX_STAGE_ATTEMPTS = 3
-ACTIVE_ACCOUNT = (TikTokStatus.ACTIVE, TikTokStatus.EXPIRING)
-PROCESSING_STATES = {"PROCESSING_UPLOAD", "PROCESSING_DOWNLOAD", "SEND_TO_USER_INBOX"}
 
 
 # ---------------------------------------------------------------- helpers
@@ -52,27 +45,6 @@ def cap_day_start(timezone_name: str, now: datetime | None = None) -> datetime:
     """Midnight of the current day in the cap-reset timezone — the moment the daily caps start counting."""
     local = (now or utcnow()).astimezone(ZoneInfo(timezone_name or "UTC"))
     return local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(ZoneInfo("UTC"))
-
-
-def account_cap(account: TikTokAccount, rule_values: dict) -> int:
-    return account.daily_cap or int(rule_values["uploads_per_tiktok_account_per_day"])
-
-
-def account_load(db: Session, account_id: int, since: datetime, *, exclude_job_id: int | None = None) -> int:
-    """Uploads counted against an account's daily cap: published since `since`, plus everything still on its way."""
-    stmt = select(func.count(Job.id)).where(
-        Job.tiktok_account_id == account_id,
-        or_(Job.posted_at >= since, (Job.posted_at.is_(None)) & Job.status.in_(JobStatus.PENDING)),
-    )
-    if exclude_job_id:
-        stmt = stmt.where(Job.id != exclude_job_id)
-    return db.scalar(stmt) or 0
-
-
-def posts_since(db: Session, account_id: int, since: datetime) -> int:
-    return db.scalar(
-        select(func.count(Job.id)).where(Job.tiktok_account_id == account_id, Job.posted_at >= since)
-    ) or 0
 
 
 def compose_post_text(job: Job) -> str:
@@ -93,39 +65,20 @@ def mark_failed(db: Session, job_id: int, error: str) -> None:
     job.error = error[:2000]
     job.next_check_at = None
     job_event(db, job, JobStatus.FAILED, f"Failed: {error[:300]}")
-    target = f" for @{job.tiktok_account.username}" if job.tiktok_account else ""
+    target = f" for {job.buffer_channel.name}" if job.buffer_channel else ""
     activity.record(db, "Publisher", f"Job #{job.id} failed{target}: {error[:200]}", level="error", event="job_failed", job_id=job.id)
     notify.send(db, "failure", f"Job #{job.id} failed{target}: {error[:200]}", job_id=job.id)
 
 
 # ---------------------------------------------------------------- 1. job creation
 
-def pick_account(db: Session, video: Video) -> TikTokAccount | None:
-    """The channel's default TikTok account, or the least-loaded connected account when it has none."""
-    channel = video.channel
-    default = channel.default_tiktok_account if channel else None
-    if default and default.status in ACTIVE_ACCOUNT and default.mode == video.mode and default.user_id == video.user_id:
-        return default
-    # Each workspace has its own accounts: a podcast clip never goes to a Shorts account, or the other way round.
-    accounts = list(db.scalars(
-        select(TikTokAccount)
-        .where(TikTokAccount.status.in_(ACTIVE_ACCOUNT), TikTokAccount.mode == video.mode, TikTokAccount.user_id == video.user_id)  # a member's videos go to that member's accounts only
-        .order_by(TikTokAccount.id)
-    ))
-    if not accounts:
-        return None
-    since = cap_day_start(rules.global_values(db, user_id=video.user_id)["cap_reset_timezone"])
-    return min(accounts, key=lambda a: (account_load(db, a.id, since), a.id))
-
-
-def create_job(db: Session, video: Video, account: TikTokAccount | None, *, prompt_template_id: int | None = None) -> Job:
-    """Exactly one job per source video: one YouTube upload becomes one TikTok post."""
+def create_job(db: Session, video: Video, *, prompt_template_id: int | None = None) -> Job:
+    """Exactly one job per source video: one YouTube upload becomes one post."""
     existing = db.scalar(select(Job).where(Job.video_id == video.id))
     if existing:
         return existing
     job = Job(
         video_id=video.id,
-        tiktok_account_id=account.id if account else None,
         prompt_template_id=prompt_template_id,
         approval_required=bool(rules.for_video(db, video)["approval_required"]),
         status=JobStatus.FETCHED,
@@ -139,14 +92,12 @@ def create_job(db: Session, video: Video, account: TikTokAccount | None, *, prom
         job_event(db, job, JobStatus.FETCHED, f"Clip {video.clip_start or 0:.0f}s–{video.clip_end or 0:.0f}s of “{(video.parent.original_title if video.parent else '')[:60]}”")
     else:
         job_event(db, job, JobStatus.FETCHED, f"New upload detected{source} · {video.duration_sec or 0:.0f}s")
-    if account is None and not video.is_podcast_source:
-        job.error = "No active TikTok account connected"
     return job
 
 
 def create_podcast_job(db: Session, video: Video) -> Job:
-    """The job that analyses a whole podcast. It has no TikTok account and no caption: its clips get those."""
-    job = create_job(db, video, None)
+    """The job that analyses a whole podcast. It is never posted and has no caption: its clips are."""
+    job = create_job(db, video)
     job.caption_status = CaptionStatus.DONE
     job.approval_required = False
     return job
@@ -313,7 +264,7 @@ def fallback_caption(video: Video, values: dict) -> dict:
 
 
 def rewrite_job(db: Session, job_id: int) -> str | None:
-    """Write the TikTok caption and hashtags. A model failure never fails the job: it falls back to the title."""
+    """Write the caption and hashtags. A model failure never fails the job: it falls back to the title."""
     job = db.get(Job, job_id)
     if not job or job.status not in JobStatus.PROCESSING:
         return job.status if job else None
@@ -355,238 +306,23 @@ def rewrite_job(db: Session, job_id: int) -> str | None:
 
 # ---------------------------------------------------------------- 3. upload
 
-def _defer(job: Job, delta: timedelta, reason: str) -> str:
-    job.next_check_at = utcnow() + delta
-    job.error = reason
-    return "deferred"
-
-
-WAITING_FOR_ACCOUNT = "Waiting for a TikTok account — connect one in TikTok Accounts"
-
-
-def assign_waiting_jobs(db: Session) -> int:
-    """Give every unfinished job that has no TikTok account one, as soon as an account is connected."""
-    assigned = 0
-    for job in db.scalars(select(Job).where(Job.tiktok_account_id.is_(None), Job.status.in_(JobStatus.PENDING))):
-        if job.video.is_podcast_source:
-            continue  # a podcast is analysed, never posted: only its clips need an account
-        account = pick_account(db, job.video)
-        if account is None:
-            continue  # the other workspace may still have an account for its own jobs
-        job.tiktok_account_id = account.id
-        job.tiktok_account = account
-        job.error = None
-        if job.status == JobStatus.READY:
-            job.next_check_at = None
-        assigned += 1
-    db.flush()
-    return assigned
-
-
 def upload_job(db: Session, job_id: int) -> str:
-    """Upload one READY job. Returns 'posted' | 'deferred' | 'skipped' | 'failed'.
-
-    In inbox mode the file lands in the account's TikTok inbox and a person finishes the post in the app;
-    in direct mode the Content Posting API publishes it (TikTok forces it private until the app is audited).
-    """
+    """Hand one READY job to Buffer, which publishes it. Returns 'scheduled' | 'deferred' | 'skipped' | 'failed'."""
     job = db.get(Job, job_id)
-    if not job or job.status != JobStatus.READY or job.tiktok_publish_id:
+    if not job or job.status != JobStatus.READY:
         return "skipped"
-    now = utcnow()
-    if job.tiktok_account is None:
-        assign_waiting_jobs(db)
-    account = job.tiktok_account
-    if account is None:
-        return _defer(job, timedelta(minutes=2), WAITING_FOR_ACCOUNT)  # nothing is lost: it is sent once an account exists
-    if account.status not in (TikTokStatus.ACTIVE, TikTokStatus.EXPIRING):
-        return _defer(job, timedelta(minutes=10), f"@{account.username} is {account.status} — reconnect it")
-    values = rules.for_video(db, job.video)
-    cap = account_cap(account, values)
-    if not job.video.forced and posts_since(db, account.id, cap_day_start(values["cap_reset_timezone"], now)) >= cap:
-        return _defer(job, timedelta(hours=1), f"Daily cap of {cap} reached for @{account.username}")
-    if not job.video.rendered_file_path:
-        mark_failed(db, job.id, "The rendered file is no longer stored — it was deleted after the retention period")
-        return "failed"
-
-    # Atomic claim: only one worker can move READY → UPLOADING, and only if nothing was ever published.
-    claimed = db.execute(
-        update(Job)
-        .where(Job.id == job.id, Job.status == JobStatus.READY, Job.tiktok_publish_id.is_(None))
-        .values(status=JobStatus.UPLOADING, attempts=Job.attempts + 1)
-        .execution_options(synchronize_session=False)
-    ).rowcount
-    if not claimed:
-        return "skipped"
-    db.refresh(job)
-    job.error = None
-    job_event(db, job, JobStatus.UPLOADING, f"Uploading to @{account.username}")
-    db.commit()
-
-    video = job.video
-    mode = values["publish_mode"]
-    privacy = None
-    try:
-        token = tokens.tiktok_token(db, account)
-        creator = {}
-        if mode == "direct":
-            creator = tiktok.creator_info(token)
-            options = creator.get("privacy_level_options") or ["SELF_ONLY"]
-            privacy = job.privacy_level if job.privacy_level in options else account.default_privacy
-            if privacy not in options:
-                privacy = options[0]
-            max_duration = creator.get("max_video_post_duration_sec")
-            if max_duration and video.duration_sec and video.duration_sec > max_duration:
-                mark_failed(db, job.id, f"Video is longer than @{account.username}'s {max_duration}s limit")
-                return "failed"
-        with get_storage().local_copy(video.rendered_file_path) as path:
-            size = os.path.getsize(path)
-            if mode == "direct":
-                init = tiktok.init_direct_post(token, title=compose_post_text(job), privacy_level=privacy, video_size=size, creator=creator)
-            else:
-                init = tiktok.init_inbox_upload(token, video_size=size)
-            job.tiktok_publish_id = init["publish_id"]
-            job.privacy_level = privacy
-            job.publish_mode = mode
-            db.commit()  # persist publish_id before transferring bytes — the job can never be re-initialised
-            tiktok.upload_file(init["upload_url"], path)
-    except RateLimitError as exc:
-        if job.tiktok_publish_id is None:
-            job_event(db, job, JobStatus.READY, "TikTok rate limit hit — will retry")
-            activity.record(db, "TikTok API", f"Rate limit for @{account.username}: {exc}", level="warning", event="rate_limited", job_id=job.id)
-            return _defer(job, timedelta(minutes=15), str(exc))
-        mark_failed(db, job.id, str(exc))
-        return "failed"
-    except AuthError as exc:
-        mark_failed(db, job.id, str(exc))
-        return "failed"
-    except (ApiError, OSError) as exc:
-        if job.tiktok_publish_id is None and job.attempts < MAX_UPLOAD_ATTEMPTS:
-            job_event(db, job, JobStatus.READY, f"Upload attempt {job.attempts} failed — retrying")
-            return _defer(job, timedelta(seconds=backoff_delay(job.attempts, base=60, cap=1800)), str(exc))
-        mark_failed(db, job.id, str(exc))
-        return "failed"
-
-    now = utcnow()
-    job.posted_at = now
-    account.last_posted_at = now
-    if mode == "inbox":
-        job_event(db, job, JobStatus.POSTED, f"Sent to the TikTok inbox of @{account.username} — finish the post in the TikTok app")
-    else:
-        job_event(db, job, JobStatus.POSTED, f"Uploaded to @{account.username} ({privacy})")
-    activity.record(
-        db, "Publisher", f"Video #{video.id} {'sent to the inbox of' if mode == 'inbox' else 'published to'} @{account.username} · “{(job.rewritten_title or video.original_title)[:40]}”",
-        event="published", job_id=job.id,
-    )
-    job.monitor_until = now + timedelta(hours=24)
-    job.next_check_at = now + timedelta(minutes=2)
-    job_event(db, job, JobStatus.MONITORING, "Monitoring for violations over the next 24 hours")
-    return "posted"
-
-
-# ---------------------------------------------------------------- 4. violation monitoring
-
-def _violation(db: Session, job: Job, reason: str, raw: dict, token: str | None, removed_by_tiktok: bool) -> None:
-    audit = workspace_settings.get(db, "audit")
-    removal = "removed_by_tiktok" if removed_by_tiktok else "disabled"
-    if audit.get("auto_remove") and not removed_by_tiktok:
-        removal = "manual_required"
-        if job.tiktok_post_id and token:
-            try:
-                tiktok.delete_video(token, job.tiktok_post_id)
-                removal = "removed"
-            except ApiError:
-                removal = "manual_required"
-    job.violation_reason = reason
-    job.next_check_at = None
-    job_event(db, job, JobStatus.VIOLATED, f"Violation detected: {reason}")
-    db.add(Violation(job_id=job.id, tiktok_account_id=job.tiktok_account_id, reason=reason, raw=raw, removal_status=removal))
-    handle = job.tiktok_account.username if job.tiktok_account else "?"
-    activity.record(db, "Compliance", f"Video flagged on @{handle}: {reason}", level="error", event="violation", job_id=job.id, payload={"removal": removal})
-    notify.send(db, "violation", f"Video flagged on @{handle}: {reason} (removal: {removal})", job_id=job.id)
-
-
-def _advance_checkpoint(db: Session, job: Job) -> None:
-    audit = workspace_settings.get(db, "audit")
-    hours = sorted({float(h) for h in audit.get("check_hours", [1, 6, 12, 24])}) or [24.0]
-    now = utcnow()
-    posted = job.posted_at or now
-    job.check_count += 1
-    upcoming = [posted + timedelta(hours=h) for h in hours if posted + timedelta(hours=h) > now]
-    if upcoming:
-        job.next_check_at = upcoming[0]
-    else:
-        job.next_check_at = None
-        job_event(db, job, JobStatus.CLEAN, f"Passed {hours[-1]:g}-hour compliance monitoring ({job.check_count} checks)")
-
-
-def check_job(db: Session, job_id: int) -> str | None:
-    job = db.get(Job, job_id)
-    if not job or job.status != JobStatus.MONITORING or not job.tiktok_publish_id:
-        return job.status if job else None
-    account = job.tiktok_account
-    if not account:
-        return job.status
-    token = tokens.tiktok_token(db, account)
-    status = tiktok.fetch_status(token, job.tiktok_publish_id)
-    state = status.get("status")
-
-    if state == "FAILED":
-        reason = status.get("fail_reason") or "unknown"
-        if reason in tiktok.VIOLATION_REASONS or "violat" in reason or "spam" in reason or "moderat" in reason:
-            _violation(db, job, f"TikTok rejected the post: {reason}", status, token, removed_by_tiktok=True)
-        else:
-            mark_failed(db, job.id, f"TikTok publish failed: {reason}")
-        return job.status
-
-    if state == "SEND_TO_USER_INBOX" and job.publish_mode == "inbox":
-        if job.check_count == 0:
-            job_event(db, job, JobStatus.MONITORING, "Delivered to the TikTok inbox — waiting for the post to be finished in the app")
-        _advance_checkpoint(db, job)
-        return job.status
-
-    if state in PROCESSING_STATES:
-        job.next_check_at = utcnow() + timedelta(minutes=5)
-        return job.status
-
-    post_ids = status.get("publicaly_available_post_id") or status.get("publicly_available_post_id") or []
-    if post_ids and not job.tiktok_post_id:
-        job.tiktok_post_id = str(post_ids[0])
-        job_event(db, job, JobStatus.MONITORING, f"Published successfully · post {job.tiktok_post_id}")
-    if job.tiktok_post_id:
-        try:
-            found = tiktok.query_videos(token, [job.tiktok_post_id])
-        except AuthError as exc:
-            if exc.code != "scope_not_authorized":
-                raise
-            found = None  # video.list scope not granted — can only rely on publish status
-        if found is not None and not found:
-            _violation(
-                db, job, "Video is no longer available on TikTok (removed or restricted by moderation)",
-                status, token, removed_by_tiktok=True,
-            )
-            return job.status
-    _advance_checkpoint(db, job)
-    return job.status
+    return buffer.publish(db, job)
 
 
 # ---------------------------------------------------------------- 5. manual actions
 
 def retry_job(db: Session, job: Job) -> str:
-    """Retry without ever posting the same video twice: an existing publish_id is resolved first."""
+    """Start a failed or cancelled job again, from the stage it had reached."""
     if job.status not in (JobStatus.FAILED, JobStatus.CANCELLED):
         raise ValueError(f"Only failed or cancelled jobs can be retried (job is {job.status})")
     job.error = None
     job.attempts = 0
-    if job.tiktok_publish_id and job.tiktok_account:
-        token = tokens.tiktok_token(db, job.tiktok_account)
-        state = tiktok.fetch_status(token, job.tiktok_publish_id).get("status")
-        if state == "PUBLISH_COMPLETE" or state in PROCESSING_STATES:
-            job.posted_at = job.posted_at or utcnow()
-            job.monitor_until = job.posted_at + timedelta(hours=24)
-            job.next_check_at = utcnow()
-            job_event(db, job, JobStatus.MONITORING, "Already on TikTok — resumed monitoring instead of re-posting")
-            return job.status
-        job.tiktok_publish_id = None
+    job.buffer_post_id = job.buffer_due_at = job.buffer_checked_at = None  # a failed Buffer post is handed over afresh
     job.next_check_at = None
     if not job.video.rendered_file_path:
         if job.video.files_deleted_at:
@@ -631,7 +367,7 @@ def approve_job(db: Session, job: Job) -> None:
 def scheduler_tick(db: Session) -> dict:
     """Called by the scheduler every few seconds. The pipeline runs around the clock: there is no schedule rule."""
     now = utcnow()
-    out: dict[str, list] = {"process": [], "rewrites": [], "uploads": [], "checks": []}
+    out: dict[str, list] = {"process": [], "rewrites": [], "uploads": [], "buffer_checks": []}
 
     def lease(status: str, limit: int) -> list[Job]:
         jobs = db.scalars(
@@ -653,18 +389,13 @@ def scheduler_tick(db: Session) -> dict:
         job.next_check_at = now + LEASE
         out["rewrites"].append(job.id)
 
-    assign_waiting_jobs(db)
     for job in lease(JobStatus.READY, 50):
-        if job.tiktok_account_id is None:
-            job.error = WAITING_FOR_ACCOUNT
-            job.next_check_at = now + timedelta(minutes=2)
-            continue
         job.next_check_at = now + LEASE
         out["uploads"].append((job.id, 0))
-
-    for job in lease(JobStatus.MONITORING, 200):
+    # Posts handed to Buffer whose time has passed: ask what became of them.
+    for job in lease(JobStatus.SCHEDULED, 50):
         job.next_check_at = now + LEASE
-        out["checks"].append(job.id)
+        out["buffer_checks"].append(job.id)
     db.flush()
     return out
 

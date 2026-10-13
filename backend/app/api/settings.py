@@ -5,15 +5,14 @@ import tempfile
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
 
 from app.api.deps import DB, CurrentUser, OwnerUser, Workspace
 from app.config import get_settings
-from app.integrations import llm, tiktok, youtube
+from app.integrations import llm, youtube
 from app.integrations.http import ApiError
-from app.models import Mode, TikTokAccount, TikTokStatus
-from app.schemas import AuditIn, NotificationsIn, PolicyIn
-from app.services import activity, credentials, mailer, media, notify, rules, workspace_settings
+from app.models import Mode
+from app.schemas import NotificationsIn
+from app.services import activity, mailer, media, notify, rules, workspace_settings
 from app.services.storage import get_storage
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -55,26 +54,6 @@ def rules_history(db: DB, user: CurrentUser, channel_id: int | None = None, limi
     return rules.history(db, channel_id=channel_id, limit=min(max(limit, 1), 200), mode=mode, user_id=user.id)
 
 
-@router.get("/policy")
-def get_policy(db: DB, _: CurrentUser):
-    return workspace_settings.get(db, "policy")
-
-
-@router.put("/policy")
-def put_policy(body: PolicyIn, db: DB, _: OwnerUser):
-    return _save(db, "policy", body)
-
-
-@router.get("/audit")
-def get_audit(db: DB, _: CurrentUser):
-    return workspace_settings.get(db, "audit")
-
-
-@router.put("/audit")
-def put_audit(body: AuditIn, db: DB, _: CurrentUser):
-    return _save(db, "audit", body)
-
-
 @router.get("/notifications")
 def get_notifications(db: DB, _: OwnerUser):
     return workspace_settings.get(db, "notifications")
@@ -89,7 +68,7 @@ def put_notifications(body: NotificationsIn, db: DB, _: OwnerUser):
 def test_notification(db: DB, _: CurrentUser):
     if not workspace_settings.get(db, "notifications").get("webhook_url"):
         raise HTTPException(400, "Set a webhook URL first")
-    ok = notify.send(db, "violation", "Test notification — your webhook is connected.")
+    ok = notify.send(db, "failure", "Test notification — your webhook is connected.")
     return {"ok": ok, "message": "Sent" if ok else "Webhook call failed or notifications are disabled"}
 
 
@@ -162,11 +141,9 @@ def _mask(value: str, prefix: int = 6) -> str:
 def integrations(user: OwnerUser):
     """Status of every integration. Admin only: members never see the API keys section."""
     s = get_settings()
-    tt_key = credentials.get("tiktok.client_key")
     llm_cfg = llm.resolve()
     rows = [
         ("llm", f"AI model · {llm_cfg.label or llm_cfg.provider} · {llm_cfg.model}" if llm_cfg else "AI model", llm_cfg.api_key if llm_cfg else "", ("env" if llm_cfg and llm_cfg.id is None else "app") if llm_cfg else None),
-        ("tiktok", "TikTok Content Posting API", tt_key and credentials.get("tiktok.client_secret") and tt_key, credentials.source("tiktok.client_key")),
         ("storage", f"Storage · {s.storage_backend}", s.s3_bucket if s.storage_backend == "s3" else os.path.abspath(s.storage_local_path), "env"),
         ("ytdlp", "Downloader · yt-dlp" + (f" {_ytdlp_version()}" if _ytdlp_version() else ""), _ytdlp_version() and "Installed with the backend (Python package)", "env"),
         ("ffmpeg", "Editor · FFmpeg", shutil.which(media.ffmpeg_exe()) or (media.ffmpeg_exe() if os.path.isfile(media.ffmpeg_exe()) else ""), "env"),
@@ -188,18 +165,6 @@ def test_integration(key: str, db: DB, _: OwnerUser):
         if key == "llm":
             reply = llm.complete("Reply with the single word OK.", max_tokens=5)
             message = f"{llm.resolve().model} replied: {reply[:20]}"
-        elif key == "tiktok":
-            if not credentials.get("tiktok.client_key"):
-                raise ApiError("TikTok client key is not set")
-            account = db.scalar(select(TikTokAccount).where(TikTokAccount.status == TikTokStatus.ACTIVE).limit(1))
-            if not account:
-                message = "App credentials set · connect an account to verify tokens"
-            else:
-                from app.services.tokens import tiktok_token
-
-                creator = tiktok.creator_info(tiktok_token(db, account))
-                db.commit()
-                message = f"Token valid for @{creator.get('creator_username', account.username)}"
         elif key == "storage":
             storage = get_storage()
             if hasattr(storage, "test"):

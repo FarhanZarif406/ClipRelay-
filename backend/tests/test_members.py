@@ -1,19 +1,16 @@
-"""Every member has their own channels, TikTok accounts, videos and rules. Nobody sees anybody else's."""
+"""Every member has their own channels, Buffer accounts, videos and rules. Nobody sees anybody else's."""
 
 from datetime import timedelta
-from urllib.parse import parse_qs, urlparse
 
-import httpx
 import pytest
 import respx
 from sqlalchemy import select
 
 from app.integrations import youtube
 from app.integrations.youtube import VideoMeta
-from app.models import ActivityLog, Channel, Job, JobStatus, TikTokAccount, User, Video, utcnow
+from app.models import ActivityLog, BufferAccount, BufferChannel, Channel, Job, JobStatus, User, Video, utcnow
 from app.security import encrypt
-from app.services import detection, pipeline, rules
-from tests.helpers import TT, tt_ok
+from app.services import buffer, detection, rules
 
 A_CHANNEL, B_CHANNEL = "UC" + "a" * 22, "UC" + "b" * 22
 
@@ -31,11 +28,10 @@ def youtube_pages(monkeypatch):
         yield mock
 
 
-def account(db, user_id: int, name: str) -> TikTokAccount:
-    row = TikTokAccount(
-        open_id=f"open-{name}", user_id=user_id, username=name, access_token_enc=encrypt("a"), refresh_token_enc=encrypt("r"),
-        token_expires_at=utcnow() + timedelta(hours=20), refresh_expires_at=utcnow() + timedelta(days=300),
-    )
+def account(db, user_id: int, name: str) -> BufferChannel:
+    """A member's Buffer key and one account connected there."""
+    db.add(BufferAccount(user_id=user_id, api_key_enc=encrypt(f"key-of-{name}-0123456789")))
+    row = BufferChannel(user_id=user_id, mode="shorts", buffer_id=f"ch-{name}", name=name, service="tiktok", enabled=True, daily_limit=3, times=["09:00"])
     db.add(row)
     db.commit()
     return row
@@ -111,35 +107,28 @@ def test_videos_reports_and_review_are_private(client, auth, member_auth, db, yo
     assert db.scalar(select(ActivityLog).where(ActivityLog.event == "video_detected", ActivityLog.user_id == theirs))
 
 
-def test_members_have_their_own_tiktok_accounts(client, auth, member_auth, db, youtube_pages):
+def test_members_have_their_own_buffer_accounts(client, auth, member_auth, db, youtube_pages, monkeypatch):
     mine, theirs = ids(db)
     acc_a, acc_b = account(db, mine, "alpha_tt"), account(db, theirs, "bravo_tt")
-    names = lambda who: [a["username"] for a in client.get("/api/tiktok-accounts", headers=who).json()["items"]]  # noqa: E731
+    names = lambda who: [a["name"] for a in client.get("/api/buffer", headers=who).json()["channels"]]  # noqa: E731
     assert names(auth) == ["alpha_tt"] and names(member_auth) == ["bravo_tt"]
-    assert client.patch(f"/api/tiktok-accounts/{acc_a.id}", headers=member_auth, json={"daily_cap": 3}).status_code == 404
-    assert client.delete(f"/api/tiktok-accounts/{acc_a.id}", headers=member_auth).status_code == 404
-    assert client.get(f"/api/tiktok-accounts/{acc_a.id}/health", headers=member_auth).status_code == 404
-    # You cannot point your channel at somebody else's account.
-    r = client.post("/api/channels", headers=member_auth, json={"query": B_CHANNEL, "default_tiktok_account_id": acc_a.id})
-    assert r.status_code == 404
-    client.post("/api/channels", headers=member_auth, json={"query": B_CHANNEL, "default_tiktok_account_id": acc_b.id})
+    assert client.patch(f"/api/buffer/channels/{acc_a.id}", headers=member_auth, json={"daily_limit": 9}).status_code == 404
+    assert client.get(f"/api/buffer/channels/{acc_a.id}/status", headers=member_auth).status_code == 404
+    assert db.get(BufferChannel, acc_a.id).daily_limit == 3
 
-    # A member's videos go only to that member's accounts, even when theirs is the busier one.
+    # A member's videos go only to that member's accounts: never to another member's, even when theirs is switched off.
+    client.post("/api/channels", headers=member_auth, json={"query": B_CHANNEL})
     bravo = db.scalar(select(Channel).where(Channel.youtube_channel_id == B_CHANNEL))
-    bravo.monitoring_since, bravo.default_tiktok_account_id = utcnow() - timedelta(days=1), None
+    bravo.monitoring_since = utcnow() - timedelta(days=1)
     video = detection.discover(db, bravo, "bbb")
-    assert pipeline.pick_account(db, video).id == acc_b.id
-    acc_b.status = "revoked"
+    job = db.scalar(select(Job).where(Job.video_id == video.id))
+    assert buffer.choose(db, job)[0].id == acc_b.id
+    assert client.patch(f"/api/jobs/{job.id}", headers=member_auth, json={"buffer_channel_id": acc_a.id}).status_code == 404  # not yours to choose
+    acc_b.enabled = False
     db.commit()
-    assert pipeline.pick_account(db, video) is None  # it waits; it never falls back to another member's account
-
-    # Connecting an account another member already has is refused.
-    with respx.mock:
-        respx.post(f"{TT}/oauth/token/").mock(return_value=httpx.Response(200, json={"access_token": "t", "refresh_token": "r", "open_id": "open-alpha_tt", "scope": "x", "expires_in": 86400}))
-        respx.get(f"{TT}/user/info/").mock(return_value=tt_ok({"user": {"display_name": "Alpha"}}))
-        state = parse_qs(urlparse(client.get("/api/tiktok/oauth/start", headers=member_auth).json()["url"]).query)["state"][0]
-        r = client.get(f"/api/tiktok/oauth/callback?code=c&state={state}", follow_redirects=False)
-    assert "already+connected+by+another+member" in r.headers["location"] and db.get(TikTokAccount, acc_a.id).user_id == mine
+    assert buffer.choose(db, job) == (None, buffer.NO_ACCOUNT)  # it waits
+    # Removing your key removes only your own accounts.
+    assert client.delete("/api/buffer/key", headers=member_auth).json()["channels"] == [] and names(auth) == ["alpha_tt"]
 
 
 def test_members_have_their_own_rules(client, auth, member_auth, db, youtube_pages):

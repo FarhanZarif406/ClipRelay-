@@ -10,7 +10,7 @@ export default function EditingRules() {
   const v = data?.values;
   const speed = Number(v?.speed ?? 1.08);
 
-  return <><PageHeader title="Editing Rules" description="The edit every video gets before it goes to TikTok. Deliberately minimal: a speed-up and a flip."/>
+  return <><PageHeader title="Editing Rules" description="The edit every video gets before it is published. Deliberately minimal: a speed-up and a flip."/>
     <div className="narrow-page">
       <Card><div className="card-title">What happens to each video</div><div className="card-caption">The editor (FFmpeg) applies these values to the next video. Nothing else is changed: no cropping, no trimming, no watermark, no text, no music.</div>
         <div className="edit-preview">

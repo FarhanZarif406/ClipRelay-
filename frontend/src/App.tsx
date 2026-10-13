@@ -20,9 +20,8 @@ const EditingRules = lazy(() => import("@/pages/EditingRules"));
 const LiveStatus = lazy(() => import("@/pages/LiveStatus"));
 const ClipRules = lazy(() => import("@/pages/ClipRules"));
 const DailyReport = lazy(() => import("@/pages/DailyReport"));
-const TikTokAccounts = lazy(() => import("@/pages/TikTokAccounts"));
+const BufferSettings = lazy(() => import("@/pages/BufferSettings"));
 const PromptStudio = lazy(() => import("@/pages/PromptStudio"));
-const ComplianceAudit = lazy(() => import("@/pages/ComplianceAudit"));
 const Logs = lazy(() => import("@/pages/Logs"));
 const Settings = lazy(() => import("@/pages/Settings"));
 
@@ -39,9 +38,9 @@ function RequireAuth({ children }: { children: ReactNode }) {
 }
 
 type Pages = readonly (readonly [string, React.ComponentType])[];
-const SHORTS_PAGES: Pages = [["/", Dashboard], ["/status", LiveStatus], ["/channels", Channels], ["/review", ReviewQueue], ["/published", Published], ["/skipped", Skipped], ["/editing", EditingRules], ["/integrations", Integrations], ["/report", DailyReport], ["/tiktok", TikTokAccounts], ["/prompts", PromptStudio], ["/audit", ComplianceAudit], ["/logs", Logs], ["/settings", Settings]];
+const SHORTS_PAGES: Pages = [["/", Dashboard], ["/status", LiveStatus], ["/channels", Channels], ["/review", ReviewQueue], ["/published", Published], ["/skipped", Skipped], ["/editing", EditingRules], ["/integrations", Integrations], ["/report", DailyReport], ["/buffer", BufferSettings], ["/prompts", PromptStudio], ["/logs", Logs], ["/settings", Settings]];
 // The Podcasts window: the same screens, showing the Podcasts workspace's own channels, accounts, rules and reports.
-const PODCAST_PAGES: Pages = [["/", Dashboard], ["/status", LiveStatus], ["/channels", Channels], ["/review", ReviewQueue], ["/published", Published], ["/skipped", Skipped], ["/rules", ClipRules], ["/tiktok", TikTokAccounts], ["/report", DailyReport]];
+const PODCAST_PAGES: Pages = [["/", Dashboard], ["/status", LiveStatus], ["/channels", Channels], ["/review", ReviewQueue], ["/published", Published], ["/skipped", Skipped], ["/rules", ClipRules], ["/buffer", BufferSettings], ["/report", DailyReport]];
 
 export default function App() {
   return <QueryClientProvider client={queryClient}><BrowserRouter basename={BASENAME}><AuthProvider><ThemeProvider><ToastProvider>

@@ -1,5 +1,10 @@
 # ClipRelay — UI Inventory, Data Model & API
 
+> **Historical.** This describes the original prototype. The app has since changed: publishing goes through Buffer
+> (Buffer Settings), and the TikTok Accounts page, the TikTok app keys and Compliance Audit no longer exist. The
+> `tiktok_accounts` and `violations` tables are kept in the database only as old records. See the README for how
+> the app works now.
+
 Source: Figma Make project `JvgexabPi2WLl18UkTLSrq` (single-file React app `src/App.tsx` + `src/index.css`).
 The original Figma Make source is preserved verbatim in [`design-reference/figma-make-src/`](design-reference/figma-make-src/).
 

@@ -16,6 +16,7 @@ class JobStatus:
     AWAITING_APPROVAL = "awaiting_approval"
     READY = "ready"
     UPLOADING = "uploading"
+    SCHEDULED = "scheduled"  # handed to Buffer, which publishes it at the time it was given
     POSTED = "posted"
     MONITORING = "monitoring"
     CLEAN = "clean"
@@ -294,9 +295,17 @@ class Job(Base, TimestampMixin):
     progress: Mapped[int | None] = mapped_column(Integer)  # 0–100 while downloading or rendering; shown on Live Status
     error: Mapped[str | None] = mapped_column(Text)
     violation_reason: Mapped[str | None] = mapped_column(Text)
+    # Publishing through Buffer: the account it goes to, Buffer's post, and when Buffer was asked to publish it.
+    buffer_channel_id: Mapped[int | None] = mapped_column(ForeignKey("buffer_channels.id", ondelete="SET NULL"), index=True)
+    buffer_post_id: Mapped[str | None] = mapped_column(String(64))
+    buffer_due_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    buffer_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    buffer_link: Mapped[str | None] = mapped_column(Text)  # the published post, as Buffer reports it
+    share_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)  # the private link Buffer fetches the clip from
 
     video: Mapped[Video] = relationship(lazy="joined")
     tiktok_account: Mapped[TikTokAccount | None] = relationship(lazy="joined")
+    buffer_channel: Mapped["BufferChannel | None"] = relationship(lazy="joined")
     events: Mapped[list["JobEvent"]] = relationship(
         lazy="selectin", order_by="JobEvent.id", cascade="all, delete-orphan"
     )
@@ -338,3 +347,52 @@ class ActivityLog(Base):
     job_id: Mapped[int | None] = mapped_column(Integer, index=True)
     user_id: Mapped[int | None] = mapped_column(Integer, index=True)  # the member it concerns; NULL = the whole workspace
     payload: Mapped[dict | None] = mapped_column(JSONType)
+
+
+class BufferAccount(Base):
+    """A member's own Buffer API key (Fernet-encrypted). Having one means their clips go out through Buffer."""
+
+    __tablename__ = "buffer_accounts"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    api_key_enc: Mapped[str] = mapped_column(Text)
+    organization_id: Mapped[str | None] = mapped_column(String(64))
+    saved_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class BufferChannel(Base):
+    """A social account the member connected in Buffer, as one workspace schedules it."""
+
+    __tablename__ = "buffer_channels"
+    __table_args__ = (UniqueConstraint("user_id", "mode", "buffer_id", name="uq_buffer_channel_user_mode"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    mode: Mapped[str] = mapped_column(String(16), default=Mode.SHORTS, server_default=Mode.SHORTS)
+    buffer_id: Mapped[str] = mapped_column(String(64))  # Buffer's own channel ID
+    name: Mapped[str] = mapped_column(String(255))
+    service: Mapped[str] = mapped_column(String(40), default="")  # tiktok, instagram, youtube, …
+    avatar: Mapped[str | None] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)  # whether clips may be sent to it
+    daily_limit: Mapped[int] = mapped_column(Integer, default=3)
+    times: Mapped[list] = mapped_column(JSONType, default=list)  # "HH:MM", on the account's clock
+    time_zone: Mapped[str | None] = mapped_column(String(60))  # the account's own; NULL uses the member's
+    start_date: Mapped[str | None] = mapped_column(String(10))  # first day a clip may go out; NULL starts at once
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class BufferLog(Base):
+    """Every clip handed to Buffer and what became of it. Kept apart from the jobs, so an account's totals stay true."""
+
+    __tablename__ = "buffer_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer)
+    buffer_channel_id: Mapped[int] = mapped_column(Integer, index=True)
+    job_id: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(Text, default="")
+    post_id: Mapped[str | None] = mapped_column(String(64))  # Buffer's post; NULL when Buffer never accepted it
+    state: Mapped[str] = mapped_column(String(16))  # scheduled | published | failed
+    due_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    done_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
