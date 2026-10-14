@@ -8,6 +8,8 @@ x-backend: &backend
     REDIS_URL: redis://redis:6379/0
     STORAGE_LOCAL_PATH: /data/media
   volumes:
+    # /data holds the uploaded YouTube cookies file, shared by the API and the workers; media is mounted inside it.
+    - appdata:/data
     - media:/data/media
   depends_on:
     postgres:
@@ -73,6 +75,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  appdata:
   pgdata:
   redisdata:
   media:
