@@ -30,7 +30,46 @@ export type Look = {
     box: { enabled: boolean; color: string; opacity: number; width: number; height: number; radius: number; x: number; y: number };
   };
   watermark: { enabled: boolean; position: WatermarkPlace; opacity: number; size: number };
+  /** Light, colour and detail. 0 leaves the picture as it is. */
+  adjust: Record<AdjustKey, number>;
 };
+
+/** Every adjustment: its range, and which group of the Adjust card it is in. */
+export const ADJUSTMENTS = [
+  { key: "brightness", label: "Brightness", min: -100, max: 100, group: "Light" },
+  { key: "contrast", label: "Contrast", min: -100, max: 100, group: "Light" },
+  { key: "highlights", label: "Highlights", min: -100, max: 100, group: "Light" },
+  { key: "shadows", label: "Shadows", min: -100, max: 100, group: "Light" },
+  { key: "saturation", label: "Saturation", min: -100, max: 100, group: "Colour" },
+  { key: "warmth", label: "Warmth", min: -100, max: 100, group: "Colour" },
+  { key: "tint", label: "Tint", min: -100, max: 100, group: "Colour" },
+  { key: "hue", label: "Hue", min: -180, max: 180, group: "Colour" },
+  { key: "sharpness", label: "Sharpness", min: 0, max: 100, group: "Detail" },
+  { key: "vignette", label: "Vignette", min: 0, max: 100, group: "Detail" },
+  { key: "grain", label: "Grain", min: 0, max: 100, group: "Detail" },
+] as const;
+export type AdjustKey = (typeof ADJUSTMENTS)[number]["key"];
+
+/**
+ * The tone curve the render applies (eq brightness and contrast, then the shadows and highlights curve),
+ * sampled for the preview, with warmth and tint as the colour balance shifts of the midtones.
+ */
+export function adjustTables(a: Look["adjust"]) {
+  const brightness = (a.brightness / 100) * 0.3;
+  const contrast = 1 + (a.contrast / 100) * 0.5;
+  const low = Math.min(1, Math.max(0, 0.25 + (a.shadows / 100) * 0.15));
+  const high = Math.min(1, Math.max(0, 0.75 + (a.highlights / 100) * 0.15));
+  const curve = (x: number) => (x < 0.25 ? (x / 0.25) * low : x < 0.75 ? low + ((x - 0.25) / 0.5) * (high - low) : high + ((x - 0.75) / 0.25) * (1 - high));
+  const warm = (a.warmth / 100) * 0.3;
+  const tint = (a.tint / 100) * 0.3;
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  const steps = Array.from({ length: 17 }, (_, i) => i / 16);
+  const tone = (x: number) => clamp(curve(clamp((x - 0.5) * contrast + 0.5 + brightness)));
+  const mid = (x: number) => 4 * x * (1 - x);  // colour balance moves the midtones most
+  const table = (shift: number) => steps.map(x => clamp(tone(x) + shift * mid(tone(x))).toFixed(3)).join(" ");
+  return { r: table(warm), g: table(-tint), b: table(-warm) };
+}
+export const adjusted = (a: Look["adjust"]) => Object.values(a).some(v => v !== 0);
 
 /** Change one section of a look. */
 export function patch<K extends keyof Look>(look: Look, section: K, changes: Partial<Look[K]>): Look {
@@ -131,6 +170,7 @@ export function lookChips(look: Look): string[] {
     ...(look.watermark.enabled ? ["watermark"] : []),
     ...(look.hook.enabled ? ["hook text"] : []),
     ...(look.music.enabled ? [`music ${Math.round(look.music.volume * 100)}%`] : []),
+    ...(adjusted(look.adjust) ? ["adjusted"] : []),
   ];
 }
 

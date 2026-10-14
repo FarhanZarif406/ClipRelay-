@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { auth, editing, library as libraryApi } from "@/api/endpoints";
 import type { EditingState, Library, Preset } from "@/api/types";
-import { AudioCard, FrameCard, HookCard, MusicCard, QualityCard, SpeedCard, WatermarkCard } from "@/components/EditingCards";
+import { AdjustCard, AudioCard, FrameCard, HookCard, MusicCard, QualityCard, SpeedCard, WatermarkCard } from "@/components/EditingCards";
 import { EditingPreview, TestRenderModal } from "@/components/EditingPreview";
 import { Field, Modal } from "@/components/Modal";
 import { useToast } from "@/components/Toast";
@@ -13,6 +13,7 @@ import { PODCASTS } from "@/lib/mode";
 /** The sections of the rules. One is open at a time, so the preview beside it stays in view. */
 const SECTIONS = [
   { value: "frame", label: "Frame", part: (l: Look) => l.frame },
+  { value: "adjust", label: "Adjust", part: (l: Look) => l.adjust },
   { value: "speed", label: "Speed", part: (l: Look) => l.speed },
   { value: "quality", label: "Quality", part: (l: Look) => [l.encoding.resolution, l.encoding.fps, l.encoding.preset, l.encoding.crf] },
   { value: "audio", label: "Audio", part: (l: Look) => [l.encoding.keep_audio, l.encoding.loudnorm, l.encoding.audio_bitrate] },
@@ -184,6 +185,7 @@ export default function EditingRules() {
     <div className="editing-layout">
       <div className="editing-cards">
         {tab === "frame" && <FrameCard look={draft} onChange={setDraft} onReset={reset("frame")}/>}
+        {tab === "adjust" && <AdjustCard look={draft} onChange={setDraft} onReset={reset("adjust")}/>}
         {tab === "speed" && <SpeedCard look={draft} onChange={setDraft} onReset={reset("speed")}/>}
         {tab === "quality" && <QualityCard look={draft} onChange={setDraft} seconds={PODCASTS ? 45 : 40} onReset={resetEncoding("resolution", "fps", "preset", "crf")}/>}
         {tab === "audio" && <AudioCard look={draft} onChange={setDraft} onReset={resetEncoding("keep_audio", "loudnorm", "audio_bitrate")}/>}

@@ -245,6 +245,8 @@ sections beside a live preview on a sample photo:
 - **Frame:** aspect ratio (9:16, 4:5, 3:4, 2:3, 1:1, 4:3, 3:2, 16:9, 21:9), crop position (left, centre, right), zoom
   (100–130%) and horizontal flip. A wider source has its sides cropped; one of the same shape (a Short in a 9:16 clip)
   is kept whole.
+- **Adjust:** light (brightness, contrast, highlights, shadows), colour (saturation, warmth, tint, hue) and detail
+  (sharpness, vignette, grain). Everything at 0 leaves the picture as it is.
 - **Speed:** 1.00–1.50x, with voices kept at their normal pitch or not.
 - **Quality:** Full HD or HD, frame rate, encoder preset and CRF, with an estimated file size.
 - **Audio:** keep the original sound, normalise loudness, audio bitrate.

@@ -4,7 +4,7 @@ import type { Library } from "@/api/types";
 import { Field } from "@/components/Modal";
 import { Button, Toggle } from "@/components/ui";
 import {
-  ASPECTS, ASPECT_NAMES, AUDIO_BITRATES, ENCODER_PRESETS, FRAME_RATES, WATERMARK_PLACES, aspectParts, estimateBytes, formatBytes, outputSize, patch, patchBox, sourceFit,
+  ADJUSTMENTS, ASPECTS, ASPECT_NAMES, AUDIO_BITRATES, ENCODER_PRESETS, FRAME_RATES, WATERMARK_PLACES, adjusted, aspectParts, estimateBytes, formatBytes, outputSize, patch, patchBox, sourceFit,
   type Look, type WatermarkPlace,
 } from "@/lib/look";
 
@@ -67,6 +67,30 @@ export function FrameCard({ look, onChange, onReset }: CardProps) {
         onClick={() => onChange(patch(look, "frame", { position: p.value }))}>{p.label}</button>)}</div>
     </Field>
     <Field label="Zoom" hint="Crops in tighter when the subject is small."><Range min={100} max={130} value={Math.round(zoom * 100)} readout={`${Math.round(zoom * 100)}%`} onChange={v => onChange(patch(look, "frame", { zoom: v / 100 }))}/></Field>
+  </RuleCard>;
+}
+
+// ---------------------------------------------------------------- Adjust
+
+const ADJUST_HELP: Record<string, string> = {
+  Light: "How bright the picture is, and how far apart its dark and bright parts are.",
+  Colour: "How strong the colours are, and which way they lean.",
+  Detail: "Crisper edges, darker corners and film grain. Sharpness shows in the test render, not on the photo.",
+};
+
+export function AdjustCard({ look, onChange, onReset }: CardProps) {
+  const a = look.adjust;
+  const signed = (v: number, unit = "") => `${v > 0 ? "+" : ""}${v}${unit}`;
+  return <RuleCard title="Adjust" desc="Light, colour and detail of the picture. Everything at 0 leaves it as it is." onReset={onReset}>
+    {(["Light", "Colour", "Detail"] as const).map((group, i) => <div key={group} className="adjust-group">
+      <h3 className={i ? "rule-heading" : "rule-heading first"}>{group}</h3>
+      <small className="muted">{ADJUST_HELP[group]}</small>
+      {grid(ADJUSTMENTS.filter(x => x.group === group).map(x => <Field key={x.key} label={x.label}>
+        <div onDoubleClick={() => onChange(patch(look, "adjust", { [x.key]: 0 }))} title="Double-click to put it back to 0">
+          <Range min={x.min} max={x.max} value={a[x.key]} readout={x.min < 0 ? signed(a[x.key], x.key === "hue" ? "°" : "") : String(a[x.key])} onChange={v => onChange(patch(look, "adjust", { [x.key]: v }))}/>
+        </div></Field>))}
+    </div>)}
+    {adjusted(a) && <button type="button" className="link-button" style={{ justifySelf: "start" }} onClick={() => onChange(patch(look, "adjust", Object.fromEntries(ADJUSTMENTS.map(x => [x.key, 0]))))}>Put every adjustment back to 0</button>}
   </RuleCard>;
 }
 

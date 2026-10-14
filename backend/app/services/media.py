@@ -198,12 +198,45 @@ def _picture_filters(look: dict, width: int, height: int) -> list[str]:
         filters = [f"crop=iw/{zoom}:iw*{h}/{w}/{zoom}:(iw-ow)/2:(ih-oh)/2", f"scale={out_w}:{out_h}"]
     else:
         filters = [f"scale={out_w}:{out_h}:force_original_aspect_ratio=decrease", f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2"]
+    filters += adjust_filters(look["adjust"])
     if frame["flip"]:
         filters.append("hflip")
     speed = look["speed"]["speed"]
     if abs(speed - 1.0) > 1e-6:
         filters.append(f"setpts=PTS/{_tidy(speed)}")
     return filters
+
+
+def adjust_filters(adjust: dict) -> list[str]:
+    """Light, colour and detail, as FFmpeg filters. Settings left at 0 add nothing."""
+    a = {key: adjust.get(key, 0) for key in ("brightness", "contrast", "highlights", "shadows", "saturation", "warmth", "tint", "hue", "sharpness", "vignette", "grain")}
+    out = []
+    eq = []
+    if a["brightness"]:
+        eq.append(f"brightness={_tidy(a['brightness'] / 100 * 0.3)}")
+    if a["contrast"]:
+        eq.append(f"contrast={_tidy(1 + a['contrast'] / 100 * 0.5)}")
+    if a["saturation"]:
+        eq.append(f"saturation={_tidy(1 + a['saturation'] / 100)}")
+    if eq:
+        out.append("eq=" + ":".join(eq))
+    if a["shadows"] or a["highlights"]:
+        # Shadows lift or deepen the dark quarter of the picture, highlights the bright quarter; black and white stay put.
+        low = min(1.0, max(0.0, 0.25 + a["shadows"] / 100 * 0.15))
+        high = min(1.0, max(0.0, 0.75 + a["highlights"] / 100 * 0.15))
+        out.append(f"curves=all='0/0 0.25/{_tidy(low)} 0.75/{_tidy(high)} 1/1'")
+    if a["warmth"] or a["tint"]:
+        warm, tint = a["warmth"] / 100 * 0.3, a["tint"] / 100 * 0.3
+        out.append(f"colorbalance=rm={_tidy(warm)}:gm={_tidy(-tint)}:bm={_tidy(-warm)}")
+    if a["hue"]:
+        out.append(f"hue=h={a['hue']}")
+    if a["sharpness"]:
+        out.append(f"unsharp=5:5:{_tidy(a['sharpness'] / 100 * 1.5)}:5:5:0")
+    if a["vignette"]:
+        out.append(f"vignette=angle={_tidy(a['vignette'] / 100 * 1.2)}")
+    if a["grain"]:
+        out.append(f"noise=alls={round(a['grain'] / 100 * 30)}:allf=t+u")
+    return out
 
 
 def _box_filter(look: dict) -> str:

@@ -35,6 +35,18 @@ DEFAULT_LOOK = {
         "box": {"enabled": False, "color": "#000000", "opacity": 0.6, "width": 86, "height": 12, "radius": 30, "x": 50, "y": 15},
     },
     "watermark": {"enabled": False, "position": "br", "opacity": 0.8, "size": 16},
+    # Light, colour and detail. 0 everywhere leaves the picture as it is.
+    "adjust": {
+        "brightness": 0, "contrast": 0, "highlights": 0, "shadows": 0,
+        "saturation": 0, "warmth": 0, "tint": 0, "hue": 0,
+        "sharpness": 0, "vignette": 0, "grain": 0,
+    },
+}
+# Each adjustment's range: from -100 to 100 (none at 0), hue in degrees, the detail effects from 0 (off) up.
+ADJUST_RANGES = {
+    "brightness": (-100, 100, "Brightness"), "contrast": (-100, 100, "Contrast"), "highlights": (-100, 100, "Highlights"), "shadows": (-100, 100, "Shadows"),
+    "saturation": (-100, 100, "Saturation"), "warmth": (-100, 100, "Warmth"), "tint": (-100, 100, "Tint"), "hue": (-180, 180, "Hue"),
+    "sharpness": (0, 100, "Sharpness"), "vignette": (0, 100, "Vignette"), "grain": (0, 100, "Grain"),
 }
 # Podcast clips are not sped up or mirrored unless the member asks for it.
 PODCAST_CHANGES = {"speed": {"speed": 1.0}, "frame": {"flip": False}}
@@ -136,6 +148,8 @@ def validate(look, mode: str = Mode.SHORTS) -> dict:
     w["position"] = _choice(w["position"], WATERMARK_PLACES, "Watermark position")
     w["opacity"] = round(_number(w["opacity"], 0.1, 1, "Watermark opacity"), 2)
     w["size"] = _number(w["size"], 5, 40, "Watermark size", whole=True)
+    for key, (low, high, label) in ADJUST_RANGES.items():
+        v["adjust"][key] = _number(v["adjust"][key], low, high, label, whole=True)
     return v
 
 
@@ -215,4 +229,6 @@ def summary(look: dict) -> str:
         parts.append("hook text")
     if look["watermark"]["enabled"]:
         parts.append("watermark")
+    if any(look["adjust"].values()):
+        parts.append("adjusted")
     return " · ".join(parts)

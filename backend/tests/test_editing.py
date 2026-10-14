@@ -48,6 +48,21 @@ def test_render_command_fits_the_picture_to_the_shape():
     assert "hflip" not in plain and "setpts" not in plain and "[0:a]anull[aout]" in plain
 
 
+def test_adjustments_become_filters():
+    assert media.adjust_filters(looks.default_look()["adjust"]) == []  # all at 0: the picture is left as it is
+    look = looks.validate({"adjust": {"brightness": 50, "contrast": -40, "saturation": -100, "shadows": 100, "highlights": -100, "warmth": 50, "tint": 20, "hue": -30, "sharpness": 100, "vignette": 50, "grain": 50}})
+    assert media.adjust_filters(look["adjust"]) == [
+        "eq=brightness=0.15:contrast=0.8:saturation=0.0", "curves=all='0/0 0.25/0.4 0.75/0.6 1/1'", "colorbalance=rm=0.15:gm=-0.06:bm=-0.15",
+        "hue=h=-30", "unsharp=5:5:1.5:5:5:0", "vignette=angle=0.6", "noise=alls=15:allf=t+u",
+    ]
+    cmd = cmd_of(look)
+    assert "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,eq=brightness=0.15" in cmd and "noise=alls=15:allf=t+u,hflip" in cmd  # after the fit, before the flip
+    for bad in ({"adjust": {"brightness": 101}}, {"adjust": {"hue": 200}}, {"adjust": {"grain": -1}}, {"adjust": {"contrast": 1.5}}):
+        with pytest.raises(looks.LookError):
+            looks.validate(bad)
+    assert "adjusted" in looks.summary(look) and "adjusted" not in looks.summary(looks.default_look())
+
+
 def test_render_command_draws_text_box_watermark_and_music():
     look = looks.validate({
         "encoding": {"keep_audio": False},
@@ -79,6 +94,7 @@ def test_a_real_render_with_every_part_of_the_look():
     look = looks.validate({
         "encoding": {"resolution": "720x1280", "preset": "ultrafast"}, "music": {"enabled": True},
         "hook": {"enabled": True, "box": {"enabled": True, "radius": 50}}, "watermark": {"enabled": True},
+        "adjust": {"brightness": 10, "contrast": 20, "highlights": -30, "shadows": 25, "saturation": 15, "warmth": 40, "tint": -10, "hue": 12, "sharpness": 50, "vignette": 40, "grain": 20},
     })
     result = media.render(src, look, hook_text="This one small habit changed everything", watermark_file=mark, music_file=song)
     info = media.probe(result.path)

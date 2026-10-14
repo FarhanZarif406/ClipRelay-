@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { auth, editing, library as libraryApi } from "@/api/endpoints";
 import type { Library, TestRender } from "@/api/types";
 import { Field, Modal } from "@/components/Modal";
 import { Button } from "@/components/ui";
-import { aspectParts, formatBytes, hookBoxSize, hookFontSize, hookLineHeight, hookScale, lookChips, outputSize, wrapHookText, type Look } from "@/lib/look";
+import { adjustTables, aspectParts, formatBytes, hookBoxSize, hookFontSize, hookLineHeight, hookScale, lookChips, outputSize, wrapHookText, type Look } from "@/lib/look";
 
 const PHOTOS = ["/assets/editing-sample-1.jpg", "/assets/editing-sample-2.jpg", "/assets/editing-sample-3.jpg"];
 const PICKED_KEY = "cliprelay.editing.photo";
@@ -53,8 +53,19 @@ export function LookFrame({ look, watermark, token, photo, className = "" }: { l
   const box = hookBoxSize(look);
   const size = hookFontSize(look);
   const image = watermark?.items[0];
+  const a = look.adjust;
+  const tables = adjustTables(a);
+  const filterId = `look-adjust-${useId().replace(/:/g, "")}`;
   return <div className={`look-frame ${className}`} style={{ aspectRatio: `${w} / ${h}` }}>
-    <i className="look-photo" style={{ backgroundImage: `url(${photo})`, backgroundPosition: `${CROP_X[position]}% 50%`, transform: `scale(${flip ? -zoom : zoom}, ${zoom})` }}/>
+    {/* The same tone curve, colour balance, saturation and hue as the render, as an SVG filter on the photo. */}
+    <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true"><filter id={filterId} colorInterpolationFilters="sRGB">
+      <feColorMatrix type="saturate" values={String(Math.max(0, 1 + a.saturation / 100))}/>
+      <feComponentTransfer><feFuncR type="table" tableValues={tables.r}/><feFuncG type="table" tableValues={tables.g}/><feFuncB type="table" tableValues={tables.b}/></feComponentTransfer>
+      <feColorMatrix type="hueRotate" values={String(a.hue)}/>
+    </filter></svg>
+    <i className="look-photo" style={{ backgroundImage: `url(${photo})`, backgroundPosition: `${CROP_X[position]}% 50%`, transform: `scale(${flip ? -zoom : zoom}, ${zoom})`, filter: `url(#${filterId})` }}/>
+    {a.vignette > 0 && <i className="look-vignette" style={{ background: `radial-gradient(ellipse at center, transparent ${Math.round(70 - a.vignette * 0.35)}%, rgba(0, 0, 0, ${(a.vignette / 100) * 0.85}) 100%)` }}/>}
+    {a.grain > 0 && <i className="look-grain" style={{ opacity: (a.grain / 100) * 0.45 }}/>}
     {hook.enabled && hook.box.enabled && <i className="look-box" style={{ left: `${hook.box.x}%`, top: `${hook.box.y}%`, width: `${hook.box.width}%`, height: `${hook.box.height}%`, backgroundColor: hook.box.color, opacity: hook.box.opacity, borderRadius: scaled(box.radius) }}/>}
     {hook.enabled && <span className="look-hook" style={{
       left: `${hook.x}%`, top: `${hook.y}%`, fontFamily: family ? `"${family}"` : undefined, fontWeight: family ? "normal" : undefined,
