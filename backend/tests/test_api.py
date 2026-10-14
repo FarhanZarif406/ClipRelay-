@@ -135,7 +135,7 @@ def test_live_status_lists_every_stage(client, auth, db):
     db.commit()
     status = client.get("/api/pipeline/status", headers=auth).json()
     stages = {s["key"]: s for s in status["stages"]}
-    assert [s["key"] for s in status["stages"]] == ["waiting", "downloading", "editing", "caption", "review", "upload_wait", "uploading", "scheduled"]
+    assert [s["key"] for s in status["stages"]] == ["waiting", "downloading", "editing", "caption", "review", "upload_wait", "uploading", "scheduled", "paused"]
     assert stages["waiting"]["items"][0]["title"] == "Title a" and stages["downloading"]["items"][0]["progress"] == 40
     assert stages["editing"]["items"][0]["progress"] == 75 and stages["upload_wait"]["total"] == 1 and stages["review"]["total"] == 0
     assert status["today"] == {"total": 6, "downloaded": 3, "download_left": 2, "edited": 2, "edit_left": 1, "uploaded": 1, "upload_left": 1, "failed": 1}

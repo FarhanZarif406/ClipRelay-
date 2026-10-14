@@ -60,7 +60,7 @@ def test_members_have_their_own_channels(client, auth, member_auth, db, youtube_
     for method, path, body in (
         ("patch", f"/api/channels/{alpha.id}", {"active": False}), ("delete", f"/api/channels/{alpha.id}", None),
         ("post", f"/api/channels/{alpha.id}/check", None), ("get", f"/api/channels/{alpha.id}/rules", None),
-        ("put", f"/api/channels/{alpha.id}/rules", {"values": {"speed": 1.3}}),
+        ("put", f"/api/channels/{alpha.id}/rules", {"values": {"hashtag_count": 3}}),
     ):
         response = getattr(client, method)(path, headers=member_auth, **({"json": body} if body else {}))
         assert response.status_code == 404, (method, path)
@@ -133,10 +133,10 @@ def test_members_have_their_own_buffer_accounts(client, auth, member_auth, db, y
 
 def test_members_have_their_own_rules(client, auth, member_auth, db, youtube_pages):
     mine, theirs = ids(db)
-    assert client.put("/api/settings/rules", headers=member_auth, json={"values": {"speed": 1.3, "approval_required": False}}).status_code == 200
+    assert client.put("/api/settings/rules", headers=member_auth, json={"values": {"hashtag_count": 12, "approval_required": False}}).status_code == 200
     assert client.put("/api/settings/rules?mode=podcasts", headers=member_auth, json={"values": {"clips_per_video": 5}}).status_code == 200
     get = lambda who, mode="": client.get(f"/api/settings/rules{mode}", headers=who).json()["values"]  # noqa: E731
-    assert get(member_auth)["speed"] == 1.3 and get(auth)["speed"] == 1.08  # the admin's rules did not move
+    assert get(member_auth)["hashtag_count"] == 12 and get(auth)["hashtag_count"] == 8  # the admin's rules did not move
     assert get(member_auth, "?mode=podcasts")["clips_per_video"] == 5 and get(auth, "?mode=podcasts")["clips_per_video"] == 3
     assert rules.global_values(db, user_id=theirs)["approval_required"] is False and rules.global_values(db, user_id=mine)["approval_required"] is True
     assert len(client.get("/api/settings/rules/history", headers=member_auth).json()) == 2
@@ -148,7 +148,7 @@ def test_members_have_their_own_rules(client, auth, member_auth, db, youtube_pag
     alpha, bravo = (db.scalar(select(Channel).where(Channel.youtube_channel_id == c)) for c in (A_CHANNEL, B_CHANNEL))
     alpha.monitoring_since = bravo.monitoring_since = utcnow() - timedelta(days=1)
     video_a, video_b = detection.discover(db, alpha, "aaa"), detection.discover(db, bravo, "bbb")
-    assert rules.for_video(db, video_a)["speed"] == 1.08 and rules.for_video(db, video_b)["speed"] == 1.3
+    assert rules.for_video(db, video_a)["hashtag_count"] == 8 and rules.for_video(db, video_b)["hashtag_count"] == 12
     job_a, job_b = (db.scalar(select(Job).where(Job.video_id == v.id)) for v in (video_a, video_b))
     assert job_a.approval_required is True and job_b.approval_required is False
     assert db.scalar(select(Video).where(Video.user_id.is_(None))) is None

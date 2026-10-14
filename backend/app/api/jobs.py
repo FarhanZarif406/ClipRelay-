@@ -20,9 +20,9 @@ STATUS_GROUPS = {
     "review": {JobStatus.AWAITING_APPROVAL},
     "failed": {JobStatus.FAILED},
     "cancelled": {JobStatus.CANCELLED},  # stopped or rejected by the operator; can be restarted
-    "waiting": {JobStatus.READY, JobStatus.UPLOADING, JobStatus.SCHEDULED},  # approved or automatic, not published yet
+    "waiting": {JobStatus.READY, JobStatus.UPLOADING, JobStatus.SCHEDULED, JobStatus.PAUSED},  # approved or automatic, not published yet
     # Everything past the review step: the Published page shows these.
-    "outbox": JobStatus.PUBLISHED | {JobStatus.VIOLATED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.READY, JobStatus.UPLOADING, JobStatus.SCHEDULED},
+    "outbox": JobStatus.PUBLISHED | {JobStatus.VIOLATED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.READY, JobStatus.UPLOADING, JobStatus.SCHEDULED, JobStatus.PAUSED},
 }
 
 
@@ -151,6 +151,36 @@ def reject(job_id: int, body: RejectIn, db: DB, user: CurrentUser):
     return serializers.job(job, detail=True)
 
 
+@router.post("/jobs/{job_id}/pause")
+def pause(job_id: int, db: DB, user: CurrentUser):
+    job = _get(db, job_id, user)
+    try:
+        pipeline.pause_job(db, job)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    activity.record(db, "Publisher", f"Job #{job.id} paused by {user.email}", event="job_paused", job_id=job.id, user_id=user.id)
+    db.commit()
+    db.refresh(job)  # with the event just added
+    return serializers.job(job, detail=True)
+
+
+@router.post("/jobs/{job_id}/resume")
+def resume(job_id: int, db: DB, user: CurrentUser):
+    job = _get(db, job_id, user)
+    try:
+        status = pipeline.resume_job(db, job)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    activity.record(db, "Publisher", f"Job #{job.id} resumed by {user.email}", event="job_resumed", job_id=job.id, user_id=user.id)
+    db.commit()
+    db.refresh(job)  # with the event just added
+    {
+        JobStatus.FETCHED: dispatch.start_job, JobStatus.RENDERING: dispatch.start_job, JobStatus.REWRITING: dispatch.rewrite_job,  # start_job also writes a missing caption
+        JobStatus.READY: dispatch.upload_job, JobStatus.AWAITING_APPROVAL: lambda _job_id: None,
+    }[status](job.id)
+    return serializers.job(job, detail=True)
+
+
 @router.post("/jobs/{job_id}/cancel")
 def cancel(job_id: int, db: DB, user: CurrentUser):
     job = _get(db, job_id, user)
@@ -160,6 +190,7 @@ def cancel(job_id: int, db: DB, user: CurrentUser):
         raise HTTPException(409, str(exc)) from exc
     activity.record(db, "Publisher", f"Job #{job.id} cancelled", event="job_cancelled", job_id=job.id)
     db.commit()
+    db.refresh(job)  # with the event just added
     return serializers.job(job, detail=True)
 
 

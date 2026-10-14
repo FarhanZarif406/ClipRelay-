@@ -3,9 +3,10 @@ import type { ReactNode } from "react";
 export type IconName =
   | "grid" | "rules" | "sparkles" | "queue" | "shield" | "logs" | "settings" | "search"
   | "play" | "bell" | "chevron" | "arrow" | "more" | "plus" | "clock" | "check" | "alert" | "close" | "filter"
-  | "download" | "sun" | "moon" | "menu" | "link" | "code" | "refresh";
+  | "download" | "sun" | "moon" | "menu" | "link" | "code" | "refresh" | "pause";
 
 const iconPaths: Record<IconName, ReactNode> = {
+  pause: <><path d="M9 5v14"/><path d="M15 5v14"/></>,
   grid: <><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></>,
   rules: <><path d="M4 6h16M7 12h10M10 18h4"/><circle cx="8" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="12" cy="18" r="2"/></>,
   sparkles: <><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2L12 3Z"/><path d="m5 14 .8 2.2L8 17l-2.2.8L5 20l-.8-2.2L2 17l2.2-.8L5 14Zm13-1 1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1 1-2.5Z"/></>,

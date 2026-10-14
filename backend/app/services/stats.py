@@ -221,6 +221,7 @@ STAGES = [
     ("upload_wait", "Waiting to upload", JobStatus.READY),
     ("uploading", "Uploading", JobStatus.UPLOADING),
     ("scheduled", "At Buffer, waiting for its time", JobStatus.SCHEDULED),
+    ("paused", "Paused", JobStatus.PAUSED),
 ]
 STAGE_LIMIT = 100
 
@@ -244,6 +245,7 @@ def _status_item(job: Job) -> dict:
         "clip": {"start": video.clip_start, "end": video.clip_end, "podcast_title": video.parent.original_title if video.parent else ""} if video.parent_id else None,
         "buffer_channel": serializers.buffer.channel_ref(job.buffer_channel),
         "due_at": job.buffer_due_at,
+        "paused_while": job.paused_status,
     }
 
 
@@ -276,7 +278,7 @@ def pipeline_status(db: Session, mode: str = Mode.SHORTS, user_id: int | None = 
             "total": total,
             "downloaded": downloaded, "download_left": total - downloaded - sum(1 for r in alive if r.status == JobStatus.FAILED and not r.source_file_path and not r.rendered_file_path),
             "edited": edited, "edit_left": max(0, downloaded - edited - sum(1 for r in alive if r.status == JobStatus.FAILED and r.source_file_path and not r.rendered_file_path)),
-            "uploaded": uploaded, "upload_left": sum(1 for r in alive if not r.posted_at and r.status in (JobStatus.AWAITING_APPROVAL, JobStatus.READY, JobStatus.UPLOADING, JobStatus.SCHEDULED, JobStatus.REWRITING)),
+            "uploaded": uploaded, "upload_left": sum(1 for r in alive if not r.posted_at and r.status in (JobStatus.AWAITING_APPROVAL, JobStatus.READY, JobStatus.UPLOADING, JobStatus.SCHEDULED, JobStatus.PAUSED, JobStatus.REWRITING)),
             "failed": failed,
         },
         "stages": stages,

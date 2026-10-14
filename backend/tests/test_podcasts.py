@@ -9,7 +9,7 @@ from app.integrations import youtube
 from app.integrations.youtube import VideoMeta
 from app.models import BufferAccount, BufferChannel, Channel, Job, JobStatus, Mode, Video, VideoStatus, utcnow
 from app.security import encrypt
-from app.services import buffer, detection, dispatch, media, pipeline, podcasts, rules
+from app.services import buffer, detection, dispatch, pipeline, podcasts, rules
 from tests.helpers import ANTHROPIC, claude
 
 POD = "UC" + "p" * 22
@@ -50,23 +50,23 @@ def source(monkeypatch):
 
 
 def test_rules_are_separate_for_each_workspace(db, client, auth):
-    assert rules.global_values(db, Mode.PODCASTS, 1)["speed"] == 1.0 and rules.global_values(db, user_id=1)["speed"] == 1.08
-    rules.set_values(db, {"speed": 1.2, "clips_per_video": 5}, mode=Mode.PODCASTS, user=ME)
+    assert rules.global_values(db, Mode.PODCASTS, 1)["fallback_hashtags"].startswith("podcast") and rules.global_values(db, user_id=1)["fallback_hashtags"].endswith("shorts")
+    rules.set_values(db, {"hashtag_count": 4, "clips_per_video": 5}, mode=Mode.PODCASTS, user=ME)
     rules.set_values(db, {"cap_reset_timezone": "UTC"}, user=ME)  # plumbing is shared: Podcasts reads it from Shorts
     db.commit()
     pod, shorts = rules.global_values(db, Mode.PODCASTS, 1), rules.global_values(db, user_id=1)
-    assert (pod["speed"], pod["clips_per_video"], pod["cap_reset_timezone"]) == (1.2, 5, "UTC")
-    assert shorts["speed"] == 1.08 and "clips_per_video" not in shorts and "max_duration_seconds" not in pod
+    assert (pod["hashtag_count"], pod["clips_per_video"], pod["cap_reset_timezone"]) == (4, 5, "UTC")
+    assert shorts["hashtag_count"] == 8 and "clips_per_video" not in shorts and "max_duration_seconds" not in pod
     for bad in ({"clips_per_video": 0}, {"framing": "zoom"}, {"clip_min_seconds": 90}, {"max_duration_seconds": 100}):
         with pytest.raises(ValueError):
             rules.set_values(db, bad, mode=Mode.PODCASTS, user=ME)
 
     r = client.get("/api/settings/rules?mode=podcasts", headers=auth).json()
-    assert r["values"]["clips_per_video"] == 5 and "framing" in {d["key"] for d in r["definitions"]}
+    assert r["values"]["clips_per_video"] == 5 and "clip_max_seconds" in {d["key"] for d in r["definitions"]} and "framing" not in {d["key"] for d in r["definitions"]}
     assert "clips_per_video" not in client.get("/api/settings/rules", headers=auth).json()["values"]
-    assert client.put("/api/settings/rules?mode=podcasts", headers=auth, json={"values": {"framing": "blur"}}).json()["values"]["framing"] == "blur"
-    assert [c["key"] for c in client.get("/api/settings/rules/history?mode=podcasts", headers=auth).json()][:1] == ["framing"]
-    assert all(c["key"] != "framing" for c in client.get("/api/settings/rules/history", headers=auth).json())
+    assert client.put("/api/settings/rules?mode=podcasts", headers=auth, json={"values": {"clip_max_seconds": 90}}).json()["values"]["clip_max_seconds"] == 90
+    assert [c["key"] for c in client.get("/api/settings/rules/history?mode=podcasts", headers=auth).json()][:1] == ["clip_max_seconds"]
+    assert all(c["key"] != "clip_max_seconds" for c in client.get("/api/settings/rules/history", headers=auth).json())
     assert client.get("/api/settings/rules?mode=radio", headers=auth).status_code == 422
 
 
@@ -127,18 +127,9 @@ def test_podcast_becomes_clips_that_travel_the_normal_pipeline(db, podcast_chann
 
     respx.post(ANTHROPIC).mock(return_value=claude("text"))
     assert pipeline.process_video(db, jobs[0].id) == JobStatus.REWRITING
-    assert fake_media[-1] == {"speed": 1.0, "flip": False, "keep_audio": True, "framing": "crop"}  # the Podcasts rules, not the Shorts ones
+    assert fake_media[-1] == {"speed": 1.0, "flip": False, "keep_audio": True, "aspect": "9:16"}  # the Podcasts rules, not the Shorts ones
     assert pipeline.rewrite_job(db, jobs[0].id) == JobStatus.AWAITING_APPROVAL
     assert pipeline.rewrite_job(db, parent.id) == JobStatus.CLIPPED and db.get(Job, parent.id).status == JobStatus.CLIPPED
-
-
-def test_section_download_and_vertical_framing(monkeypatch):
-    crop = " ".join(media.render_command("in.mp4", "out.mp4", speed=1.0, flip=False, keep_audio=True, has_audio=True, framing="crop", width=1920, height=1080))
-    assert "crop=trunc(ih*9/16/2)*2:ih,scale=1080:1920" in crop and "libx264" in crop and "-c:a copy" in crop
-    blur = " ".join(media.render_command("in.mp4", "out.mp4", speed=1.1, flip=True, keep_audio=True, has_audio=True, framing="blur", width=1920, height=1080))
-    assert "-filter_complex" in blur and "boxblur" in blur and "overlay=(W-w)/2:(H-h)/2,hflip,setpts=PTS/1.1000[v]" in blur and "-map [v]" in blur
-    # a picture that is already vertical is not cropped again
-    assert "-c:v copy" in " ".join(media.render_command("in.mp4", "out.mp4", speed=1.0, flip=False, keep_audio=True, has_audio=True, framing="crop", width=1080, height=1920))
 
 
 def test_workspaces_do_not_see_each_other(client, auth, db, channel, buffer_account, podcast_channel, podcast_account, source):

@@ -1,4 +1,4 @@
-"""FFmpeg helpers: inspect a file and apply the two edits (speed-up and horizontal flip)."""
+"""FFmpeg helpers: inspect a file, and render it with an editing look (shape, speed, quality, sound, music, hook text, watermark)."""
 
 import os
 import re
@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
@@ -79,47 +80,250 @@ def atempo_chain(speed: float) -> str:
     return ",".join(parts)
 
 
-VERTICAL = (1080, 1920)
+# ---------------------------------------------------------------- the look: sizes and placement
+
+MARGIN = 40  # pixels between a watermark and the edge of a Full HD clip
+CROP_X = {"left": 0.0, "centre": 0.5, "right": 1.0}
+BOLD_FONTS = (
+    "C:/Windows/Fonts/arialbd.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+)
 
 
-def framing_filters(framing: str, width: int | None, height: int | None) -> tuple[list[str], str | None]:
-    """How a (usually wide) picture becomes a vertical 9:16 clip. Returns (simple filters, or a filter graph).
-
-    crop: the middle of the picture fills the screen. blur: the whole picture over a blurred copy of itself.
-    A picture that is already vertical, or `original`, is left alone.
-    """
-    w, h = VERTICAL
-    if framing == "original" or not width or not height or width * 16 <= height * 9:
-        return [], None
-    if framing == "blur":
-        graph = (
-            f"[0:v]split=2[a][b];[a]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},boxblur=24:4[bg];"
-            f"[b]scale={w}:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2"
-        )
-        return [], graph
-    return ["crop=trunc(ih*9/16/2)*2:ih", f"scale={w}:{h}"], None
+def default_font() -> str | None:
+    """The bold font hook text is drawn with: FONT_FILE when set, else the first system bold font found."""
+    return next((f for f in (get_settings().font_file, *BOLD_FONTS) if f and os.path.isfile(f)), None)
 
 
-def render_command(src: str, dst: str, *, speed: float, flip: bool, keep_audio: bool, has_audio: bool, framing: str = "original", width: int | None = None, height: int | None = None) -> list[str]:
-    """Build the FFmpeg command. Streams that need no change are copied, not re-encoded."""
-    faster = abs(speed - 1.0) > 1e-6
-    frame, graph = framing_filters(framing, width, height)
-    filters = frame + (["hflip"] if flip else []) + ([f"setpts=PTS/{speed:.4f}"] if faster else [])
-    cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y", "-i", src]
-    # CRF 20 leaves headroom for TikTok's own re-encode. Without a filter the picture is copied untouched.
-    encode = ["-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p"]
-    if graph:
-        cmd += ["-filter_complex", graph + "".join(f",{f}" for f in filters) + "[v]", "-map", "[v]", *encode]
-    elif filters:
-        cmd += ["-map", "0:v:0", "-vf", ",".join(filters), *encode]
+def _tidy(value: float) -> float:
+    return round(value * 1000) / 1000
+
+
+def _even(value: float) -> int:
+    return max(2, round(value / 2) * 2)
+
+
+def aspect_parts(aspect: str) -> tuple[int, int]:
+    try:
+        w, h = (int(x) for x in aspect.split(":"))
+    except (ValueError, AttributeError):
+        return 9, 16
+    return (w, h) if w > 0 and h > 0 else (9, 16)
+
+
+def output_size(look: dict) -> tuple[int, int]:
+    """The finished clip's size: the quality sets the shorter side (1080 or 720), the aspect ratio the other."""
+    short = int(look["encoding"]["resolution"].split("x")[0])
+    w, h = aspect_parts(look["frame"]["aspect"])
+    return (short, _even(short * h / w)) if w <= h else (_even(short * w / h), short)
+
+
+def source_fit(width: int, height: int, aspect: str) -> str:
+    """sides: the source is wider and its sides are cropped. ends: a little narrower, top and bottom cropped.
+    whole: the same shape or much narrower (a Short going into a square clip), kept whole with bars."""
+    w, h = aspect_parts(aspect)
+    ratio = width / height / (w / h)
+    if ratio > 1.01:
+        return "sides"
+    return "ends" if 0.7 <= ratio < 0.99 else "whole"
+
+
+def hook_scale(look: dict) -> float:
+    """Hook sizes are given in pixels of a Full HD clip; at HD they shrink with the picture."""
+    return int(look["encoding"]["resolution"].split("x")[0]) / 1080
+
+
+def hook_font_size(look: dict) -> int:
+    return max(8, round(look["hook"]["font_size"] * hook_scale(look)))
+
+
+def hook_line_height(size: int) -> int:
+    return round(size * 1.3)
+
+
+def hook_box_size(look: dict) -> tuple[int, int, int]:
+    """Width, height and corner radius in pixels of the box behind the hook text."""
+    width, height = output_size(look)
+    box = look["hook"]["box"]
+    w, h = _even(width * box["width"] / 100), _even(height * box["height"] / 100)
+    return w, h, round(min(w, h) / 2 * min(100, max(0, box["radius"])) / 100)
+
+
+def wrap_hook_text(text: str, look: dict) -> list[str]:
+    """Hook text in lines that fit: inside the box behind it when there is one, else most of the clip's width."""
+    width, _ = output_size(look)
+    hook, size = look["hook"], hook_font_size(look)
+    room = width * hook["box"]["width"] / 100 - size if hook["box"]["enabled"] else width * 0.86
+    per_line = max(6, int(room // (size * 0.56)))
+    lines: list[str] = []
+    line = ""
+    for word in text.split():
+        if line and len(f"{line} {word}") > per_line:
+            lines.append(line)
+            line = word
+        else:
+            line = f"{line} {word}" if line else word
+    if line:
+        lines.append(line)
+    return lines[:4]
+
+
+def drawable(text: str) -> str:
+    """Hook text without emoji and other symbols a text font has no shape for (they would show as empty boxes)."""
+    kept = "".join(ch for ch in text if not (unicodedata.category(ch) in ("So", "Cs", "Co", "Cn") or ord(ch) > 0xFFFF or ch in "‍️"))
+    return " ".join(kept.split())
+
+
+def _filter_path(path: str) -> str:
+    return path.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+
+
+def _colour(hex_value: str) -> str:
+    return f"0x{hex_value[1:].lower()}" if isinstance(hex_value, str) and len(hex_value) == 7 and hex_value.startswith("#") else "0xffffff"
+
+
+def _picture_filters(look: dict, width: int, height: int) -> list[str]:
+    """Fit the source to the clip's shape, then flip and speed up."""
+    out_w, out_h = output_size(look)
+    frame = look["frame"]
+    w, h = aspect_parts(frame["aspect"])
+    zoom = _tidy(frame["zoom"])
+    fit = source_fit(width, height, frame["aspect"])
+    if fit == "sides":
+        filters = [f"crop=ih*{w}/{h}/{zoom}:ih/{zoom}:(iw-ow)*{CROP_X[frame['position']]}:(ih-oh)/2", f"scale={out_w}:{out_h}"]
+    elif fit == "ends":
+        filters = [f"crop=iw/{zoom}:iw*{h}/{w}/{zoom}:(iw-ow)/2:(ih-oh)/2", f"scale={out_w}:{out_h}"]
     else:
-        cmd += ["-map", "0:v:0", "-c:v", "copy"]
-    if keep_audio and has_audio:
-        cmd += ["-map", "0:a:0"]
-        cmd += ["-af", atempo_chain(speed), "-c:a", "aac", "-b:a", "192k"] if faster else ["-c:a", "copy"]
+        filters = [f"scale={out_w}:{out_h}:force_original_aspect_ratio=decrease", f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2"]
+    if frame["flip"]:
+        filters.append("hflip")
+    speed = look["speed"]["speed"]
+    if abs(speed - 1.0) > 1e-6:
+        filters.append(f"setpts=PTS/{_tidy(speed)}")
+    return filters
+
+
+def _box_filter(look: dict) -> str:
+    """The rounded box behind the hook text, as one still picture: clear outside the rounded corners."""
+    box = look["hook"]["box"]
+    w, h, radius = hook_box_size(look)
+    alpha = round(255 * min(1, max(0, box["opacity"])))
+    dx, dy = f"abs(X-{w / 2})-{w / 2 - radius}", f"abs(Y-{h / 2})-{h / 2 - radius}"
+    a = f"if(gt({dx},0)*gt({dy},0),if(lte(hypot({dx},{dy}),{radius}),{alpha},0),{alpha})" if radius > 0 else str(alpha)
+    return f"color=c={_colour(box['color'])}:s={w}x{h}:r=1:d=1,format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='{a}'"
+
+
+def _watermark_place(position: str) -> str:
+    x = {"l": f"{MARGIN}", "c": "(W-w)/2", "r": f"W-w-{MARGIN}"}[position[1]]
+    y = {"t": f"{MARGIN}", "m": "(H-h)/2", "b": f"H-h-{MARGIN}"}[position[0]]
+    return f"{x}:{y}"
+
+
+def _tempo(look: dict) -> list[str]:
+    speed = look["speed"]["speed"]
+    if abs(speed - 1.0) < 1e-6:
+        steps = []
+    elif look["speed"]["keep_pitch"]:
+        steps = [atempo_chain(speed)]  # faster, voices at their normal pitch
     else:
-        cmd += ["-an"]
-    return cmd + ["-movflags", "+faststart", dst]
+        steps = ["aresample=44100", f"asetrate={round(44100 * speed)}", "aresample=44100"]  # like a record played faster
+    if look["encoding"]["loudnorm"]:
+        steps.append("loudnorm=I=-14:TP=-1.5:LRA=11")
+    return steps or ["anull"]
+
+
+def render_command(src: str, dst: str, look: dict, *, width: int, height: int, duration: float, has_audio: bool,
+                   hook_files: list[str] | None = None, font_file: str | None = None, watermark_file: str | None = None,
+                   music_file: str | None = None, max_seconds: float | None = None) -> tuple[list[str], float]:
+    """Build the FFmpeg command for a look. Returns (command, length of the finished clip in seconds)."""
+    speed = look["speed"]["speed"]
+    take = min(duration, max_seconds * speed) if max_seconds else duration
+    seconds = _tidy(take / speed)
+    cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y"]
+    cmd += (["-t", f"{_tidy(take)}"] if max_seconds else []) + ["-i", src]
+    sound = "[0:a]" if has_audio and look["encoding"]["keep_audio"] else None
+    music = bool(look["music"]["enabled"] and music_file)
+    next_input = 1
+    silence = None
+    if not sound and not music:
+        # Silence rather than no sound at all, which some players and upload services refuse.
+        silence = next_input
+        next_input += 1
+        cmd += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
+    mark = None
+    if look["watermark"]["enabled"] and watermark_file:
+        mark = next_input
+        next_input += 1
+        cmd += ["-i", watermark_file]
+    track = None
+    if music:
+        track = next_input
+        next_input += 1
+        cmd += ["-stream_loop", "-1", "-i", music_file]  # repeated, so a short track still covers a long clip
+
+    out_w, out_h = output_size(look)
+    hook = look["hook"]
+    lines = hook_files or []
+    show_hook = hook["enabled"] and bool(lines) and bool(font_file)
+    shown = f"enable='lt(t,{_tidy(hook['duration'])})'"
+    graph: list[str] = []
+    state = {"last": "[0:v]", "step": 0}
+
+    def stage(filters: str, source: str | None = None) -> None:
+        label = f"[p{state['step']}]"
+        state["step"] += 1
+        graph.append(f"{source or state['last']}{filters}{label}")
+        state["last"] = label
+
+    stage(",".join(_picture_filters(look, width, height)))
+    if show_hook and hook["box"]["enabled"]:
+        w, h, _ = hook_box_size(look)
+        graph.append(f"{_box_filter(look)}[hookbox]")
+        x, y = round(out_w * hook["box"]["x"] / 100 - w / 2), round(out_h * hook["box"]["y"] / 100 - h / 2)
+        stage(f"overlay={x}:{y}:{shown}", f"{state['last']}[hookbox]")
+    if show_hook:
+        # Each line is drawn by itself, so every line is centred on the text's position.
+        size = hook_font_size(look)
+        line_height = hook_line_height(size)
+        top = _tidy(len(lines) * line_height / 2)
+        border = max(0, round(hook["stroke_width"] * hook_scale(look)))
+        stage(",".join(
+            f"drawtext=fontfile='{_filter_path(font_file)}':textfile='{_filter_path(f)}':fontsize={size}"
+            f":fontcolor={_colour(hook['color'])}:borderw={border}:bordercolor={_colour(hook['stroke_color'])}"
+            f":x=w*{_tidy(hook['x'] / 100)}-text_w/2:y=h*{_tidy(hook['y'] / 100)}-{top}+{i * line_height}:{shown}"
+            for i, f in enumerate(lines)
+        ))
+    if mark is not None:
+        wm = look["watermark"]
+        graph.append(f"[{mark}:v]format=rgba,colorchannelmixer=aa={_tidy(wm['opacity'])},scale={round(out_w * wm['size'] / 100)}:-1[mark]")
+        stage(f"overlay={_watermark_place(wm['position'])}", f"{state['last']}[mark]")
+    graph[-1] = graph[-1][: graph[-1].rindex("[")] + "[vout]"
+
+    if track is not None:
+        fade_out = max(0.0, _tidy(seconds - 1))
+        bed = (f"[{track}:a]atrim=0:{seconds},asetpts=PTS-STARTPTS,aresample=44100,volume={_tidy(look['music']['volume'])},"
+               f"afade=t=in:d=0.5,afade=t=out:st={fade_out}:d=1")
+        if sound:
+            graph.append(f"{sound}{','.join(_tempo(look))},aresample=44100[voice]")
+            graph.append(f"{bed}[music]")
+            graph.append("[voice][music]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]")
+        else:
+            graph.append(f"{bed}[aout]")
+    elif sound:
+        graph.append(f"{sound}{','.join(_tempo(look))}[aout]")
+
+    audible = bool(sound) or track is not None
+    enc = look["encoding"]
+    cmd += ["-filter_complex", ";".join(graph), "-map", "[vout]"]
+    cmd += ["-map", "[aout]"] if audible else ["-map", f"{silence}:a", "-shortest"]
+    cmd += ["-c:v", "libx264", "-preset", enc["preset"], "-crf", str(enc["crf"]), "-pix_fmt", "yuv420p", "-r", str(enc["fps"])]
+    cmd += ["-c:a", "aac", "-b:a", f"{enc['audio_bitrate']}k" if audible else "64k"]
+    if track is not None or max_seconds:
+        cmd += ["-t", str(seconds)]  # the picture decides the length: looping music never makes a clip longer
+    return cmd + ["-movflags", "+faststart", dst], seconds
 
 
 def _ffmpeg_message(stderr: str) -> str:
@@ -165,17 +369,46 @@ def _run(cmd: list[str], seconds: float, on_progress: Progress | None, timeout: 
     return proc.returncode, "".join(errors)
 
 
-def render(src: str, *, speed: float, flip: bool, keep_audio: bool, framing: str = "original", on_progress: Progress | None = None) -> str:
-    """Apply the edits to `src` and return the path of a new temporary MP4 (H.264 / AAC)."""
+@dataclass
+class RenderResult:
+    path: str
+    command: str
+    seconds: float
+    note: str | None = None  # e.g. "hook_font_missing"
+    vertical_source: bool = False
+
+
+def render(src: str, look: dict, *, hook_text: str | None = None, font_file: str | None = None, watermark_file: str | None = None,
+           music_file: str | None = None, max_seconds: float | None = None, on_progress: Progress | None = None) -> RenderResult:
+    """Apply a look to `src` and return a new temporary MP4 (H.264 / AAC) with the command that made it."""
     try:
         info = probe(src)
     except ProbeError as exc:
         raise RenderError(str(exc)) from exc
     fd, dst = tempfile.mkstemp(suffix=".mp4")
     os.close(fd)
-    cmd = render_command(src, dst, speed=speed, flip=flip, keep_audio=keep_audio, has_audio=info.has_audio, framing=framing, width=info.width, height=info.height)
+    work = tempfile.mkdtemp(prefix="cliprelay-render-")
+    note = None
+    hook_files: list[str] = []
+    font = None
+    hook_text = drawable(hook_text or "")
+    if look["hook"]["enabled"] and hook_text:
+        font = font_file or default_font()
+        if font:
+            for i, line in enumerate(wrap_hook_text(hook_text, look)):  # one file per line: each is drawn and centred by itself
+                path = os.path.join(work, f"hook-{i}.txt")
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(line)
+                hook_files.append(path)
+        else:
+            note = "hook_font_missing"
+    cmd, seconds = render_command(
+        src, dst, look, width=info.width or 1920, height=info.height or 1080, duration=info.duration, has_audio=info.has_audio,
+        hook_files=hook_files, font_file=font, watermark_file=watermark_file, music_file=music_file if music_file and os.path.isfile(music_file) else None,
+        max_seconds=max_seconds,
+    )
     try:
-        code, errors = _run(cmd, info.duration / max(speed, 0.01), on_progress, 1800)
+        code, errors = _run(cmd, seconds, on_progress, 1800)
     except FileNotFoundError as exc:
         os.remove(dst)
         raise RenderError("FFmpeg was not found — install FFmpeg on the server") from exc
@@ -186,7 +419,10 @@ def render(src: str, *, speed: float, flip: bool, keep_audio: bool, framing: str
         if os.path.exists(dst):
             os.remove(dst)
         raise
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
     if code != 0 or os.path.getsize(dst) == 0:
         os.remove(dst)
         raise RenderError(_ffmpeg_message(errors))
-    return dst
+    shown = " ".join(f'"{part}"' if " " in part else part for part in cmd)
+    return RenderResult(dst, shown, seconds, note, bool(info.width and info.height and info.height > info.width))

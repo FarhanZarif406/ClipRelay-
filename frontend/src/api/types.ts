@@ -39,7 +39,7 @@ export type Video = {
 
 export type JobStatus =
   | "fetched" | "downloading" | "rendering" | "rewriting" | "awaiting_approval" | "ready" | "uploading" | "scheduled" | "posted"
-  | "monitoring" | "clean" | "violated" | "failed" | "cancelled" | "clipped";
+  | "monitoring" | "clean" | "violated" | "failed" | "cancelled" | "clipped" | "paused";
 
 export type Job = {
   id: number;
@@ -190,6 +190,8 @@ export type StatusItem = {
   id: number; video_id: number; title: string; channel: string | null; thumbnail_url: string | null; permalink: string | null; duration_sec: number | null;
   progress: number | null; since: string; attempts: number; note: string | null; retry_at: string | null; podcast: boolean;
   clip: { start: number; end: number; podcast_title: string } | null; buffer_channel: BufferRef | null; due_at: string | null;
+  /** For a paused video: the stage it was paused in. */
+  paused_while: string | null;
 };
 export type PipelineStatus = {
   mode: "shorts" | "podcasts"; timezone: string; podcasts_analysing: number;
@@ -236,4 +238,17 @@ type PeriodCounts = { today: number; week: number; month: number; lifetime: numb
 export type BufferChannelStatus = {
   id: number; name: string; time_zone: string; uploaded: PeriodCounts; failed: PeriodCounts; waiting: number; sending: number;
   recent: { id: number; title: string; state: "scheduled" | "published" | "failed"; due_at: string | null; done_at: string | null; error: string | null }[];
+};
+
+/** Editing Rules. Looks themselves are typed in lib/look.ts. */
+export type Preset = { id: number; name: string; look: import("@/lib/look").Look; channels: number; updated_at: string };
+export type EditingState = {
+  default: import("@/lib/look").Look; presets: Preset[]; font_available: boolean; rendered_last_day: number;
+  channels: { id: number; display_name: string; thumbnail_url: string | null; preset_id: number | null }[];
+};
+export type LibraryItem = { id: number; name: string; type: string; bytes: number; width: number | null; height: number | null; uploaded_at: string };
+export type Library = { items: LibraryItem[]; limit: number; max_bytes: number; next_id: number | null };
+export type TestRender = {
+  id: string; status: "running" | "done" | "failed"; stage: string | null; title: string | null; message?: string;
+  seconds?: number; bytes?: number; render_seconds?: number; command?: string; note?: string | null; vertical?: boolean; music?: string | null; hook?: string | null;
 };

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from tests.conftest import ME
 from app.db import SessionLocal
 from app.models import ActivityLog, CaptionStatus, Job, JobStatus, Video, VideoStatus, utcnow
-from app.services import media, pipeline, rules
+from app.services import looks, media, pipeline, rules
 from app.services.storage import get_storage
 from tests.helpers import ANTHROPIC, claude
 
@@ -66,9 +66,11 @@ def test_caption_falls_back_when_the_model_fails(db, template):
 
 def test_process_downloads_renders_and_waits_for_the_caption(db, fake_media):
     job = _make_job(db, status=JobStatus.FETCHED, caption="pending", rendered=False)
-    rules.set_values(db, {"speed": 1.2, "horizontal_flip": False}, user=ME)
+    row = looks.default_row(db, 1, "shorts")
+    looks.save(row, looks.validate({**row.look, "speed": {"speed": 1.2, "keep_pitch": True}, "frame": {**row.look["frame"], "flip": False}}))
+    db.commit()
     assert pipeline.process_video(db, job.id) == JobStatus.REWRITING
-    assert fake_media == [{"speed": 1.2, "flip": False, "keep_audio": True}]  # read from settings at job time
+    assert fake_media == [{"speed": 1.2, "flip": False, "keep_audio": True, "aspect": "9:16"}]  # read from the editing rules at job time
     video = job.video
     root = get_storage().root
     assert os.path.exists(os.path.join(root, video.source_file_path)) and os.path.exists(os.path.join(root, video.rendered_file_path))
@@ -98,7 +100,7 @@ def test_download_is_retried_three_times_then_fails(db, fake_media):
 def test_render_failure_resumes_from_the_render(db, fake_media, monkeypatch):
     job = _make_job(db, status=JobStatus.FETCHED, rendered=False)
 
-    def broken(src, **_):
+    def broken(src, look, **_):
         raise media.RenderError("The downloaded file is damaged or incomplete")
 
     working = media.render
@@ -175,7 +177,7 @@ def test_stop_halts_a_running_download(db, monkeypatch):
 def test_stop_halts_a_running_render(db, fake_media, monkeypatch):
     job = _make_job(db, status=JobStatus.FETCHED, rendered=False)
 
-    def render(src, *, on_progress=None, **_):
+    def render(src, look, *, on_progress=None, **_):
         other = SessionLocal()
         pipeline.cancel_job(other, other.get(Job, job.id))
         other.commit()

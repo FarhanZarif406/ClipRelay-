@@ -1,7 +1,8 @@
 import { ApiError, api, apiUrl, getToken } from "./client";
+import type { Look } from "@/lib/look";
 import type {
   ActivityLog, Channel, ChannelRules, CredentialCard, CredentialResult, DailyReport, LLMProvider, LLMProviderList, LLMProviderName, Integration, Job, Nav, NotificationSettings, Page, Prompt,
-  PipelineStatus, BufferChannelChanges, BufferChannelStatus, BufferStatus, PushInfo, YouTubeApiInfo, YouTubeApiTest, SourceDiagnosis, SourceInfo, CookiesInfo, RuleChange, RuleDef, RuleValue, RuleValues, Summary, User, Video,
+  PipelineStatus, EditingState, Library, Preset, TestRender, BufferChannelChanges, BufferChannelStatus, BufferStatus, PushInfo, YouTubeApiInfo, YouTubeApiTest, SourceDiagnosis, SourceInfo, CookiesInfo, RuleChange, RuleDef, RuleValue, RuleValues, Summary, User, Video,
 } from "./types";
 
 export const auth = {
@@ -46,6 +47,8 @@ export const jobs = {
   approve: (id: number) => api<Job>(`/jobs/${id}/approve`, { method: "POST" }),
   retry: (id: number) => api<Job>(`/jobs/${id}/retry`, { method: "POST" }),
   cancel: (id: number) => api<Job>(`/jobs/${id}/cancel`, { method: "POST" }),
+  pause: (id: number) => api<Job>(`/jobs/${id}/pause`, { method: "POST" }),
+  resume: (id: number) => api<Job>(`/jobs/${id}/resume`, { method: "POST" }),
   reject: (id: number, reason: string) => api<Job>(`/jobs/${id}/reject`, { method: "POST", body: { reason } }),
   processAnyway: (videoId: number) => api<Job>(`/videos/${videoId}/process`, { method: "POST" }),
   videos: (status?: string, limit = 20, channel_id?: number) => api<Video[]>("/videos", { query: { status, limit, channel_id } }),
@@ -154,4 +157,32 @@ export const buffer = {
   refresh: () => api<BufferStatus>("/buffer/refresh", { method: "POST" }),
   updateChannel: (id: number, changes: BufferChannelChanges) => api<BufferStatus>(`/buffer/channels/${id}`, { method: "PATCH", body: changes }),
   channelStatus: (id: number) => api<BufferChannelStatus>(`/buffer/channels/${id}/status`),
+};
+
+/** Editing Rules: the member's default look and presets for this workspace, and which channel uses which. */
+export const editing = {
+  get: () => api<EditingState>("/editing"),
+  saveDefault: (look: Look) => api<EditingState>("/editing", { method: "PUT", body: { look } }),
+  createPreset: (name: string, look: Look) => api<Preset>("/editing/presets", { method: "POST", body: { name, look } }),
+  updatePreset: (id: number, body: { name?: string; look?: Look }) => api<Preset>(`/editing/presets/${id}`, { method: "PATCH", body }),
+  deletePreset: (id: number) => api<void>(`/editing/presets/${id}`, { method: "DELETE" }),
+  assign: (channelId: number, presetId: number | null) => api<EditingState>(`/editing/channels/${channelId}`, { method: "PUT", body: { preset_id: presetId } }),
+  startTest: (url: string, look: Look) => api<TestRender>("/editing/test", { method: "POST", body: { url, look } }),
+  test: (id: string) => api<TestRender>(`/editing/test/${id}`),
+  previewUrl: (id: string, token: string) => apiUrl(`/editing/test/${id}/preview.mp4`, { token }),
+};
+
+export type LibraryKind = "music" | "fonts" | "watermark";
+/** The member's own files: music, fonts and their watermark image. */
+export const library = {
+  list: (kind: LibraryKind) => api<Library>(`/library/${kind}`),
+  /** The file itself is the request body. */
+  upload: async (kind: LibraryKind, file: File) => {
+    const response = await fetch(apiUrl(`/library/${kind}`, { name: file.name }), { method: "POST", headers: { Authorization: `Bearer ${getToken() ?? ""}`, "Content-Type": "application/octet-stream" }, body: file });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new ApiError(typeof body?.detail === "string" ? body.detail : `Upload failed (${response.status})`, response.status);
+    return body as Library;
+  },
+  remove: (kind: LibraryKind, id: number) => api<Library>(`/library/${kind}/${id}`, { method: "DELETE" }),
+  fileUrl: (kind: LibraryKind, id: number, token: string) => apiUrl(`/library/${kind}/${id}/file`, { token }),
 };

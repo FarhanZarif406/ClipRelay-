@@ -119,9 +119,10 @@ def fake_media(monkeypatch):
                 raise sources.SourceError("The video is private")
             return make_file()
 
-    def render(src, *, speed, flip, keep_audio, framing="original", on_progress=None):
-        calls.append({"speed": speed, "flip": flip, "keep_audio": keep_audio} | ({"framing": framing} if framing != "original" else {}))
-        return make_file()
+    def render(src, look, *, on_progress=None, **assets):
+        calls.append({"speed": look["speed"]["speed"], "flip": look["frame"]["flip"], "keep_audio": look["encoding"]["keep_audio"], "aspect": look["frame"]["aspect"]}
+                     | {name: value for name, value in assets.items() if value})
+        return media.RenderResult(make_file(), "ffmpeg (fake)", 30.0)
 
     monkeypatch.setattr(sources, "get_adapter", lambda: Adapter())
     monkeypatch.setattr(media, "probe", lambda path: media.ProbeResult(30.0, 1080, 1920, True))

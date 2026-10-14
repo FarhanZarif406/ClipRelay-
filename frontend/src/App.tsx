@@ -40,7 +40,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
 type Pages = readonly (readonly [string, React.ComponentType])[];
 const SHORTS_PAGES: Pages = [["/", Dashboard], ["/status", LiveStatus], ["/channels", Channels], ["/review", ReviewQueue], ["/published", Published], ["/skipped", Skipped], ["/editing", EditingRules], ["/integrations", Integrations], ["/report", DailyReport], ["/buffer", BufferSettings], ["/prompts", PromptStudio], ["/logs", Logs], ["/settings", Settings]];
 // The Podcasts window: the same screens, showing the Podcasts workspace's own channels, accounts, rules and reports.
-const PODCAST_PAGES: Pages = [["/", Dashboard], ["/status", LiveStatus], ["/channels", Channels], ["/review", ReviewQueue], ["/published", Published], ["/skipped", Skipped], ["/rules", ClipRules], ["/buffer", BufferSettings], ["/report", DailyReport]];
+const PODCAST_PAGES: Pages = [["/", Dashboard], ["/status", LiveStatus], ["/channels", Channels], ["/review", ReviewQueue], ["/published", Published], ["/skipped", Skipped], ["/rules", ClipRules], ["/editing", EditingRules], ["/buffer", BufferSettings], ["/report", DailyReport]];
 
 export default function App() {
   return <QueryClientProvider client={queryClient}><BrowserRouter basename={BASENAME}><AuthProvider><ThemeProvider><ToastProvider>

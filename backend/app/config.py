@@ -53,6 +53,7 @@ class Settings(BaseSettings):
 
     # Media
     ffmpeg_path: str = "ffmpeg"
+    font_file: str = ""  # a bold .ttf for hook text; without one a system bold font is looked for
 
     # Limits from the design
 

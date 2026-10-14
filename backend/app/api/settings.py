@@ -12,7 +12,7 @@ from app.integrations import llm, youtube
 from app.integrations.http import ApiError
 from app.models import Mode
 from app.schemas import NotificationsIn
-from app.services import activity, mailer, media, notify, rules, workspace_settings
+from app.services import activity, looks, mailer, media, notify, rules, workspace_settings
 from app.services.storage import get_storage
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -119,7 +119,7 @@ def _test_editor() -> str:
              "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", src],
             capture_output=True, text=True, timeout=60, check=True,
         )
-        out = media.render(src, speed=1.08, flip=True, keep_audio=True)
+        out = media.render(src, looks.default_look()).path
         result = media.probe(out)
     except media.RenderError as exc:
         raise RuntimeError(f"FFmpeg is installed but the edit failed: {exc}") from exc
@@ -128,7 +128,7 @@ def _test_editor() -> str:
             if path and os.path.exists(path):
                 os.remove(path)
     words = version.split()
-    return f"FFmpeg {words[2] if len(words) > 2 else ''} edited a test clip: 2.00s → {result.duration:.2f}s at 1.08x, flipped, sound kept"
+    return f"FFmpeg {words[2] if len(words) > 2 else ''} edited a test clip with the default editing rules: 2.00s → {result.duration:.2f}s, {result.width}×{result.height}, 1.08x, flipped, sound kept"
 
 
 def _mask(value: str, prefix: int = 6) -> str:

@@ -28,7 +28,8 @@ from app.models import (
     utcnow,
 )
 from app.db import session_scope
-from app.services import activity, buffer, media, notify, prompts, rules, sources
+from app.integrations import llm
+from app.services import activity, buffer, library, looks, media, notify, prompts, rules, sources
 from app.services.activity import job_event
 from app.services.storage import get_storage
 
@@ -151,7 +152,7 @@ class JobStopped(Exception):
     """The operator stopped the job while it was downloading or rendering. Not a failure: nothing is retried."""
 
 
-STOPPED = (JobStatus.CANCELLED, JobStatus.FAILED)
+STOPPED = (JobStatus.CANCELLED, JobStatus.FAILED, JobStatus.PAUSED)  # a running download or render halts on any of these
 
 
 def progress_writer(job_id: int):
@@ -232,17 +233,22 @@ def process_video(db: Session, job_id: int) -> str | None:
         job.attempts = 0
         activity.record(db, "Download", f"Video #{video.id} downloaded · {video.size_bytes / 1_048_576:.1f} MB", event="downloaded", job_id=job.id)
 
-    values = rules.for_video(db, video)
-    speed, flip, keep_audio = float(values["speed"]), bool(values["horizontal_flip"]), bool(values["keep_audio"])
-    framing = values.get("framing", "original")  # only the Podcasts workspace reframes the picture
-    summary = f"speed {speed:g}x · flip {'on' if flip else 'off'} · audio {'kept' if keep_audio else 'removed'}" + (f" · frame {framing}" if video.parent_id else "")
+    look = looks.for_video(db, video)  # the channel's preset, or the member's default editing rules
+    summary = looks.summary(look)
+    font = library.font_file(db, video.user_id, look["hook"]["font"]) if look["hook"]["enabled"] else None
+    mark = library.watermark(db, video.user_id) if look["watermark"]["enabled"] else None
+    track = library.next_track(db, video.user_id) if look["music"]["enabled"] else None
+    hook_text = hook_words(look, video.original_title or "") if look["hook"]["enabled"] else None
     if job.status != JobStatus.RENDERING:
         job_event(db, job, JobStatus.RENDERING, f"Rendering · {summary}")
     _set_progress(db, job, 0)
     db.commit()
     try:
         with storage.local_copy(video.source_file_path) as source_path:
-            rendered = media.render(source_path, speed=speed, flip=flip, keep_audio=keep_audio, framing=framing, on_progress=progress_writer(job.id))
+            rendered = media.render(
+                source_path, look, hook_text=hook_text, font_file=font, watermark_file=str(library.path_of(mark)) if mark else None,
+                music_file=str(library.path_of(track)) if track else None, on_progress=progress_writer(job.id),
+            )
     except JobStopped:
         db.rollback()
         db.refresh(job)
@@ -250,12 +256,34 @@ def process_video(db: Session, job_id: int) -> str | None:
     except (media.RenderError, OSError) as exc:
         return _stage_failed(db, job, "Render", str(exc))
     if _stopped(db, job):
-        os.remove(rendered)
+        os.remove(rendered.path)
         return job.status
-    video.rendered_file_path = storage.save(rendered, f"videos/{video.id}.mp4")
+    video.rendered_file_path = storage.save(rendered.path, f"videos/{video.id}.mp4")
+    if track:
+        library.mark_used(track)  # the member's next clip gets the next track
+    if rendered.note == "hook_font_missing":
+        activity.record(db, "Render", f"Video #{video.id}: the hook text was left out — no bold font was found on the server (set FONT_FILE)", level="warning", event="hook_font_missing", job_id=job.id)
     _set_progress(db, job, None)
     activity.record(db, "Render", f"Video #{video.id} rendered · {summary}", event="rendered", job_id=job.id)
     return _advance(db, job)
+
+
+HOOK_PROMPT = (
+    "Write one short line of 4 to 9 words to show on screen at the start of a short video, to make a viewer stop scrolling. "
+    "It must fit what the title promises, in the same language, with no hashtags, emojis or quotes. Answer with the line only.\n\nTitle: {title}"
+)
+
+
+def hook_words(look: dict, title: str) -> str:
+    """The words of the hook text: a line written by the AI model from the title, or the title itself."""
+    if look["hook"]["source"] == "ai" and title:
+        try:
+            line = " ".join(llm.complete(HOOK_PROMPT.format(title=title), max_tokens=40).split()).strip("\"'“”‘’ ")
+            if line:
+                return line[:90]
+        except (ApiError, RuntimeError, ValueError) as exc:
+            log.info("hook text: the AI model gave no line (%s); the title is used", exc)
+    return title
 
 
 def fallback_caption(video: Video, values: dict) -> dict:
@@ -335,10 +363,53 @@ def retry_job(db: Session, job: Job) -> str:
     return job.status
 
 
+STAGE_NAMES = {
+    JobStatus.FETCHED: "waiting to download", JobStatus.DOWNLOADING: "downloading", JobStatus.RENDERING: "editing",
+    JobStatus.REWRITING: "writing the caption", JobStatus.READY: "waiting to upload",
+}
+
+
+def pause_job(db: Session, job: Job) -> None:
+    """Hold a video where it is. A download or an edit that is running stops within a few seconds (see `progress_writer`);
+    what was already finished, such as the downloaded file, is kept for Resume."""
+    if job.status not in JobStatus.PAUSABLE:
+        raise ValueError(f"A video can be paused only while it is downloading, editing, getting its caption or waiting to upload (it is {job.status})")
+    if job.video.is_podcast_source:
+        raise ValueError("A podcast that is being split into clips cannot be paused; its clips can")
+    job.paused_status = job.status
+    job.next_check_at = None
+    job.progress = None
+    job_event(db, job, JobStatus.PAUSED, f"Paused by the operator while {STAGE_NAMES[job.status]}")
+
+
+def resume_job(db: Session, job: Job) -> str:
+    """Carry on from the stage the video had reached. Returns the status it resumes in."""
+    if job.status != JobStatus.PAUSED:
+        raise ValueError("Only a paused video can be resumed")
+    video = job.video
+    if not video.rendered_file_path:
+        if video.files_deleted_at:
+            raise ValueError("The files of this video were deleted after the retention period")
+        # Downloaded already: only the edit is left. A download or an edit that was cut short starts again.
+        status, left = (JobStatus.RENDERING, "editing") if video.source_file_path else (JobStatus.FETCHED, "downloading")
+    elif job.caption_status == CaptionStatus.PENDING:
+        status, left = JobStatus.REWRITING, "writing the caption"
+    elif job.paused_status == JobStatus.READY or not job.approval_required:
+        status, left = JobStatus.READY, "uploading"
+    else:
+        status, left = JobStatus.AWAITING_APPROVAL, "waiting for approval"
+    job.paused_status = None
+    job.next_check_at = None
+    job.attempts = 0
+    job_event(db, job, status, f"Resumed by the operator — carries on {left}")
+    return status
+
+
 def cancel_job(db: Session, job: Job) -> None:
-    if job.status not in JobStatus.PROCESSING | {JobStatus.AWAITING_APPROVAL, JobStatus.READY, JobStatus.FAILED}:
+    if job.status not in JobStatus.PROCESSING | {JobStatus.AWAITING_APPROVAL, JobStatus.READY, JobStatus.FAILED, JobStatus.PAUSED}:
         raise ValueError(f"Job cannot be cancelled while {job.status}")
     was = job.status
+    job.paused_status = None
     job.next_check_at = None
     job.progress = None
     # A download or render that is running notices this within a few seconds and stops (see `progress_writer`).

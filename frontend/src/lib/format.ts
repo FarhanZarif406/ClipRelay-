@@ -55,6 +55,7 @@ export const JOB_STATUS: Record<JobStatus, { label: string; tone: Tone }> = {
   failed: { label: "Failed", tone: "danger" },
   cancelled: { label: "Cancelled", tone: "neutral" },
   clipped: { label: "Clips made", tone: "success" },
+  paused: { label: "Paused", tone: "warning" },
 };
 
 export function greeting(): string {

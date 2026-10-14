@@ -2,7 +2,7 @@
 
 ClipRelay watches a set of YouTube channels that publish short-form video and republishes every new upload through
 [Buffer](https://buffer.com), with only a light edit in between. When a watched channel posts a new short, ClipRelay detects it, reads its details,
-downloads the file, applies two small edits (a slight speed-up and a horizontal flip), rewrites the caption,
+downloads the file, edits it with the member's editing rules (shape, speed, sound, hook text, watermark, music), rewrites the caption,
 and then either holds it for one-click approval or publishes it straight away.
 
 YouTube is the only source. Only add channels whose videos you have the right to republish.
@@ -63,7 +63,7 @@ Services: `postgres`, `redis`, `backend` (FastAPI, which runs migrations on star
 The **Integrations** page in the app has everything in one place, with step-by-step instructions: the YouTube
 Data API key and push notifications, for captions (Gemini), and the status of the downloader (yt-dlp) and the
 editor (FFmpeg). Each has a **Test** button: the editor test renders a real two-second clip with the current edit, and
-the downloader test reads a real YouTube video. The edit itself (speed, flip, audio) is on the **Editing Rules** page.
+the downloader test reads a real YouTube video. The edit itself is on the **Editing Rules** page.
 
 ### Video Source (the downloader)
 The **Video Source** card on the Integrations page (admin only) controls how videos are downloaded:
@@ -142,7 +142,7 @@ How a podcast becomes clips:
 3. Only the chosen sections are downloaded — the pieces of the stream that cover each clip — so an hour-long video is
    never downloaded whole. If a video has no such stream, the whole video is downloaded once and the clips are cut
    from it.
-4. Each clip is reframed for a vertical screen (*Frame*: `crop`, `blur` or `original`), gets its own caption, and then
+4. Each clip is edited with the Podcasts workspace's own **Editing Rules** (9:16 crop by default), gets its own caption, and then
    travels the normal pipeline: review queue, approval, and Buffer.
 
 Each clip is one post, so three clips from one podcast take three of an account's posting times.
@@ -227,9 +227,6 @@ Channel overrides). Every change is recorded with who made it and when (Settings
 
 | Rule | Default | Notes |
 |---|---|---|
-| `speed` | 1.08 | 1.0 to 1.5; video and audio are sped up together (`setpts` + `atempo`) |
-| `horizontal_flip` | on | `hflip` |
-| `keep_audio` | on | off removes the sound |
 | `max_duration_seconds` / `min_duration_seconds` | 180 / 5 | short-form = up to the maximum, or any YouTube Short; anything longer is skipped as `long-form` |
 | `videos_per_channel_per_day` | 3 | further uploads are held as `skipped_channel_cap` |
 | `approval_required` | on | global only; the **Require approval** switch on the Review Queue page |
@@ -241,10 +238,26 @@ Channel overrides). Every change is recorded with who made it and when (Settings
 
 Caps are counted from the `videos` and `jobs` tables at the moment a video is detected, not kept in counters.
 
-### Editing
-The edit is deliberately minimal: a speed-up and a horizontal flip. No cropping, trimming, watermark, text or music.
-The output is H.264 / AAC in an MP4 at the source resolution and frame rate. A stream that needs no change is copied,
-not re-encoded.
+### Editing Rules
+Each member has their own editing rules in each workspace (**Editing Rules**, in Shorts and in Podcasts), in seven
+sections beside a live preview on a sample photo:
+
+- **Frame:** aspect ratio (9:16, 4:5, 3:4, 2:3, 1:1, 4:3, 3:2, 16:9, 21:9), crop position (left, centre, right), zoom
+  (100–130%) and horizontal flip. A wider source has its sides cropped; one of the same shape (a Short in a 9:16 clip)
+  is kept whole.
+- **Speed:** 1.00–1.50x, with voices kept at their normal pitch or not.
+- **Quality:** Full HD or HD, frame rate, encoder preset and CRF, with an estimated file size.
+- **Audio:** keep the original sound, normalise loudness, audio bitrate.
+- **Background music:** the member's own library (MP3, M4A, WAV, OGG); each clip gets the next track, at a set volume.
+- **Hook text:** a line written by the AI model from the title, or the title itself, for a set number of seconds; font
+  (bold by default, or the member's own TTF/OTF), size, colour, outline colour and width, position; and an optional
+  rounded background with its own colour, opacity, size, roundness and position.
+- **Watermark:** the member's own PNG, in one of nine places, with opacity and size.
+
+The rules can be saved as **presets**, and each channel can be given one (*Per-channel rules*); other channels use the
+Default rules. **Test on a real video** renders the first 20 seconds of a YouTube video with the rules on screen.
+Hook text needs a bold font on the server: one of the usual system fonts is used, or set `FONT_FILE`. The output is
+H.264 / AAC in an MP4.
 
 ### Caption and approval
 The AI model receives the YouTube title, description, tags and channel name, and returns a caption and hashtags.

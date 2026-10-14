@@ -28,9 +28,6 @@ class Rule:
 
 
 RULES: dict[str, Rule] = {
-    "speed": Rule("float", 1.08, "Speed", "Video and audio are sped up together. 1.0 leaves the speed unchanged.", "Editing", 1.0, 1.5),
-    "horizontal_flip": Rule("bool", True, "Horizontal flip", "Mirror the video left to right.", "Editing"),
-    "keep_audio": Rule("bool", True, "Keep audio", "Keep the original audio track. Off removes the sound.", "Editing"),
     "max_duration_seconds": Rule("int", 180, "Maximum duration (seconds)", "A video up to this length (or any YouTube Short) is short-form. Anything longer is skipped as long-form.", "Detection", 1, 3600),
     "min_duration_seconds": Rule("int", 5, "Minimum duration (seconds)", "Shorter uploads are skipped.", "Detection", 0, 600),
     "videos_per_channel_per_day": Rule("int", 3, "Videos per channel per day", "Further uploads from the same channel are held as skipped.", "Detection", 1, 100),
@@ -42,6 +39,7 @@ RULES: dict[str, Rule] = {
     "poll_interval_minutes": Rule("int", 5, "Polling interval (minutes)", "How often each channel's uploads are checked, in case a push notification is missed.", "Detection", 1, 1440, per_channel=False),
 }
 
+# The edit itself (shape, speed, sound, text, watermark) is not a rule: it is the editing look (app.services.looks).
 # The Podcasts workspace has its own rules. They are stored under a "podcast." prefix, so the two
 # workspaces never share a value. A few plumbing settings (timezone, publish mode, polling, retention)
 # are not repeated: Podcasts reads them from the Shorts rules above.
@@ -51,14 +49,6 @@ PODCAST_RULES: dict[str, Rule] = {
     "clips_per_video": Rule("int", 3, "Clips per podcast", "How many short clips are cut from each podcast.", "Clips", 1, 10),
     "clip_min_seconds": Rule("int", 30, "Shortest clip (seconds)", "A clip is never shorter than this.", "Clips", 10, 300),
     "clip_max_seconds": Rule("int", 60, "Longest clip (seconds)", "A clip is never longer than this.", "Clips", 15, 600),
-    "framing": Rule(
-        "choice", "crop", "Frame",
-        "crop: the middle of the picture fills a vertical 9:16 screen. blur: the whole picture with a blurred background. original: left as it is.",
-        "Editing", choices=("crop", "blur", "original"),
-    ),
-    "speed": Rule("float", 1.0, "Speed", "Video and audio are sped up together. 1.0 leaves the speed unchanged.", "Editing", 1.0, 1.5),
-    "horizontal_flip": Rule("bool", False, "Horizontal flip", "Mirror the clip left to right.", "Editing"),
-    "keep_audio": Rule("bool", True, "Keep audio", "Keep the original sound. Off removes it.", "Editing"),
     "min_source_duration_seconds": Rule("int", 300, "Shortest podcast (seconds)", "Uploads shorter than this are not podcasts and are skipped.", "Detection", 60, 14400),
     "videos_per_channel_per_day": Rule("int", 2, "Podcasts per channel per day", "Further podcasts from the same channel are held as skipped.", "Detection", 1, 50),
     "approval_required": Rule("bool", True, "Require approval", "On: every clip waits in the review queue. Off: clips are published straight away.", "Publishing", per_channel=False),

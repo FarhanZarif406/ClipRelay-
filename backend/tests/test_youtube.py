@@ -11,7 +11,7 @@ from tests.conftest import ME
 from app.integrations import youtube
 from app.integrations.youtube import VideoMeta
 from app.models import ActivityLog, Channel, Job, JobStatus, RuleChange, SkipReason, Video, VideoStatus, utcnow
-from app.services import detection, dispatch, media, rules
+from app.services import detection, dispatch, rules
 
 CHANNEL_ID = "UC" + "a" * 22
 PAGE = f'''<html><head><link rel="canonical" href="https://www.youtube.com/channel/{CHANNEL_ID}">
@@ -83,30 +83,20 @@ def test_iso_duration_and_signature():
     assert not youtube.verify_signature(body, "sha1=forged") and not youtube.verify_signature(body, None)
 
 
-def test_render_command_only_does_the_two_edits():
-    cmd = " ".join(media.render_command("in.mp4", "out.mp4", speed=1.08, flip=True, keep_audio=True, has_audio=True))
-    assert "-vf hflip,setpts=PTS/1.0800" in cmd and "-af atempo=1.0800" in cmd and "libx264" in cmd and "aac" in cmd
-    assert "crop" not in cmd and "scale" not in cmd and " -t " not in cmd and " -r " not in cmd
-    untouched = " ".join(media.render_command("in.mp4", "out.mp4", speed=1.0, flip=False, keep_audio=True, has_audio=True))
-    assert "-c:v copy" in untouched and "-c:a copy" in untouched  # nothing to change, nothing re-encoded
-    muted = media.render_command("in.mp4", "out.mp4", speed=1.0, flip=True, keep_audio=False, has_audio=True)
-    assert "-an" in muted and "-af" not in muted
-
-
 # ---------------------------------------------------------------- rules
 
 def test_rules_inherit_override_and_audit(db, channel, client, auth):
-    assert rules.effective(db, channel.id, user_id=1)["speed"] == 1.08 and rules.effective(db, user_id=1)["cap_reset_timezone"] == "Asia/Karachi"
-    rules.set_values(db, {"speed": 1.2}, user=ME)
-    rules.set_values(db, {"speed": 1.4, "keep_audio": False}, channel=channel)
-    assert rules.effective(db, user_id=1)["speed"] == 1.2 and rules.effective(db, channel.id, user_id=1)["speed"] == 1.4
-    rules.set_values(db, {"speed": None}, channel=channel)  # remove the override: inherit again
-    assert rules.effective(db, channel.id, user_id=1)["speed"] == 1.2 and rules.effective(db, channel.id, user_id=1)["keep_audio"] is False
+    assert rules.effective(db, channel.id, user_id=1)["hashtag_count"] == 8 and rules.effective(db, user_id=1)["cap_reset_timezone"] == "Asia/Karachi"
+    rules.set_values(db, {"hashtag_count": 10}, user=ME)
+    rules.set_values(db, {"hashtag_count": 12, "videos_per_channel_per_day": 9}, channel=channel)
+    assert rules.effective(db, user_id=1)["hashtag_count"] == 10 and rules.effective(db, channel.id, user_id=1)["hashtag_count"] == 12
+    rules.set_values(db, {"hashtag_count": None}, channel=channel)  # remove the override: inherit again
+    assert rules.effective(db, channel.id, user_id=1)["hashtag_count"] == 10 and rules.effective(db, channel.id, user_id=1)["videos_per_channel_per_day"] == 9
     changes = db.scalars(select(RuleChange).order_by(RuleChange.id)).all()
     assert [(c.key, c.old_value, c.new_value, c.channel_id) for c in changes] == [
-        ("speed", 1.08, 1.2, None), ("speed", None, 1.4, channel.id), ("keep_audio", None, False, channel.id), ("speed", 1.4, None, channel.id),
+        ("hashtag_count", 8, 10, None), ("hashtag_count", None, 12, channel.id), ("videos_per_channel_per_day", None, 9, channel.id), ("hashtag_count", 12, None, channel.id),
     ]
-    for bad in ({"speed": 2}, {"speed": "fast"}, {"hashtag_count": 16}, {"cap_reset_timezone": "Mars/Base"}, {"nope": 1}, {"min_duration_seconds": 500}):
+    for bad in ({"hashtag_count": -1}, {"hashtag_count": "many"}, {"hashtag_count": 16}, {"speed": 1.2}, {"cap_reset_timezone": "Mars/Base"}, {"nope": 1}, {"min_duration_seconds": 500}):
         with pytest.raises(ValueError):
             rules.set_values(db, bad, user=ME)
     for global_only in ({"cap_reset_timezone": "UTC"}, {"approval_required": False}):  # one switch, not one per channel
@@ -116,11 +106,11 @@ def test_rules_inherit_override_and_audit(db, channel, client, auth):
 
     r = client.put("/api/settings/rules", headers=auth, json={"values": {"hashtag_count": 5}})
     assert r.status_code == 200 and r.json()["values"]["hashtag_count"] == 5
-    assert client.put("/api/settings/rules", headers=auth, json={"values": {"speed": 9}}).status_code == 422
+    assert client.put("/api/settings/rules", headers=auth, json={"values": {"hashtag_count": 99}}).status_code == 422
     history = client.get("/api/settings/rules/history", headers=auth).json()
     assert history[0]["key"] == "hashtag_count" and history[0]["changed_by"] == "alex@example.com" and history[0]["changed_at"]
-    r = client.put(f"/api/channels/{channel.id}/rules", headers=auth, json={"values": {"horizontal_flip": False}})
-    assert r.json()["overrides"] == {"keep_audio": False, "horizontal_flip": False} and r.json()["effective"]["hashtag_count"] == 5
+    r = client.put(f"/api/channels/{channel.id}/rules", headers=auth, json={"values": {"min_duration_seconds": 7}})
+    assert r.json()["overrides"] == {"videos_per_channel_per_day": 9, "min_duration_seconds": 7} and r.json()["effective"]["hashtag_count"] == 5
 
 
 # ---------------------------------------------------------------- detection
@@ -345,7 +335,7 @@ def test_removing_a_channel_stops_its_unfinished_videos_and_frees_them(client, a
     waiting, posted = detection.discover(db, channel, "w1"), detection.discover(db, channel, "p1")
     job_posted = db.scalar(select(Job).where(Job.video_id == posted.id))
     job_posted.status, job_posted.buffer_due_at = JobStatus.SCHEDULED, utcnow()
-    rules.set_values(db, {"speed": 1.3}, channel=channel)
+    rules.set_values(db, {"hashtag_count": 3}, channel=channel)
     db.commit()
     old_id = channel.id
     assert client.delete(f"/api/channels/{old_id}", headers=auth).status_code == 204

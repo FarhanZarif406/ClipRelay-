@@ -24,10 +24,12 @@ class JobStatus:
     FAILED = "failed"
     CANCELLED = "cancelled"
     CLIPPED = "clipped"  # a podcast whose clips were chosen; each clip then has a job of its own
+    PAUSED = "paused"  # held by the operator; Resume carries on from the stage it had reached
 
     TERMINAL = {CLEAN, VIOLATED, FAILED, CANCELLED, CLIPPED}
     PROCESSING = {FETCHED, DOWNLOADING, RENDERING, REWRITING}
-    PENDING = PROCESSING | {AWAITING_APPROVAL, READY, UPLOADING}
+    PENDING = PROCESSING | {AWAITING_APPROVAL, READY, UPLOADING, PAUSED}
+    PAUSABLE = PROCESSING | {READY}  # downloading, editing, writing the caption, or waiting to upload
     PUBLISHED = {POSTED, MONITORING, CLEAN}
 
 
@@ -219,6 +221,7 @@ class Channel(Base, TimestampMixin):
     next_poll_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     last_upload_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     last_error: Mapped[str | None] = mapped_column(Text)
+    preset_id: Mapped[int | None] = mapped_column(ForeignKey("editing_looks.id", ondelete="SET NULL"))  # NULL = the member's default editing rules
 
     default_tiktok_account: Mapped[TikTokAccount | None] = relationship(lazy="joined")
 
@@ -293,6 +296,7 @@ class Job(Base, TimestampMixin):
     check_count: Mapped[int] = mapped_column(Integer, default=0)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     progress: Mapped[int | None] = mapped_column(Integer)  # 0–100 while downloading or rendering; shown on Live Status
+    paused_status: Mapped[str | None] = mapped_column(String(24))  # the stage a paused job was in
     error: Mapped[str | None] = mapped_column(Text)
     violation_reason: Mapped[str | None] = mapped_column(Text)
     # Publishing through Buffer: the account it goes to, Buffer's post, and when Buffer was asked to publish it.
@@ -395,4 +399,34 @@ class BufferLog(Base):
     due_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     done_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class EditingLook(Base):
+    """A member's editing rules for one workspace: the default (no name) or a named preset."""
+
+    __tablename__ = "editing_looks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    mode: Mapped[str] = mapped_column(String(16), default=Mode.SHORTS, server_default=Mode.SHORTS)
+    name: Mapped[str | None] = mapped_column(String(60))
+    look: Mapped[dict] = mapped_column(JSONType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class LibraryFile(Base):
+    """A member's own file for editing: a music track, a font, or their watermark image."""
+
+    __tablename__ = "library_files"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))  # music | fonts | watermark
+    name: Mapped[str] = mapped_column(String(120))
+    ext: Mapped[str] = mapped_column(String(8))
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    uses: Mapped[int] = mapped_column(Integer, default=0)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
