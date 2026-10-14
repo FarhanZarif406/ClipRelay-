@@ -5,8 +5,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg nodejs fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
+
+# yt-dlp has to run YouTube's JavaScript to read a video. It needs Deno 2.3+ or Node.js 22+; Debian's own
+# nodejs package is older than that, so yt-dlp ignored it. Deno is the runtime yt-dlp looks for first.
+COPY --from=denoland/deno:bin-2.7.11 /deno /usr/local/bin/deno
 
 WORKDIR /app
 COPY requirements.txt .

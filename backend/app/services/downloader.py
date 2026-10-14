@@ -253,8 +253,47 @@ def working_route() -> str | None:
     return strategy_label({"cookies": bool(strategy.get("cookies")), "player_client": strategy.get("player_client") or "", "ipv6": bool(strategy.get("ipv6"))}) if strategy else None
 
 
+# The oldest versions yt-dlp accepts as its JavaScript runtime; an older one is ignored as if it were missing.
+RUNTIME_MINIMUMS = {"deno": (2, 3, 0), "node": (22, 0, 0)}
+
+
 def node_path() -> str | None:
     return shutil.which("node")
+
+
+def _runtime_version(name: str) -> tuple[str, tuple[int, ...]] | None:
+    path = shutil.which(name)
+    if not path:
+        return None
+    try:
+        out = subprocess.run([path, "--version"], capture_output=True, text=True, errors="replace", timeout=15).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    found = re.search(r"(\d+)\.(\d+)\.(\d+)", out or "")
+    return (found.group(0), tuple(int(part) for part in found.groups())) if found else None
+
+
+def has_solver() -> bool:
+    """Whether yt-dlp-ejs, the script that answers YouTube's JavaScript challenge, is installed."""
+    try:
+        import yt_dlp_ejs  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def js_runtime() -> dict:
+    """The JavaScript runtime yt-dlp will use: {"name": "deno 2.7.11"} when one is good enough, else {"name": None, "problem": why}."""
+    too_old = []
+    for name, minimum in RUNTIME_MINIMUMS.items():
+        found = _runtime_version(name)
+        if not found:
+            continue
+        if found[1] >= minimum:
+            return {"name": f"{name} {found[0]}", "problem": None}
+        too_old.append(f"{name} {found[0]} is too old (yt-dlp needs {'.'.join(map(str, minimum))} or newer)")
+    problem = "; ".join(too_old) if too_old else "neither Deno nor Node.js is installed"
+    return {"name": None, "problem": problem}
 
 
 @contextmanager
@@ -275,9 +314,11 @@ def access_options(strategy: dict | None = None):
     if strategy.get("ipv6"):
         options["source_address"] = "::"  # a server's IPv6 address is often trusted when its IPv4 one is not
     node = node_path()
-    if node:
-        # Recent yt-dlp versions need a JavaScript runtime to read YouTube and look only for Deno by themselves.
-        options["js_runtimes"] = {"deno": {}, "node": {"path": node}}
+    # Recent yt-dlp versions need a JavaScript runtime to read YouTube and look only for Deno by themselves.
+    options["js_runtimes"] = {"deno": {}, **({"node": {"path": node}} if node else {})}
+    if not has_solver():
+        # Without yt-dlp-ejs installed, yt-dlp may fetch the same challenge solver from its own GitHub releases.
+        options["remote_components"] = ["ejs:github"]
     copy = None
     if strategy.get("cookies") and has_cookies():
         fd, copy = tempfile.mkstemp(suffix=".txt", prefix="cliprelay-cookies-")
@@ -361,7 +402,7 @@ def info() -> dict:
         "player_clients": PLAYER_CLIENTS,
         "stats": {"completed": completed, "failed_downloads": failed},
         "working_route": working_route(),
-        "js_runtime": "node" if node_path() else None,
+        "js_runtime": js_runtime()["name"],
     }
 
 
@@ -372,18 +413,38 @@ def video_id_from(url: str) -> str:
     return match.group(1)
 
 
+def advice(message: str) -> str:
+    """What to do about YouTube's answer, when it is one of the usual ones; empty otherwise."""
+    lower = message.lower()
+    if "page needs to be reloaded" in lower or "sign in to confirm" in lower:
+        return (" YouTube did not accept the session it was given. Export a fresh cookies.txt from a private browser window"
+                " that you then close (an open window renews the session and the exported copy stops working), or remove the cookies file.")
+    if "challenge" in lower or "js runtime" in lower or "javascript" in lower:
+        runtime = js_runtime()
+        if not runtime["name"]:
+            return f" yt-dlp could not run YouTube's JavaScript: {runtime['problem']}. Install Deno 2.3+ or Node.js 22+ on the server."
+    return ""
+
+
 def test(url: str) -> dict:
-    """Look one video up without downloading it, through the configured proxy and cookies."""
+    """Look one video up without downloading it, trying every way a real download would, through the configured proxy and cookies."""
     import yt_dlp
 
     video_id = video_id_from(url)
+    params = {"quiet": True, "no_warnings": True, "noplaylist": True, "skip_download": True, "socket_timeout": 30}
+
+    def attempt(access):
+        with yt_dlp.YoutubeDL({**params, **access}) as ydl:
+            data = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+        return data
+
     try:
-        with access_options({"cookies": has_cookies(), "player_client": player_client(), "ipv6": False}) as access:
-            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "noplaylist": True, "skip_download": True, "socket_timeout": 30, **access}) as ydl:
-                data = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
-    except yt_dlp.utils.DownloadError as exc:
-        return {"ok": False, "message": hide_proxy(str(exc).replace("ERROR: ", "").strip())[:500]}
-    return {"ok": True, "message": f"Reachable: “{data.get('title')}” ({round(data.get('duration') or 0)}s, {len(data.get('formats') or [])} formats)."}
+        data = try_each(attempt)
+    except DownloaderError as exc:
+        message = str(exc)
+        return {"ok": False, "message": (message + advice(message))[:700]}
+    route = working_route()
+    return {"ok": True, "message": f"Reachable: “{data.get('title')}” ({round(data.get('duration') or 0)}s, {len(data.get('formats') or [])} formats)" + (f", {route}." if route else ".")}
 
 
 def update() -> dict:
@@ -391,7 +452,7 @@ def update() -> dict:
     before = version()
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "--disable-pip-version-check", "yt-dlp"],
+            [sys.executable, "-m", "pip", "install", "--upgrade", "--disable-pip-version-check", "yt-dlp[default]"],
             capture_output=True, text=True, errors="replace", timeout=600,
         )
     except subprocess.TimeoutExpired:
@@ -432,10 +493,11 @@ def read_attempt(ok: bool, data: dict | None, message: str) -> dict:
     return {"ok": True, "format": picked, "height": quality, "low": quality < GOOD_HEIGHT, "message": "Works" if quality >= GOOD_HEIGHT else f"Works, in low quality only ({resolution})"}
 
 
-def verdict(rows: list[dict], *, with_cookies: bool, with_proxy: bool, js_runtime: str | None, current: str) -> str:
+def verdict(rows: list[dict], *, with_cookies: bool, with_proxy: bool, js_runtime: str | None, current: str, js_problem: str | None = None) -> str:
     """One or two plain sentences on what the results mean."""
     if not js_runtime:
-        return "yt-dlp found no JavaScript runtime. Recent yt-dlp versions need one for YouTube: install Node.js or Deno on the server, update yt-dlp with “Update now”, then run this again."
+        why = f" ({js_problem})" if js_problem else ""
+        return f"yt-dlp has no JavaScript runtime it can use{why}. Recent yt-dlp versions need Deno 2.3+ or Node.js 22+ for YouTube: rebuild the ClipRelay image (it now brings Deno), update yt-dlp with “Update now”, then run this again."
     now = next((r for r in rows if r["client"] == current and r["cookies"] == with_cookies and not r["ipv6"]), None)
     if now and now["ok"]:
         return "Downloads work with the settings as they are now. Retry the failed videos on the Published page."
@@ -477,9 +539,10 @@ def _diagnose(run: dict, url: str) -> None:
     run["verbose"] = output[-40_000:]
     run["command"] = "yt-dlp -v --simulate --no-playlist -f <format>" + (" --proxy <proxy>" if proxy() else "") + (" --cookies <cookies file>" if with_cookies else "") + (f" --extractor-args youtube:player_client={current}" if current else "") + f" {url}"
     run["version"] = version() or None
-    found = re.search(r"JS runtimes: (.+)", output)
-    runtime = found.group(1).strip() if found else ("node" if node_path() else None)
-    run["js_runtime"] = None if runtime in (None, "none") else runtime
+    runtime = js_runtime()
+    run["js_runtime"] = runtime["name"]
+    run["js_problem"] = runtime["problem"]
+    run["solver"] = has_solver()
 
     # Every client over the usual connection, then the default client over IPv6.
     plan = []
@@ -490,7 +553,7 @@ def _diagnose(run: dict, url: str) -> None:
         run["stage"] = f"Trying {step['client'] or 'the default client'} {'with cookies' if step['cookies'] else 'without cookies'}{' over IPv6' if step['ipv6'] else ''}"
         ok, data, message, _lines = _simulate(url, {"cookies": step["cookies"], "player_client": step["client"], "ipv6": step["ipv6"]})
         run["rows"].append({**step, **read_attempt(ok, data, message)})
-    run["verdict"] = verdict(run["rows"], with_cookies=with_cookies, with_proxy=bool(proxy()), js_runtime=run["js_runtime"], current=current)
+    run["verdict"] = verdict(run["rows"], with_cookies=with_cookies, with_proxy=bool(proxy()), js_runtime=run["js_runtime"], current=current, js_problem=runtime["problem"])
     run["status"], run["stage"] = "done", None
 
 
