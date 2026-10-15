@@ -1,4 +1,4 @@
-"""Buffer Settings: the member's own Buffer key and accounts, and the link Buffer fetches clips from."""
+"""Buffer Settings: the member's own Buffer keys and accounts, and the link Buffer fetches clips from."""
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import DB, CurrentUser, Workspace
 from app.integrations.buffer import BufferError
-from app.models import BufferChannel, Mode, User
+from app.models import BufferChannel, BufferKey, Mode, User
 from app.services import activity, buffer
 from app.services.storage import get_storage
 
@@ -15,6 +15,12 @@ router = APIRouter(tags=["buffer"])
 
 class KeyIn(BaseModel):
     api_key: str = Field(min_length=1, max_length=500)
+    label: str | None = Field(default=None, max_length=60)
+
+
+class KeyChange(BaseModel):
+    api_key: str | None = Field(default=None, max_length=500)
+    label: str | None = Field(default=None, max_length=60)
 
 
 class ChannelIn(BaseModel):
@@ -37,30 +43,54 @@ def status(db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
     return buffer.status(db, user.id, mode)
 
 
-@router.put("/buffer/key")
-def save_key(body: KeyIn, db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
+def _my_key(db, key_id: int, user: User) -> BufferKey:
+    item = db.get(BufferKey, key_id)
+    if not item or item.user_id != user.id:
+        raise HTTPException(404, "No such Buffer key.")
+    return item
+
+
+@router.post("/buffer/keys")
+def add_key(body: KeyIn, db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
     """The key is checked with Buffer first, and refused if Buffer does not accept it."""
     try:
-        buffer.save_key(db, user.id, body.api_key.strip())
+        item = buffer.add_key(db, user.id, body.api_key.strip(), body.label)
     except BufferError as exc:
-        db.commit()  # the key that worked before was put back
+        db.rollback()
         raise HTTPException(400, str(exc)) from exc
-    activity.record(db, "Settings", f"{user.email} saved a Buffer API key", event="buffer_key_saved", user_id=user.id)
+    activity.record(db, "Settings", f"{user.email} added a Buffer API key ({item.label})", event="buffer_key_saved", user_id=user.id)
     db.commit()
     return buffer.status(db, user.id, mode)
 
 
-@router.delete("/buffer/key")
-def remove_key(db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
-    buffer.remove_key(db, user.id)
-    activity.record(db, "Settings", f"{user.email} removed their Buffer API key", event="buffer_key_removed", user_id=user.id)
+@router.patch("/buffer/keys/{key_id}")
+def update_key(key_id: int, body: KeyChange, db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
+    """Rename a key, or replace it with a new one (checked with Buffer first)."""
+    item = _my_key(db, key_id, user)
+    try:
+        buffer.update_key(db, item, key=(body.api_key or "").strip() or None, label=body.label)
+    except BufferError as exc:
+        db.commit()  # the key that worked before was put back, with Buffer's reason
+        raise HTTPException(400, str(exc)) from exc
+    if body.api_key:
+        activity.record(db, "Settings", f"{user.email} replaced a Buffer API key ({item.label})", event="buffer_key_saved", user_id=user.id)
+    db.commit()
+    return buffer.status(db, user.id, mode)
+
+
+@router.delete("/buffer/keys/{key_id}")
+def remove_key(key_id: int, db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
+    item = _my_key(db, key_id, user)
+    label = item.label
+    buffer.remove_key(db, item)
+    activity.record(db, "Settings", f"{user.email} removed a Buffer API key ({label})", event="buffer_key_removed", user_id=user.id)
     db.commit()
     return buffer.status(db, user.id, mode)
 
 
 @router.post("/buffer/refresh")
 def refresh(db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
-    """Read the accounts from Buffer again, e.g. after connecting another one there."""
+    """Read every key's accounts from Buffer again, e.g. after connecting another one there."""
     try:
         buffer.sync(db, user.id)
     except BufferError as exc:

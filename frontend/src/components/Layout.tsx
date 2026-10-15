@@ -22,6 +22,7 @@ const podcastNavigation: NavItem[] = [
   { label: "Review Queue", icon: "check", to: "/review" },
   { label: "Published", icon: "arrow", to: "/published" },
   { label: "Skipped", icon: "filter", to: "/skipped" },
+  { label: "Not Processed", icon: "pause", to: "/not-processed" },
   { label: "Clip Rules", icon: "filter", to: "/rules" },
   { label: "Editing Rules", icon: "code", to: "/editing" },
   { label: "Buffer Settings", icon: "arrow", to: "/buffer" },
@@ -36,6 +37,7 @@ const shortsNavigation: NavItem[] = [
   { label: "Review Queue", icon: "check", to: "/review" },
   { label: "Published", icon: "arrow", to: "/published" },
   { label: "Skipped", icon: "filter", to: "/skipped" },
+  { label: "Not Processed", icon: "pause", to: "/not-processed" },
   { label: "Editing Rules", icon: "code", to: "/editing" },
   { label: "Integrations", icon: "link", to: "/integrations" },
   { label: "Daily Report", icon: "logs", to: "/report" },
@@ -86,7 +88,7 @@ export function Layout() {
 
   return <div className="app-shell">
     <aside className={`sidebar ${menu ? "open" : ""}`}><div className="brand"><div className="brand-mark"><Icon name="play" size={15}/></div><span>ClipRelay</span><Badge tone="primary" dot={false}>{PODCASTS ? "PODCASTS" : "BETA"}</Badge><button className="mobile-close" onClick={() => setMenu(false)}><Icon name="close"/></button></div>
-      <nav>{navigation.map(n => { if (n.open) return <button key={n.label} className="nav-window" title="Opens in its own window" onClick={() => openWorkspace(n.open!)}><Icon name={n.icon}/><span>{n.label}</span><Icon name="arrow" size={13}/></button>; const active = n.to === "/" ? location.pathname === "/" : location.pathname.startsWith(n.to); return <button key={n.to} className={active ? "active" : ""} aria-current={active ? "page" : undefined} onClick={() => navigate(n.to)}><Icon name={n.icon}/><span>{n.label}</span>{n.to === "/published" && !!nav.data?.failed_jobs && <b title="Failed videos">{nav.data.failed_jobs}</b>}{n.to === "/review" && !!nav.data?.review_jobs && <b>{nav.data.review_jobs}</b>}{n.to === "/status" && !!nav.data?.pending_jobs && <b title="In progress">{nav.data.pending_jobs}</b>}{n.to === "/skipped" && !!nav.data?.skipped_videos && <b>{nav.data.skipped_videos}</b>}</button>; })}</nav>
+      <nav>{navigation.map(n => { if (n.open) return <button key={n.label} className="nav-window" title="Opens in its own window" onClick={() => openWorkspace(n.open!)}><Icon name={n.icon}/><span>{n.label}</span><Icon name="arrow" size={13}/></button>; const active = n.to === "/" ? location.pathname === "/" : location.pathname.startsWith(n.to); return <button key={n.to} className={active ? "active" : ""} aria-current={active ? "page" : undefined} onClick={() => navigate(n.to)}><Icon name={n.icon}/><span>{n.label}</span>{n.to === "/published" && !!nav.data?.failed_jobs && <b title="Failed videos">{nav.data.failed_jobs}</b>}{n.to === "/review" && !!nav.data?.review_jobs && <b>{nav.data.review_jobs}</b>}{n.to === "/status" && !!nav.data?.pending_jobs && <b title="In progress">{nav.data.pending_jobs}</b>}{n.to === "/skipped" && !!nav.data?.skipped_videos && <b>{nav.data.skipped_videos}</b>}{n.to === "/not-processed" && !!nav.data?.not_processed_videos && <b title="Held by a daily limit">{nav.data.not_processed_videos}</b>}</button>; })}</nav>
       <div className="sidebar-bottom">
         <a className="help" href={DOCS_URL} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}><Icon name="alert" size={16}/><div><strong>Need help?</strong><span>View documentation</span></div><Icon name="chevron" size={14}/></a>
         <div className="legal-links"><a href="/terms" target="_blank" rel="noreferrer">Terms</a><a href="/privacy" target="_blank" rel="noreferrer">Privacy</a></div></div>

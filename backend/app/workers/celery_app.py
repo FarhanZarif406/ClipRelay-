@@ -22,6 +22,7 @@ celery_app.conf.update(
         "validate-credentials": {"task": "app.workers.tasks.validate_credentials", "schedule": 24 * 60 * 60.0},
         "renew-subscriptions": {"task": "app.workers.tasks.renew_subscriptions", "schedule": 60 * 60.0},
         "cleanup-files": {"task": "app.workers.tasks.cleanup_files", "schedule": 24 * 60 * 60.0},
+        "update-ytdlp": {"task": "app.workers.tasks.update_ytdlp", "schedule": 24 * 60 * 60.0},
     },
 )
 
@@ -29,6 +30,7 @@ celery_app.conf.update(
 @worker_process_init.connect
 def _listen_for_credential_changes(**_kwargs) -> None:
     """Each worker process drops its credential/LLM caches when Settings change them."""
-    from app.services import credentials
+    from app.services import credentials, downloader
 
     credentials.start_listener()
+    downloader.use_shared_packages()  # a yt-dlp updated from the app is used by every worker process

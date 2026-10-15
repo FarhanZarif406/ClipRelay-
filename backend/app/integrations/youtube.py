@@ -268,19 +268,29 @@ def _video_from_api(video_id: str) -> VideoMeta:
     )
 
 
-def _video_from_ytdlp(video_id: str) -> VideoMeta:
+def _lookup(video_id: str, missing: str) -> dict:
+    """A video's details from yt-dlp, asking YouTube every way a download does when the saved way is refused."""
+    from app.services import downloader  # the saved proxy, cookies and player client apply to every lookup
+
+    downloader.use_shared_packages()
     try:
         import yt_dlp
     except ImportError as exc:  # pragma: no cover
-        raise YouTubeError("yt-dlp is not installed, and no YOUTUBE_API_KEY is set") from exc
-    from app.services import downloader  # the saved proxy, cookies and player client apply to every lookup
-
+        raise YouTubeError(missing) from exc
     options = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True, "socket_timeout": 30}
+
+    def attempt(access: dict) -> dict:
+        with yt_dlp.YoutubeDL({**options, **access}) as ydl:
+            return ydl.extract_info(watch_url(video_id), download=False, process=False)
+
     try:
-        with downloader.access_options() as access, yt_dlp.YoutubeDL({**options, **access}) as ydl:
-            info = ydl.extract_info(watch_url(video_id), download=False, process=False)
-    except yt_dlp.utils.DownloadError as exc:
-        raise YouTubeError(f"Could not read YouTube video {video_id}: {str(exc)[:200]}") from exc
+        return downloader.try_each(attempt)
+    except downloader.DownloaderError as exc:
+        raise YouTubeError(f"Could not read YouTube video {video_id}: {str(exc)[:300]}") from exc
+
+
+def _video_from_ytdlp(video_id: str) -> VideoMeta:
+    info = _lookup(video_id, "yt-dlp is not installed, and no YOUTUBE_API_KEY is set")
     published = datetime.fromtimestamp(info["timestamp"], timezone.utc) if info.get("timestamp") else None
     if published is None and info.get("upload_date"):
         published = datetime.strptime(info["upload_date"], "%Y%m%d").replace(tzinfo=timezone.utc)
@@ -296,18 +306,7 @@ def transcript(video_id: str) -> list[tuple[float, str]]:
 
     Uploaded subtitles are preferred over YouTube's automatic ones, in the video's own language.
     """
-    try:
-        import yt_dlp
-    except ImportError as exc:  # pragma: no cover
-        raise YouTubeError("yt-dlp is not installed on the server") from exc
-    from app.services import downloader  # the saved proxy, cookies and player client apply to every lookup
-
-    options = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True, "socket_timeout": 30}
-    try:
-        with downloader.access_options() as access, yt_dlp.YoutubeDL({**options, **access}) as ydl:
-            info = ydl.extract_info(watch_url(video_id), download=False, process=False)
-    except yt_dlp.utils.DownloadError as exc:
-        raise YouTubeError(f"Could not read YouTube video {video_id}: {str(exc)[:200]}") from exc
+    info = _lookup(video_id, "yt-dlp is not installed on the server")
     url = _subtitle_url(info)
     if not url:
         return []

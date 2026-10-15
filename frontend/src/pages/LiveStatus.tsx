@@ -63,6 +63,7 @@ export default function LiveStatus() {
   const toast = useToast();
   const onError = useErrorToast();
   const { data, isLoading } = useQuery({ queryKey: ["pipeline-status"], queryFn: dashboard.status, refetchInterval: 3000 });
+  const nav = useQuery({ queryKey: ["nav"], queryFn: dashboard.nav, refetchInterval: 30_000 });
   // Stop = cancel the job. A download or an edit that is already running halts within a few seconds.
   const stop = useMutation({
     mutationFn: (item: StatusItem) => jobs.cancel(item.id),
@@ -83,6 +84,7 @@ export default function LiveStatus() {
   const noun = PODCASTS ? "clips" : "videos";
 
   return <><PageHeader title="Live Status" description={`Where every ${PODCASTS ? "clip" : "video"} is right now: waiting, downloading, being edited, or waiting to upload. Pause holds one where it is; Stop cancels it. Updates every few seconds.`}><Badge tone={active ? "primary" : "success"}>{active ? `${active} in progress` : "Nothing in progress"}</Badge></PageHeader>
+    {nav.data && !nav.data.worker_alive && <div className="form-error" style={{ marginBottom: 14 }}><b>The background worker is not running.</b> Videos are detected, but nothing is downloaded or edited until it runs. An admin can see what to do in Integrations → Video Source.</div>}
     {isLoading && <Spinner/>}
     {today && <>
       <div className="section-label" style={{ margin: "0 0 8px" }}>Today’s {noun}{data?.timezone ? ` · ${data.timezone}` : ""}</div>

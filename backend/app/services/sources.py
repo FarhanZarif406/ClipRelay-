@@ -124,6 +124,7 @@ class YtDlpAdapter:
     name = "yt_dlp"
 
     def _yt_dlp(self):
+        downloader.use_shared_packages()  # a yt-dlp updated from the app, in any container, is used from here on
         try:
             import yt_dlp
         except ImportError as exc:  # pragma: no cover

@@ -13,8 +13,16 @@ Detected → Downloading → Rendering → (Writing caption) → (Needs approval
 ```
 
 The caption is written alongside the download and the edit, because it needs only the video's details, not the file.
-A video that fails the duration or cap check is never discarded: it is held under **Skipped** with its reason and can be
-processed by hand.
+A video that fails the duration check is never discarded: it is held under **Skipped** with its reason and can be
+processed by hand. A usable video that comes over a daily limit is held under **Not Processed** instead: it is detected
+and recorded but not downloaded or edited, and **Process now** sends it on anyway.
+
+**Daily limit.** Each workspace takes only so many new uploads into processing per day. By default it matches the
+Buffer accounts: the daily limits of the switched-on accounts added up (10 accounts posting 7 a day take 70 videos; in
+Podcasts the sum is divided by the clips per podcast). It can be set by hand instead (rule *Daily limit* → *manual*),
+and the manual number also applies while no account is switched on. Once it is used up the Dashboard says so, and new
+uploads wait under Not Processed until the count starts again at midnight (rule *Timezone*). A channel's own
+*Videos per channel per day* sends its extra uploads to Not Processed too.
 
 | Layer | Stack |
 |---|---|
@@ -40,6 +48,16 @@ python -c "from cryptography.fernet import Fernet;print('ENCRYPTION_KEY='+Fernet
 
 docker compose up -d --build
 ```
+
+> **Downloads run in the `worker` service, not in `backend`.** Deploy all of `backend`, `worker` and `beat`: without the
+> worker, videos are detected but never downloaded or edited, while *Test download* (which runs in `backend`) still
+> works. Integrations → Video Source and Live Status warn when the worker has not checked in for three minutes, and
+> show what the worker itself sees (yt-dlp version, JavaScript runtime, cookies file). On a host that runs a single
+> container, set `INLINE_WORKER=true` so that container does the work itself.
+>
+> **A server's address is often refused by YouTube** ("Sign in to confirm you're not a bot") where a home connection
+> is not. Then upload a fresh cookies file, set a proxy (a residential one works best), or run *Run diagnosis* to see
+> which way still works.
 
 Open **http://localhost:8080**. The first visitor creates the **owner** account; after that, registration is closed and
 owners add team members under **Settings → Team members**. Owners manage API keys, AI models and the team; members run
@@ -72,7 +90,9 @@ The **Video Source** card on the Integrations page (admin only) controls how vid
   answers "Sign in to confirm you're not a bot". It is kept on the server only and never shown again.
 - **Proxy** — an optional `http://user:pass@host:port` address, stored encrypted.
 - **Player client** — which YouTube app yt-dlp pretends to be.
-- **Update now** — upgrades yt-dlp; YouTube changes often and old versions stop working.
+- **Update now** — upgrades yt-dlp and its JavaScript challenge solver; YouTube changes often and old versions stop
+  working. It is also done by itself once a day. The update goes into a folder on the shared `/data` volume, so the
+  API and every worker use it, and it survives restarts; a newer image's own yt-dlp wins over an older update.
 - **Test download** and **Run diagnosis** — look one video up, or try it with every player client, with and without
   cookies and over IPv6, and say which ways work. Nothing is downloaded and no setting is changed.
 
@@ -89,7 +109,7 @@ Every third-party credential can be managed from the UI **without a restart**. V
 | Credential | Where in the app | `.env` fallback |
 |---|---|---|
 | YouTube Data API key (optional) | Integrations → YouTube Data API | `YOUTUBE_API_KEY` |
-| Buffer API key (one per member) | Buffer Settings | — |
+| Buffer API keys (up to ten per member) | Buffer Settings | — |
 | AI models (any number, one default) | Settings → AI models | `LLM_*` (used only when no model is added) |
 | SMTP for email alerts | Settings → Notifications | `SMTP_*` |
 
@@ -101,8 +121,8 @@ and OAuth scopes. Saved credentials and AI models are re-validated daily, and yo
 ## 2. Channels and detection
 
 Open **Channels**, paste the channel's URL or `@handle` into the box at the top and click **Add channel**. The channel
-is looked up, saved and subscribed in one step. Its videos go to the Buffer account whose next free time comes first
-(or the one chosen for a video in the review queue).
+is looked up, saved and subscribed in one step. Its videos go to the Buffer accounts in turn (or to the one chosen
+for a video in the review queue).
 
 - **Only new uploads are republished.** Videos published before the channel was added (or while it was switched off)
   are ignored.
@@ -152,17 +172,21 @@ Each clip is one post, so three clips from one podcast take three of an account'
 ## Publishing through Buffer
 
 Finished clips go out through [Buffer](https://buffer.com). Each member opens
-**Buffer Settings** and saves their own Buffer API key (Buffer → Settings → API, with the permissions `account:read`,
-`posts:read` and `posts:write`). The key is checked with Buffer before it is kept, stored encrypted, and only its
-last four characters are ever shown.
+**Buffer Settings** and saves their own Buffer API keys — up to ten, one per Buffer account (Buffer → Settings → API,
+with the permissions `account:read`, `posts:read` and `posts:write`). Each key is checked with Buffer before it is
+kept, stored encrypted, and only its name and last four characters are ever shown. Keys can be renamed, replaced
+and removed one by one; an account two keys both reach is listed once.
 
 - **Accounts.** The social accounts connected in Buffer are listed, each with a switch (*Clips go here*), a
   **Schedule** (time zone, start date, posting times, daily limit) and a **Live status** (uploaded and failed today,
   7 days, 30 days and in all; what is waiting; the latest clips). TikTok accounts are switched on from the start.
-  Each workspace (Shorts, Podcasts) has its own switch and schedule for the same account.
+  Each workspace (Shorts, Podcasts) has its own switch and schedule for the same account. The accounts are
+  grouped by the key that reaches them.
 - **How a clip is sent.** An approved clip is handed to Buffer
-  as a post scheduled for the account's next free time — the chosen account, or with *Auto* the one whose next time
-  comes first. A full day is not a dead end: the clip goes out on the next day. Buffer fetches the video from
+  as a post scheduled for the account's next free time. The switched-on accounts of all the member's keys take
+  turns: each clip goes to the one that has waited longest for a clip (the page marks it *Next turn*), so every
+  account gets one before any gets a second. A clip set to one account in the review queue goes there. A full day
+  is not a dead end: the clip goes out on the next day. Buffer fetches the video from
   `{public base URL}/api/public/clip/{token}/clip.mp4`, a private link that works only until the clip is published,
   so the server needs a public HTTPS address (Integrations → YouTube Push Notifications → *Public base URL*).
 - **Afterwards.** The clip shows as *Scheduled at Buffer* (Live Status, Published). A few minutes after its time
@@ -228,7 +252,8 @@ Channel overrides). Every change is recorded with who made it and when (Settings
 | Rule | Default | Notes |
 |---|---|---|
 | `max_duration_seconds` / `min_duration_seconds` | 180 / 5 | short-form = up to the maximum, or any YouTube Short; anything longer is skipped as `long-form` |
-| `videos_per_channel_per_day` | 3 | further uploads are held as `skipped_channel_cap` |
+| `videos_per_channel_per_day` | 3 | further uploads are held under Not Processed as `skipped_channel_cap` |
+| `daily_limit_mode` / `daily_limit` | match accounts / 15 | global only; uploads taken per day across all channels; further ones are held under Not Processed as `skipped_daily_limit` |
 | `approval_required` | on | global only; the **Require approval** switch on the Review Queue page |
 | `cap_reset_timezone` | Asia/Karachi | global only; caps reset at midnight in this timezone |
 | `hashtag_count` | 8 | 0 to 15 |

@@ -4,7 +4,7 @@ from app.config import get_settings
 from app.db import session_scope
 from app.integrations.http import ApiError, backoff_delay
 from app.models import Channel, Job, JobStatus
-from app.services import buffer, credential_checks, credentials, detection, pipeline, youtube_usage
+from app.services import buffer, credential_checks, credentials, detection, downloader, pipeline, youtube_usage
 from app.workers.celery_app import celery_app
 
 log = logging.getLogger(__name__)
@@ -22,6 +22,10 @@ def enqueue(task, *args, countdown: float = 0) -> None:
 
 @celery_app.task
 def tick() -> dict:
+    try:
+        downloader.worker_beat(get_settings().inline_worker)  # the page shows whether the worker runs, and what it sees
+    except Exception:  # noqa: BLE001 — a missed beat must never stop the pipeline
+        log.exception("could not record the worker heartbeat")
     with session_scope() as db:
         due = pipeline.scheduler_tick(db)
         due["polls"] = detection.due_channels(db)
@@ -116,6 +120,14 @@ def cleanup_files() -> int:
     """Daily: delete source and rendered files past the retention period."""
     with session_scope() as db:
         return pipeline.cleanup_files(db)
+
+
+@celery_app.task
+def update_ytdlp() -> dict:
+    """Daily: YouTube changes often and an old yt-dlp stops downloading, so the newest one is fetched for every process."""
+    result = downloader.update()
+    (log.info if result["ok"] else log.warning)("yt-dlp update: %s", result["message"])
+    return result
 
 
 @celery_app.task

@@ -98,12 +98,9 @@ def complete_onboarding(db: DB, _: CurrentUser):
 
 
 def _ytdlp_version() -> str:
-    try:
-        import yt_dlp
+    from app.services import downloader
 
-        return yt_dlp.version.__version__
-    except ImportError:
-        return ""
+    return downloader.version()
 
 
 def _test_editor() -> str:

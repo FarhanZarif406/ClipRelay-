@@ -61,7 +61,7 @@ export type Job = {
   next_check_at: string | null;
   prompt_template_id: number | null;
   video: Video;
-  /** The Buffer account chosen for it (null = the one whose next free time comes first), and when Buffer publishes it. */
+  /** The Buffer account chosen for it (null = the account whose turn it is), and when Buffer publishes it. */
   buffer_channel: BufferRef | null;
   buffer_due_at: string | null;
   events?: { id: number; status: JobStatus; message: string; created_at: string }[];
@@ -86,7 +86,18 @@ export type Nav = {
   buffer_accounts: number;
   review_jobs: number;
   skipped_videos: number;
+  /** Usable uploads held back by a daily limit (the Not Processed page). */
+  not_processed_videos: number;
+  /** False when the background worker has not run lately: nothing gets downloaded or edited then. */
+  worker_alive: boolean;
   channels: number;
+};
+
+/** Today's daily limit: how many uploads this workspace takes into processing, and how many it has taken. */
+export type DailyLimit = {
+  limit: number; used: number; remaining: number; reached: boolean;
+  /** "accounts": the switched-on Buffer accounts' daily limits added up; "manual": the number in the rules. */
+  source: "accounts" | "manual"; accounts: number; account_posts: number; set_to_match: boolean; time_zone: string; resets_at: string;
 };
 
 export type Prompt = {
@@ -204,6 +215,12 @@ export type SourceInfo = {
   installed: boolean; version: string | null; cookies: boolean; cookies_file: CookiesInfo;
   options: { proxy: string; proxy_set: boolean; player_client: string }; player_clients: string[];
   stats: { completed: number; failed_downloads: number }; working_route: string | null; js_runtime: string | null;
+  /** The background worker that does the downloads: whether it ran in the last few minutes, and what it sees. */
+  worker: WorkerStatus;
+};
+export type WorkerStatus = {
+  alive: boolean; last_seen: string | null; host?: string; inline?: boolean;
+  ytdlp?: string | null; js_runtime?: string | null; solver?: boolean; cookies?: boolean; proxy?: boolean;
 };
 export type DiagnosisRow = { client: string; cookies: boolean; ipv6: boolean; ok: boolean; format: string | null; height: number | null; low: boolean; message: string };
 export type SourceDiagnosis = {
@@ -228,11 +245,13 @@ export type BufferRef = { id: number; name: string; service: string };
 export type AccountRef = BufferRef & { initials: string; enabled: boolean };
 /** One of the member's Buffer channels: a social account connected in Buffer, as this workspace schedules it. */
 export type BufferChannel = BufferRef & {
-  avatar: string | null; enabled: boolean; daily_limit: number; times: string[]; time_zone: string; own_time_zone: boolean; start_date: string | null;
+  avatar: string | null; enabled: boolean; key_id: number | null; key_label: string; last_picked_at: string | null; daily_limit: number; times: string[]; time_zone: string; own_time_zone: boolean; start_date: string | null;
   used_today: number; uploaded: number; waiting: number; next_slot: string | null;
 };
-/** What the Buffer page shows. The API key itself never reaches the page. */
-export type BufferStatus = { connected: boolean; last4: string; saved_at: string | null; synced_at: string | null; error: string | null; public_url: boolean; time_zone: string; channels: BufferChannel[] };
+/** One of the member's saved Buffer keys. The key itself never reaches the page, only its last four characters. */
+export type BufferKey = { id: number; label: string; last4: string; saved_at: string; synced_at: string | null; error: string | null; accounts: number; receiving: number };
+/** What the Buffer page shows. `up_next` is the account whose turn it is to get the next clip. */
+export type BufferStatus = { connected: boolean; max_keys: number; keys: BufferKey[]; public_url: boolean; time_zone: string; up_next: number | null; channels: BufferChannel[] };
 export type BufferChannelChanges = { enabled?: boolean; daily_limit?: number; times?: string[]; time_zone?: string; start_date?: string | null };
 type PeriodCounts = { today: number; week: number; month: number; lifetime: number };
 export type BufferChannelStatus = {

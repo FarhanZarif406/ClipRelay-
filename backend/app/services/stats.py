@@ -20,7 +20,8 @@ from app.models import (
     Video,
     VideoStatus,
 )
-from app.services import buffer, rules, serializers, workspace_settings
+from app.services import buffer, downloader, rules, serializers, workspace_settings
+from app.services.limits import LIMIT_REASONS
 from app.services.pipeline import cap_day_start
 
 
@@ -81,8 +82,11 @@ def nav(db: Session, mode: str = Mode.SHORTS, user_id: int | None = None) -> dic
         "buffer_accounts": sum(1 for c in buffer.channels(db, user_id, mode) if c.enabled) if user_id else 0,
         "review_jobs": _count(db, select(func.count(Job.id)).where(Job.status == JobStatus.AWAITING_APPROVAL, _in(mode, user_id))),
         "failed_jobs": _count(db, select(func.count(Job.id)).where(Job.status == JobStatus.FAILED, _in(mode, user_id))),
-        "skipped_videos": _count(db, select(func.count(Video.id)).where(Video.status == VideoStatus.SKIPPED, *_uploads(mode, user_id))),
+        "skipped_videos": _count(db, select(func.count(Video.id)).where(Video.status == VideoStatus.SKIPPED, Video.skip_reason.not_in(LIMIT_REASONS), *_uploads(mode, user_id))),
+        "not_processed_videos": _count(db, select(func.count(Video.id)).where(Video.status == VideoStatus.SKIPPED, Video.skip_reason.in_(LIMIT_REASONS), *_uploads(mode, user_id))),
         "channels": _count(db, select(func.count(Channel.id)).where(Channel.mode == mode, Channel.user_id == user_id)),
+        # Downloads and edits run in the background worker; without it nothing moves past "Detected".
+        "worker_alive": downloader.worker_status()["alive"],
     }
 
 

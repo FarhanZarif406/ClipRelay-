@@ -1,11 +1,11 @@
 import { useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { buffer } from "@/api/endpoints";
-import type { BufferChannel, BufferChannelChanges, BufferStatus } from "@/api/types";
+import type { BufferChannel, BufferChannelChanges, BufferKey, BufferStatus } from "@/api/types";
 import { SecretInput } from "@/components/CredentialCard";
 import { Field, Modal } from "@/components/Modal";
 import { useToast } from "@/components/Toast";
-import { Avatar, Button, Card, Empty, PageHeader, Spinner, Toggle } from "@/components/ui";
+import { Avatar, Badge, Button, Card, Empty, PageHeader, Spinner, Toggle } from "@/components/ui";
 import { initialsOf } from "@/lib/format";
 import { PODCASTS } from "@/lib/mode";
 
@@ -100,19 +100,19 @@ function ChannelStatusModal({ channel, onClose }: { channel: BufferChannel; onCl
 }
 
 /** One Buffer account: whether clips go to it, and its schedule at a glance. The schedule is changed in a dialog. */
-function ChannelCard({ channel, onSave }: { channel: BufferChannel; onSave: (changes: BufferChannelChanges, done: string) => Promise<boolean> }) {
+function ChannelCard({ channel, upNext, onSave }: { channel: BufferChannel; upNext: boolean; onSave: (changes: BufferChannelChanges, done: string) => Promise<boolean> }) {
   const [scheduling, setScheduling] = useState(false);
   const [watching, setWatching] = useState(false);
   return <Card className="buffer-card">
     <div className="buffer-card-head"><Avatar label={initialsOf(channel.name)}/>
-      <div><strong>{channel.name}</strong><span>{serviceName(channel.service)} · {channel.used_today} of {channel.daily_limit} scheduled for today · {channel.uploaded} uploaded so far{channel.waiting > 0 ? ` · ${channel.waiting} waiting at Buffer` : ""}</span></div>
+      <div><strong>{channel.name}{upNext && <Badge tone="success">Next turn</Badge>}</strong><span>{serviceName(channel.service)} · {channel.used_today} of {channel.daily_limit} scheduled for today · {channel.uploaded} uploaded so far{channel.waiting > 0 ? ` · ${channel.waiting} waiting at Buffer` : ""}{channel.last_picked_at ? ` · last clip given ${savedDay(channel.last_picked_at)}` : ""}</span></div>
       <label><span>{channel.enabled ? "Clips go here" : "Off"}</span><Toggle checked={channel.enabled} label={`Send clips to ${channel.name}`} onChange={() => void onSave({ enabled: !channel.enabled }, channel.enabled ? `${channel.name} is off. No clips go to it.` : `${channel.name} is on.`)}/></label>
     </div>
     <div className="buffer-card-foot">
       <div>
         <div className="buffer-chips">{channel.times.map(time => <span className="buffer-chip" key={time}>{to12Hour(time)}</span>)}{channel.times.length === 0 && <span className="bad">No posting times yet.</span>}</div>
         <small>{channel.time_zone.replace(/_/g, " ")} · up to {channel.daily_limit} a day{channel.start_date ? ` · from ${longDay(channel.start_date)}` : ""}</small>
-        <small>{!channel.enabled ? "Switched off." : channel.next_slot ? `Next clip: ${inZone(channel.next_slot, channel.time_zone)}.` : "Press Schedule and add at least one posting time."}</small>
+        <small>{!channel.enabled ? "Switched off." : channel.next_slot ? `Next free time: ${inZone(channel.next_slot, channel.time_zone)}.` : "Press Schedule and add at least one posting time."}</small>
       </div>
       <span><Button onClick={() => setWatching(true)}>Live status</Button><Button variant="primary" onClick={() => setScheduling(true)}>Schedule</Button></span>
     </div>
@@ -121,20 +121,76 @@ function ChannelCard({ channel, onSave }: { channel: BufferChannel; onSave: (cha
   </Card>;
 }
 
+type Run = (work: () => Promise<BufferStatus>, done: string) => Promise<boolean>;
+
+/** One saved key: its name and last four characters, how many accounts it reaches; rename, replace or remove it. */
+function KeyRow({ item, busy, run }: { item: BufferKey; busy: boolean; run: Run }) {
+  const [editing, setEditing] = useState<"" | "rename" | "replace">("");
+  const [value, setValue] = useState("");
+  const close = () => { setEditing(""); setValue(""); };
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!value.trim() || busy) return;
+    const saved = editing === "rename"
+      ? await run(() => buffer.updateKey(item.id, { label: value.trim() }), `Renamed to “${value.trim()}”.`)
+      : await run(() => buffer.updateKey(item.id, { api_key: value.trim() }), `Buffer accepted the new key for ${item.label}.`);
+    if (saved) close();
+  };
+  const remove = () => {
+    if (window.confirm(`Remove ${item.label}? Its ${item.accounts} account${item.accounts === 1 ? "" : "s"} will no longer get clips. Posts already scheduled in Buffer stay there.`))
+      void run(() => buffer.removeKey(item.id), `${item.label} was removed.`);
+  };
+  return <div className="buffer-key">
+    <div className="source-secret"><div>
+      <span className="buffer-key-name"><b>{item.label}</b><code>••••••••{item.last4}</code></span>
+      <small>{item.accounts} account{item.accounts === 1 ? "" : "s"} · {item.receiving} receiving clips · saved {savedDay(item.saved_at)}</small>
+      {item.error && <small className="bad">{item.error}</small>}
+    </div>
+      <Button variant="ghost" onClick={() => { setEditing("rename"); setValue(item.label); }}>Rename</Button>
+      <Button variant="ghost" onClick={() => { setEditing("replace"); setValue(""); }}>Replace</Button>
+      <Button variant="danger" disabled={busy} onClick={remove}>Remove</Button></div>
+    {editing && <form className="buffer-key-form" onSubmit={event => void submit(event)}>
+      {editing === "rename"
+        ? <Field label="Name"><input value={value} maxLength={40} onChange={e => setValue(e.target.value)} autoFocus/></Field>
+        : <Field label={`New API key for ${item.label}`} hint="Checked with Buffer before it replaces the old one."><SecretInput value={value} onChange={setValue} placeholder="Paste the new Buffer API key"/></Field>}
+      <div className="inline-form"><Button variant="primary" type="submit" disabled={!value.trim() || busy}>{busy ? "Saving…" : editing === "rename" ? "Save name" : "Save key"}</Button><Button onClick={close}>Cancel</Button></div>
+    </form>}
+  </div>;
+}
+
+/** Adds one more key. The name is optional: "Key 2", "Key 3", … otherwise. */
+function AddKey({ first, busy, run }: { first: boolean; busy: boolean; run: Run }) {
+  const [open, setOpen] = useState(first);
+  const [key, setKey] = useState("");
+  const [label, setLabel] = useState("");
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!key.trim() || busy) return;
+    if (await run(() => buffer.addKey(key.trim(), label.trim()), "Buffer accepted the key. Its accounts are listed below.")) { setKey(""); setLabel(""); setOpen(first); }
+  };
+  if (!open) return <div><Button icon="plus" onClick={() => setOpen(true)}>Add another key</Button></div>;
+  return <form className="buffer-key-form" onSubmit={event => void submit(event)}>
+    <div className="buffer-key-fields">
+      <Field label="Name (optional)" hint="For example the Buffer account it belongs to."><input value={label} maxLength={40} placeholder="Key name" onChange={e => setLabel(e.target.value)}/></Field>
+      <Field label="API key" hint="The key is checked with Buffer before it is saved."><SecretInput value={key} onChange={setKey} placeholder="Paste a Buffer API key"/></Field>
+    </div>
+    <div className="inline-form"><Button variant="primary" type="submit" disabled={!key.trim() || busy}>{busy ? "Checking with Buffer…" : "Save key"}</Button>{!first && <Button onClick={() => { setOpen(false); setKey(""); setLabel(""); }}>Cancel</Button>}</div>
+  </form>;
+}
+
 /**
- * The member's own Buffer connection: their API key, and for each account connected in Buffer
+ * The member's own Buffer connection: up to ten API keys, and for each account those keys reach in Buffer
  * whether clips go to it, and its schedule: timezone, start date, times of day and daily limit.
+ * The switched-on accounts take turns, so every one of them gets clips.
  */
 export default function BufferSettings() {
   const queryClient = useQueryClient();
   const toast = useToast();
   const { data: status, error: loadError } = useQuery({ queryKey: ["buffer"], queryFn: buffer.info });
-  const [key, setKey] = useState("");
-  const [replacing, setReplacing] = useState(false);
   const [busy, setBusy] = useState(false);
 
   /** Runs one change, shows how it went, and lets the rest of the app see the new accounts. */
-  const run = async (work: () => Promise<BufferStatus>, done: string) => {
+  const run: Run = async (work, done) => {
     setBusy(true);
     try {
       queryClient.setQueryData(["buffer"], await work());
@@ -149,41 +205,35 @@ export default function BufferSettings() {
       setBusy(false);
     }
   };
-  const saveKey = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!key.trim() || busy) return;
-    if (await run(() => buffer.saveKey(key.trim()), "Buffer accepted the key. Your accounts are listed below.")) { setKey(""); setReplacing(false); }
-  };
-  const removeKey = () => {
-    if (window.confirm("Remove your Buffer API key? Clips will no longer be sent to Buffer. Posts already scheduled in Buffer stay there.")) void run(buffer.removeKey, "Your Buffer API key was removed.");
-  };
   const connected = !!status?.connected;
   const active = status?.channels.filter(channel => channel.enabled).length ?? 0;
+  const groups = (status?.keys ?? []).map(item => ({ item, channels: status!.channels.filter(channel => channel.key_id === item.id) }));
 
-  return <><PageHeader title="Buffer Settings" description={`Finished ${PODCASTS ? "clips" : "videos"} are sent to your Buffer account, which publishes them to the accounts you connected there. This key and these settings are yours alone.`}>
+  return <><PageHeader title="Buffer Settings" description={`Finished ${PODCASTS ? "clips" : "videos"} are sent to your Buffer accounts, which publish them to the accounts you connected there. These keys and settings are yours alone.`}>
     {connected && <Button icon="refresh" disabled={busy} onClick={() => void run(buffer.refresh, "Read your accounts from Buffer again.")}>Refresh accounts</Button>}</PageHeader>
     <div className="buffer-page">
       {loadError && <div className="form-error">{message(loadError)}</div>}
       {status && !status.public_url && <div className="form-note warn">The server has no public address yet, so Buffer cannot fetch clips from it. An admin sets the public base URL in Integrations → YouTube Push Notifications.</div>}
-      {status?.error && <div className="form-error">{status.error}</div>}
 
-      <Card><div className="card-title">Buffer API key</div>
-        <div className="card-caption">Create it in Buffer under Settings → API. It needs the permissions <b>account:read</b>, <b>posts:read</b> and <b>posts:write</b>.</div>
-        {connected && !replacing
-          ? <div className="source-secret" style={{ marginTop: 12 }}><div><code>••••••••••••{status.last4}</code><small>Saved {status.saved_at ? savedDay(status.saved_at) : ""} · kept on the server, never shown again</small></div>
-            <Button variant="ghost" onClick={() => setReplacing(true)}>Replace</Button><Button variant="danger" disabled={busy} onClick={removeKey}>Remove</Button></div>
-          : <form onSubmit={event => void saveKey(event)} style={{ marginTop: 12 }}>
-            <Field label={connected ? "New API key" : "API key"} hint="The key is checked with Buffer before it is saved."><SecretInput value={key} onChange={setKey} placeholder="Paste your Buffer API key"/></Field>
-            <div className="inline-form"><Button variant="primary" type="submit" disabled={!key.trim() || busy}>{busy ? "Checking with Buffer…" : "Save key"}</Button>{replacing && <Button onClick={() => { setReplacing(false); setKey(""); }}>Cancel</Button>}</div>
-          </form>}
-      </Card>
+      {status && <Card><div className="card-title">Buffer API keys <span className="muted">· {status.keys.length} of {status.max_keys}</span></div>
+        <div className="card-caption">Create a key in Buffer under Settings → API. It needs the permissions <b>account:read</b>, <b>posts:read</b> and <b>posts:write</b>. Add up to {status.max_keys} keys, one per Buffer account; all their accounts get clips in turn.</div>
+        <div className="buffer-keys">
+          {status.keys.map(item => <KeyRow key={item.id} item={item} busy={busy} run={run}/>)}
+          {status.keys.length < status.max_keys
+            ? <AddKey key={status.keys.length === 0 ? "first" : "more"} first={status.keys.length === 0} busy={busy} run={run}/>
+            : <small className="muted">All {status.max_keys} keys are in use. Remove one to add another.</small>}
+        </div>
+      </Card>}
 
       {connected && <>
         <div><div className="card-title">Your accounts{PODCASTS ? " · Podcasts workspace" : ""}</div>
-          <div className="card-caption">{status.channels.length} connected in Buffer · {active} receiving clips. “Auto” sends each clip to the account whose next time comes first.</div></div>
-        {status.channels.length === 0
-          ? <Card><Empty icon="plus" title="No accounts are connected in Buffer yet">Connect an account in Buffer, then press “Refresh accounts”.</Empty></Card>
-          : status.channels.map(channel => <ChannelCard key={channel.id} channel={channel} onSave={(changes, done) => run(() => buffer.updateChannel(channel.id, changes), done)}/>)}
+          <div className="card-caption">{status.channels.length} connected in Buffer · {active} receiving clips. The accounts take turns: each clip goes to the switched-on account that has waited longest, so every account gets one before any gets a second. A clip set to one account on its own page goes there instead.</div></div>
+        {groups.map(({ item, channels }) => <section className="buffer-group" key={item.id}>
+          <div className="section-label">{item.label} <span className="muted">· <code>••••{item.last4}</code> · {channels.length} account{channels.length === 1 ? "" : "s"}</span></div>
+          {channels.length === 0
+            ? <Card><Empty icon="plus" title="No accounts on this key yet">Connect an account in Buffer, then press “Refresh accounts”. An account another of your keys already reaches is listed under that key.</Empty></Card>
+            : channels.map(channel => <ChannelCard key={channel.id} channel={channel} upNext={status.up_next === channel.id} onSave={(changes, done) => run(() => buffer.updateChannel(channel.id, changes), done)}/>)}
+        </section>)}
       </>}
     </div>
   </>;

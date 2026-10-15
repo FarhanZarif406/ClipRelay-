@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.integrations import youtube
 from app.integrations.youtube import VideoMeta
-from app.models import ActivityLog, BufferAccount, BufferChannel, Channel, Job, JobStatus, User, Video, utcnow
+from app.models import ActivityLog, BufferChannel, BufferKey, Channel, Job, JobStatus, User, Video, utcnow
 from app.security import encrypt
 from app.services import buffer, detection, rules
 
@@ -30,8 +30,10 @@ def youtube_pages(monkeypatch):
 
 def account(db, user_id: int, name: str) -> BufferChannel:
     """A member's Buffer key and one account connected there."""
-    db.add(BufferAccount(user_id=user_id, api_key_enc=encrypt(f"key-of-{name}-0123456789")))
-    row = BufferChannel(user_id=user_id, mode="shorts", buffer_id=f"ch-{name}", name=name, service="tiktok", enabled=True, daily_limit=3, times=["09:00"])
+    key = BufferKey(user_id=user_id, label="Key 1", api_key_enc=encrypt(f"key-of-{name}-0123456789"), saved_at=utcnow())
+    db.add(key)
+    db.flush()
+    row = BufferChannel(user_id=user_id, key_id=key.id, mode="shorts", buffer_id=f"ch-{name}", name=name, service="tiktok", enabled=True, daily_limit=3, times=["09:00"])
     db.add(row)
     db.commit()
     return row
@@ -128,7 +130,7 @@ def test_members_have_their_own_buffer_accounts(client, auth, member_auth, db, y
     db.commit()
     assert buffer.choose(db, job) == (None, buffer.NO_ACCOUNT)  # it waits
     # Removing your key removes only your own accounts.
-    assert client.delete("/api/buffer/key", headers=member_auth).json()["channels"] == [] and names(auth) == ["alpha_tt"]
+    assert client.delete(f"/api/buffer/keys/{acc_b.key_id}", headers=member_auth).json()["channels"] == [] and names(auth) == ["alpha_tt"]
 
 
 def test_members_have_their_own_rules(client, auth, member_auth, db, youtube_pages):

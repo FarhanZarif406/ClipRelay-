@@ -106,6 +106,29 @@ function Diagnosis({ url, current, onUse }: { url: string; current: string; onUs
 }
 
 /** Integrations → Video Source: the downloader (yt-dlp), its cookies file, proxy, player client, test and diagnosis. */
+/**
+ * Downloads run in the background worker, not in the server that answers this page, so the test above can pass
+ * while nothing downloads. This says whether the worker runs, and whether it sees what the page sees.
+ */
+function WorkerNote({ info }: { info: SourceInfo }) {
+  const worker = info.worker;
+  const seen = worker.last_seen ? new Date(worker.last_seen).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : null;
+  if (!worker.alive) return <div className="form-error worker-note">
+    <b>The background worker is not running{seen ? ` (last seen ${seen})` : " — it has never checked in"}.</b> New videos are detected but nothing is downloaded or edited until it runs. On the server, start the <code>worker</code> and <code>beat</code> services (<code>docker compose up -d worker beat</code>) and check their logs (<code>docker compose logs worker</code>). On a host that runs only one container, set <code>INLINE_WORKER=true</code> instead.
+  </div>;
+  const problems = [
+    !worker.js_runtime && "it has no JavaScript runtime (yt-dlp needs Deno 2.3+ or Node.js 22+)",
+    worker.solver === false && "the yt-dlp-ejs solver is not installed",
+    info.cookies && worker.cookies === false && "it cannot see the cookies file uploaded here (the /data volume is not shared with it)",
+    info.options.proxy_set && worker.proxy === false && "it does not see the proxy",
+    worker.ytdlp && info.version && worker.ytdlp !== info.version && `it runs yt-dlp ${worker.ytdlp}, this server ${info.version}`,
+  ].filter(Boolean);
+  return <div className={problems.length ? "form-note warn worker-note" : "form-note worker-note"}>
+    <b>Background worker: running</b>{worker.inline ? " (inside the server)" : worker.host ? ` (${worker.host})` : ""} · yt-dlp {worker.ytdlp ?? "—"} · JavaScript runtime: {worker.js_runtime ?? "none"} · cookies file: {worker.cookies ? "seen" : "none"}{seen ? ` · checked in ${seen}` : ""}.
+    {problems.length > 0 && <> <b>But {problems.join("; ")}.</b> Downloads may fail even though the test here works.</>}
+  </div>;
+}
+
 export function VideoSource() {
   const queryClient = useQueryClient();
   const { data: info } = useQuery({ queryKey: ["source"], queryFn: source.info, refetchInterval: 30_000 });
@@ -162,6 +185,7 @@ export function VideoSource() {
     <input className="source-url" value={url} placeholder="Paste a YouTube video URL to test the downloader" aria-label="Video URL to test" onChange={event => setUrl(event.target.value)}/>
     <Diagnosis url={url} current={info?.options.player_client ?? ""} onUse={client => save.mutate({ player_client: client })}/>
 
+    {info && <WorkerNote info={info}/>}
     <div className="source-metrics">
       <Metric label="Clips made, last 24h" value={String(info?.stats.completed ?? 0)}/>
       <Metric label="Failed downloads" value={String(info?.stats.failed_downloads ?? 0)} danger={!!info?.stats.failed_downloads}/>

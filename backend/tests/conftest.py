@@ -29,7 +29,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.integrations import http as http_module  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import BufferAccount, BufferChannel, PromptTemplate, utcnow  # noqa: E402
+from app.models import BufferChannel, BufferKey, PromptTemplate, utcnow  # noqa: E402
 from app.security import encrypt  # noqa: E402
 from app.services import credentials, dispatch, llm_registry, media  # noqa: E402
 from app.services.prompts import DEFAULT_TEMPLATE  # noqa: E402
@@ -77,8 +77,10 @@ def template(db):
 @pytest.fixture
 def buffer_account(db):
     """The first user's Buffer key and one TikTok account connected there, switched on in the Shorts workspace."""
-    db.add(BufferAccount(user_id=1, api_key_enc=encrypt("buf-key-0123456789abcdefghij")))
-    account = BufferChannel(user_id=1, mode="shorts", buffer_id="ch-northbound", name="northbound", service="tiktok", enabled=True, daily_limit=3, times=["09:00", "18:00"])
+    key = BufferKey(user_id=1, label="Key 1", api_key_enc=encrypt("buf-key-0123456789abcdefghij"), saved_at=utcnow())
+    db.add(key)
+    db.flush()
+    account = BufferChannel(user_id=1, key_id=key.id, mode="shorts", buffer_id="ch-northbound", name="northbound", service="tiktok", enabled=True, daily_limit=3, times=["09:00", "18:00"])
     db.add(account)
     db.commit()
     return account

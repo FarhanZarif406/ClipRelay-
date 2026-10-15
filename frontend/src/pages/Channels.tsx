@@ -35,7 +35,7 @@ function AddChannelForm() {
     <input autoFocus value={query} className={error ? "invalid" : ""} onChange={e => { setQuery(e.target.value); setError(null); }} placeholder="Paste a YouTube channel URL or @handle" aria-label="YouTube channel URL or handle" aria-invalid={!!error}/>
     <Button type="submit" variant="primary" disabled={add.isPending || !query.trim()}>{add.isPending ? "Adding…" : "Add channel"}</Button>
   </form>
-    {error ? <p role="alert" className="add-channel-note bad">{error}</p> : <p className="add-channel-note">{PODCASTS ? "Only podcasts uploaded after you add a channel are cut into clips." : "Only uploads made after you add a channel are republished."} Each video goes to the Buffer account whose next free time comes first.</p>}
+    {error ? <p role="alert" className="add-channel-note bad">{error}</p> : <p className="add-channel-note">{PODCASTS ? "Only podcasts uploaded after you add a channel are cut into clips." : "Only uploads made after you add a channel are republished."} Videos go to your Buffer accounts in turn, so every account gets them.</p>}
   </Card>;
 }
 

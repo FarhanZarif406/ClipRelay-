@@ -17,7 +17,7 @@ export default function ReviewQueue() {
   const toast = useToast();
   const onError = useErrorToast();
   const list = useQuery({ queryKey: ["jobs", "review"], queryFn: () => jobs.list({ status: "review", order: "oldest", page_size: 100 }), refetchInterval: 15_000 });
-  // The Buffer accounts a clip can go to; "" is the one whose next free time comes first.
+  // The Buffer accounts a clip can go to; "" is the account whose turn it is.
   const { connected, channels: bufferChannels } = useBufferChannels();
   const accountOf = (j: Job) => String(j.buffer_channel?.id ?? "");
   const media = useQuery({ queryKey: ["media-token"], queryFn: auth.mediaToken, staleTime: 60 * 60_000 });
@@ -118,7 +118,7 @@ export default function ReviewQueue() {
                 <span>Clip</span><div>{timecode(job.video.clip.start)} – {timecode(job.video.clip.end)} · “{job.video.original_title}”</div></>
               : <><span>Original title</span><div style={{ whiteSpace: "normal" }}>{job.video.original_title}</div></>}
             <span>YouTube</span><div>{job.video.permalink ? <a href={job.video.permalink} target="_blank" rel="noreferrer">{job.video.clip ? "Open the podcast at this moment" : "Open the original video"}</a> : "—"} · {duration(job.video.duration_sec)}</div>
-            <span>Post to</span><div><select className="cell-select" value={accountId} onChange={e => setAccountId(e.target.value)}><option value="">Auto (next free time)</option>{bufferChannels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+            <span>Post to</span><div><select className="cell-select" value={accountId} onChange={e => setAccountId(e.target.value)}><option value="">Auto (next in turn)</option>{bufferChannels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           </div>
           {job.caption_fallback && <div className="fallback-note"><strong>Caption fallback.</strong> The AI model failed for this video, so the original YouTube title and the default hashtags are shown. Edit them before publishing.</div>}
           <div className="field"><label>Caption</label><textarea ref={captionRef} value={caption} maxLength={2200} onChange={e => setCaption(e.target.value)}/><small>{caption.length} / 2200</small></div>

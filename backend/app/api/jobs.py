@@ -9,7 +9,7 @@ from app.api.deps import DB, CurrentUser, Workspace
 from app.models import BufferChannel, Job, JobStatus, Mode, User, Video
 from app.schemas import JobUpdate, RejectIn
 from app.security import decode_token
-from app.services import activity, detection, dispatch, pipeline, serializers
+from app.services import activity, detection, dispatch, limits, pipeline, serializers
 from app.services.storage import get_storage
 
 router = APIRouter(tags=["jobs"])
@@ -195,13 +195,25 @@ def cancel(job_id: int, db: DB, user: CurrentUser):
 
 
 @router.get("/videos")
-def list_videos(db: DB, user: CurrentUser, status: str | None = None, channel_id: int | None = None, limit: int = Query(20, ge=1, le=500), mode: Workspace = Mode.SHORTS):
+def list_videos(db: DB, user: CurrentUser, status: str | None = None, channel_id: int | None = None, limit: int = Query(20, ge=1, le=500), mode: Workspace = Mode.SHORTS,
+                kind: str | None = Query(None, pattern="^(filtered|limit)$")):
+    """`kind` splits the skipped videos: `limit` = fine to use but over a daily limit (Not Processed), `filtered` = the rest (Skipped)."""
     stmt = select(Video).where(Video.mode == mode, Video.user_id == user.id, Video.parent_id.is_(None))  # uploads, not the clips cut from them
     if status:
         stmt = stmt.where(Video.status == status)
+    if kind == "limit":
+        stmt = stmt.where(Video.skip_reason.in_(limits.LIMIT_REASONS))
+    elif kind == "filtered":
+        stmt = stmt.where(or_(Video.skip_reason.is_(None), Video.skip_reason.not_in(limits.LIMIT_REASONS)))
     if channel_id:
         stmt = stmt.where(Video.channel_id == channel_id)
     return [serializers.video(v) for v in db.scalars(stmt.order_by(Video.id.desc()).limit(limit)).unique()]
+
+
+@router.get("/limits/daily")
+def daily_limit(db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
+    """Today's daily limit for this workspace, and how much of it is used."""
+    return limits.status(db, user.id, mode)
 
 
 @router.post("/videos/{video_id}/process")

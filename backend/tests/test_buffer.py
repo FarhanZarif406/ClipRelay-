@@ -12,6 +12,7 @@ from app.services import buffer, pipeline, push, slots
 from tests.test_pipeline import _make_job  # noqa: E402
 
 KEY = "buf_test_key_0123456789abcdefghij"
+KEY2 = "buf_second_key_0123456789abcdefgh"
 UTC = timezone.utc
 
 
@@ -25,20 +26,25 @@ class FakeBuffer:
     def __init__(self):
         self.channels = [{"id": "ch-tiktok", "name": "simran", "displayName": "simran_sing0", "service": "tiktok", "avatar": None},
                          {"id": "ch-insta", "name": "insta", "displayName": None, "service": "instagram", "avatar": None}]
+        self.second = [{"id": "ch-tiktok-2", "name": "two", "displayName": "second_tt", "service": "tiktok", "avatar": None},
+                       {"id": "ch-tiktok", "name": "simran", "displayName": "simran_sing0", "service": "tiktok", "avatar": None}]  # reached by both keys
         self.posts: list[str] = []
+        self.used: list[str] = []  # the key each post was made with
         self.post_state = {"status": "scheduled"}
         self.refuse: str | None = None
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        if request.headers["authorization"] != f"Bearer {KEY}":
+        key = request.headers["authorization"].removeprefix("Bearer ")
+        if key not in (KEY, KEY2):
             return httpx.Response(401, json={"errors": [{"message": "unauthorized"}]})
         query = json.loads(request.content)["query"]
         if query.startswith("query Organizations"):
             return httpx.Response(200, json={"data": {"account": {"organizations": [{"id": "org-1", "name": "Mine"}]}}})
         if query.startswith("query Channels"):
-            return httpx.Response(200, json={"data": {"channels": self.channels}})
+            return httpx.Response(200, json={"data": {"channels": self.channels if key == KEY else self.second}})
         if query.startswith("mutation CreatePost"):
             self.posts.append(query)
+            self.used.append(key)
             if self.refuse:
                 return httpx.Response(200, json={"data": {"createPost": {"message": self.refuse}}})
             due = query.split('dueAt: "')[1].split('"')[0]
@@ -71,21 +77,21 @@ def test_next_slot():
 
 def test_buffer_key_and_accounts(client, auth, member_auth, db, fake):
     assert client.get("/api/buffer", headers=auth).json()["connected"] is False
-    assert client.put("/api/buffer/key", headers=auth, json={"api_key": "has spaces in it, not a key"}).status_code == 400
-    r = client.put("/api/buffer/key", headers=auth, json={"api_key": "wrong_key_0123456789abcdefghij"})
+    assert client.post("/api/buffer/keys", headers=auth, json={"api_key": "has spaces in it, not a key"}).status_code == 400
+    r = client.post("/api/buffer/keys", headers=auth, json={"api_key": "wrong_key_0123456789abcdefghij"})
     assert r.status_code == 400 and "refused the API key" in r.json()["detail"]
     assert client.get("/api/buffer", headers=auth).json()["connected"] is False  # a refused key is not kept
 
-    saved = client.put("/api/buffer/key", headers=auth, json={"api_key": KEY})
+    saved = client.post("/api/buffer/keys", headers=auth, json={"api_key": KEY})
     status = saved.json()
-    assert saved.status_code == 200 and KEY not in saved.text and status["last4"] == KEY[-4:]
+    assert saved.status_code == 200 and KEY not in saved.text and [(k["label"], k["last4"], k["accounts"]) for k in status["keys"]] == [("Key 1", KEY[-4:], 2)]
     names = {c["name"]: c for c in status["channels"]}
     assert set(names) == {"simran_sing0", "insta"}
     assert names["simran_sing0"]["enabled"] is True and names["insta"]["enabled"] is False  # only TikTok is on from the start
     assert names["simran_sing0"]["times"] == ["09:00", "13:00", "18:00"] and names["simran_sing0"]["daily_limit"] == 3 and names["simran_sing0"]["next_slot"]
     # Each workspace has its own rows, and another member sees none of it.
     assert len(client.get("/api/buffer?mode=podcasts", headers=auth).json()["channels"]) == 2
-    assert client.get("/api/buffer", headers=member_auth).json() | {"time_zone": ""} == {"connected": False, "last4": "", "saved_at": None, "synced_at": None, "error": None, "public_url": False, "time_zone": "", "channels": []}
+    assert client.get("/api/buffer", headers=member_auth).json() | {"time_zone": ""} == {"connected": False, "max_keys": 10, "keys": [], "public_url": False, "time_zone": "", "up_next": None, "channels": []}
     channel_id = names["simran_sing0"]["id"]
     assert client.patch(f"/api/buffer/channels/{channel_id}", headers=member_auth, json={"enabled": False}).status_code == 404
 
@@ -101,12 +107,14 @@ def test_buffer_key_and_accounts(client, auth, member_auth, db, fake):
     # An account disconnected in Buffer is dropped; the key can be removed.
     fake.channels = fake.channels[:1]
     assert [c["name"] for c in client.post("/api/buffer/refresh", headers=auth).json()["channels"]] == ["simran_sing0"]
-    assert client.delete("/api/buffer/key", headers=auth).json() | {"time_zone": "", "public_url": False} == {"connected": False, "last4": "", "saved_at": None, "synced_at": None, "error": None, "public_url": False, "time_zone": "", "channels": []}
+    key_id = status["keys"][0]["id"]
+    assert client.delete(f"/api/buffer/keys/{key_id}", headers=member_auth).status_code == 404
+    assert client.delete(f"/api/buffer/keys/{key_id}", headers=auth).json() | {"time_zone": "", "public_url": False} == {"connected": False, "max_keys": 10, "keys": [], "public_url": False, "time_zone": "", "up_next": None, "channels": []}
     assert db.scalar(select(BufferChannel)) is None
 
 
 def _connect(client, auth, db, monkeypatch):
-    client.put("/api/buffer/key", headers=auth, json={"api_key": KEY})
+    client.post("/api/buffer/keys", headers=auth, json={"api_key": KEY})
     monkeypatch.setattr(push, "base_url", lambda: "https://clips.example.com")
     return db.scalar(select(BufferChannel).where(BufferChannel.buffer_id == "ch-tiktok", BufferChannel.mode == Mode.SHORTS))
 
@@ -179,7 +187,7 @@ def test_a_clip_goes_out_through_buffer(client, auth, db, fake, monkeypatch):
 
 def test_a_clip_waits_when_buffer_cannot_take_it(client, auth, db, fake, monkeypatch):
     job = _make_job(db, status=JobStatus.READY)
-    client.put("/api/buffer/key", headers=auth, json={"api_key": KEY})
+    client.post("/api/buffer/keys", headers=auth, json={"api_key": KEY})
     assert pipeline.upload_job(db, job.id) == "deferred" and job.error == buffer.NO_PUBLIC_URL and job.status == JobStatus.READY  # http://api.test is not public
     channel = _connect(client, auth, db, monkeypatch)
 
@@ -205,3 +213,47 @@ def test_a_clip_waits_when_buffer_cannot_take_it(client, auth, db, fake, monkeyp
     assert pipeline.upload_job(db, job.id) == "failed" and job.status == JobStatus.FAILED and "Video is too long" in job.error
     assert db.scalars(select(BufferLog.state)).all() == ["failed"] * 3
 
+
+
+def test_several_keys_and_accounts_take_turns(client, auth, db, fake, monkeypatch):
+    first = client.post("/api/buffer/keys", headers=auth, json={"api_key": KEY}).json()
+    assert client.post("/api/buffer/keys", headers=auth, json={"api_key": KEY}).json()["detail"] == "This key is already saved."
+    both = client.post("/api/buffer/keys", headers=auth, json={"api_key": KEY2, "label": "Brand page"}).json()
+    assert [(k["label"], k["accounts"]) for k in both["keys"]] == [("Key 1", 2), ("Brand page", 1)]  # simran is reached by both keys, listed once
+    assert {(c["name"], c["key_label"]) for c in both["channels"]} == {("simran_sing0", "Key 1"), ("insta", "Key 1"), ("second_tt", "Brand page")}
+    assert client.post("/api/buffer/keys", headers=auth, json={"api_key": "buf_third_key_0123456789abcdefg"}).status_code == 400  # Buffer refuses it
+    assert client.patch(f"/api/buffer/keys/{both['keys'][1]['id']}", headers=auth, json={"label": "Key 1"}).status_code == 400  # names stay apart
+    monkeypatch.setattr(buffer, "MAX_KEYS", 2)
+    assert "Up to 2" in client.post("/api/buffer/keys", headers=auth, json={"api_key": "buf_third_key_0123456789abcdefg"}).json()["detail"]
+    monkeypatch.setattr(push, "base_url", lambda: "https://clips.example.com")
+    for c in both["channels"]:  # every account on, with the same times, so only the turns decide
+        client.patch(f"/api/buffer/channels/{c['id']}", headers=auth, json={"enabled": True, "times": ["09:00", "13:00", "18:00"], "daily_limit": 10})
+    db.expire_all()
+
+    # Six clips go round the three accounts twice, each with the key that reaches it.
+    picked = []
+    for n in range(6):
+        job = _make_job(db, status=JobStatus.READY, youtube_video_id=f"turn{n}")
+        assert pipeline.upload_job(db, job.id) == "scheduled"
+        db.commit()
+        db.refresh(job)
+        picked.append(job.buffer_channel.name)
+    assert picked[:3] == ["insta", "simran_sing0", "second_tt"] and picked[3:] == picked[:3]
+    assert fake.used == [KEY, KEY, KEY2] * 2
+    insta = db.scalar(select(BufferChannel).where(BufferChannel.name == "insta", BufferChannel.mode == Mode.SHORTS))
+    assert client.get("/api/buffer", headers=auth).json()["up_next"] == insta.id
+
+    # A switched-off account is passed over; the others keep taking turns.
+    client.patch(f"/api/buffer/channels/{insta.id}", headers=auth, json={"enabled": False})
+    db.expire_all()
+    job = _make_job(db, status=JobStatus.READY, youtube_video_id="turn6")
+    pipeline.upload_job(db, job.id)
+    db.commit()
+    db.refresh(job)
+    assert job.buffer_channel.name == "simran_sing0"
+    db.commit()
+
+    # Removing Key 1 hands simran to the other key that reaches it; insta goes with the key.
+    removed = client.delete(f"/api/buffer/keys/{first['keys'][0]['id']}", headers=auth).json()
+    assert [k["label"] for k in removed["keys"]] == ["Brand page"]
+    assert {(c["name"], c["key_label"]) for c in removed["channels"]} == {("simran_sing0", "Brand page"), ("second_tt", "Brand page")}

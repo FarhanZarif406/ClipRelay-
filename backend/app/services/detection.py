@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.integrations import youtube
 from app.integrations.http import ApiError
 from app.models import Channel, Job, Mode, SkipReason, Video, VideoStatus, utcnow
-from app.services import activity, pipeline, push, rules
+from app.services import activity, limits, pipeline, push, rules
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +47,8 @@ def _check(db: Session, video: Video, channel: Channel) -> tuple[str, str] | Non
         shortest = values["min_source_duration_seconds"]
         if duration < shortest:
             return SkipReason.NOT_PODCAST, f"Too short for a podcast: {duration:.0f}s, under the {shortest}s minimum"
+        if over := limits.check(db, channel.user_id, channel.mode):
+            return over
         if taken >= values["videos_per_channel_per_day"]:
             return SkipReason.CHANNEL_CAP, f"{channel.display_name} already has {taken} podcasts today (limit {values['videos_per_channel_per_day']})"
         return None
@@ -56,7 +58,9 @@ def _check(db: Session, video: Video, channel: Channel) -> tuple[str, str] | Non
         return SkipReason.LONG_FORM, f"Long-form video: {duration:.0f}s, over the {limit}s short-form limit"
     if duration < values["min_duration_seconds"]:
         return SkipReason.TOO_SHORT, f"Duration {duration:.0f}s is under the {values['min_duration_seconds']}s minimum"
-
+    # A usable video over a limit: it is recorded under Not Processed, not edited.
+    if over := limits.check(db, channel.user_id, channel.mode):
+        return over
     if taken >= values["videos_per_channel_per_day"]:
         return SkipReason.CHANNEL_CAP, f"{channel.display_name} already has {taken} videos today (limit {values['videos_per_channel_per_day']})"
     return None
@@ -111,7 +115,7 @@ def discover(db: Session, channel: Channel, video_id: str, *, meta: youtube.Vide
 
 
 def process_anyway(db: Session, video: Video) -> Job:
-    """Skipped screen: put a held video into the pipeline by hand, bypassing the duration and cap checks."""
+    """Skipped and Not Processed screens: put a held video into the pipeline by hand, bypassing the duration checks and the limits."""
     if video.status != VideoStatus.SKIPPED:
         raise ValueError("Only skipped videos can be processed by hand")
     video.status = VideoStatus.ACCEPTED

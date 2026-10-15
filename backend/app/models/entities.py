@@ -52,6 +52,7 @@ class SkipReason:
     TOO_SHORT = "too_short"
     NOT_PODCAST = "not_a_podcast"
     CHANNEL_CAP = "skipped_channel_cap"
+    DAILY_LIMIT = "skipped_daily_limit"  # the workspace's daily limit was used up
     ACCOUNT_CAP = "skipped_account_cap"
 
 
@@ -353,11 +354,14 @@ class ActivityLog(Base):
     payload: Mapped[dict | None] = mapped_column(JSONType)
 
 
-class BufferAccount(Base):
-    """A member's own Buffer API key (Fernet-encrypted). Having one means their clips go out through Buffer."""
+class BufferKey(Base):
+    """One of a member's Buffer API keys (Fernet-encrypted), up to ten. Having one means their clips go out through Buffer."""
 
-    __tablename__ = "buffer_accounts"
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    __tablename__ = "buffer_keys"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    label: Mapped[str] = mapped_column(String(60))
+    position: Mapped[int] = mapped_column(Integer, default=1)  # the order the keys are listed in
     api_key_enc: Mapped[str] = mapped_column(Text)
     organization_id: Mapped[str | None] = mapped_column(String(64))
     saved_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
@@ -372,6 +376,7 @@ class BufferChannel(Base):
     __table_args__ = (UniqueConstraint("user_id", "mode", "buffer_id", name="uq_buffer_channel_user_mode"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    key_id: Mapped[int | None] = mapped_column(ForeignKey("buffer_keys.id", ondelete="CASCADE"), index=True)  # the key it was read with
     mode: Mapped[str] = mapped_column(String(16), default=Mode.SHORTS, server_default=Mode.SHORTS)
     buffer_id: Mapped[str] = mapped_column(String(64))  # Buffer's own channel ID
     name: Mapped[str] = mapped_column(String(255))
@@ -382,7 +387,9 @@ class BufferChannel(Base):
     times: Mapped[list] = mapped_column(JSONType, default=list)  # "HH:MM", on the account's clock
     time_zone: Mapped[str | None] = mapped_column(String(60))  # the account's own; NULL uses the member's
     start_date: Mapped[str | None] = mapped_column(String(10))  # first day a clip may go out; NULL starts at once
+    last_picked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())  # when it last got a clip: accounts take turns
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    key: Mapped["BufferKey | None"] = relationship(lazy="joined")
 
 
 class BufferLog(Base):

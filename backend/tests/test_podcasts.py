@@ -7,7 +7,7 @@ from sqlalchemy import select
 from tests.conftest import ME
 from app.integrations import youtube
 from app.integrations.youtube import VideoMeta
-from app.models import BufferAccount, BufferChannel, Channel, Job, JobStatus, Mode, Video, VideoStatus, utcnow
+from app.models import BufferChannel, BufferKey, Channel, Job, JobStatus, Mode, Video, VideoStatus, utcnow
 from app.security import encrypt
 from app.services import buffer, detection, dispatch, pipeline, podcasts, rules
 from tests.helpers import ANTHROPIC, claude
@@ -20,9 +20,12 @@ SEGMENTS = [(float(t), f"line at {t}") for t in range(0, 1200, 5)]
 @pytest.fixture
 def podcast_account(db):
     """A Buffer account switched on in the Podcasts workspace only."""
-    if not db.get(BufferAccount, 1):
-        db.add(BufferAccount(user_id=1, api_key_enc=encrypt("buf-key-0123456789abcdefghij")))
-    account = BufferChannel(user_id=1, mode=Mode.PODCASTS, buffer_id="ch-podclips", name="podclips", service="tiktok", enabled=True, daily_limit=3, times=["09:00"])
+    key = db.scalar(select(BufferKey).where(BufferKey.user_id == 1))
+    if not key:
+        key = BufferKey(user_id=1, label="Key 1", api_key_enc=encrypt("buf-key-0123456789abcdefghij"), saved_at=utcnow())
+        db.add(key)
+        db.flush()
+    account = BufferChannel(user_id=1, key_id=key.id, mode=Mode.PODCASTS, buffer_id="ch-podclips", name="podclips", service="tiktok", enabled=True, daily_limit=3, times=["09:00"])
     db.add(account)
     db.commit()
     return account

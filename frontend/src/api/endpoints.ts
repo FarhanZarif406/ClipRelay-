@@ -2,7 +2,7 @@ import { ApiError, api, apiUrl, getToken } from "./client";
 import type { Look } from "@/lib/look";
 import type {
   ActivityLog, Channel, ChannelRules, CredentialCard, CredentialResult, DailyReport, LLMProvider, LLMProviderList, LLMProviderName, Integration, Job, Nav, NotificationSettings, Page, Prompt,
-  PipelineStatus, EditingState, Library, Preset, TestRender, BufferChannelChanges, BufferChannelStatus, BufferStatus, PushInfo, YouTubeApiInfo, YouTubeApiTest, SourceDiagnosis, SourceInfo, CookiesInfo, RuleChange, RuleDef, RuleValue, RuleValues, Summary, User, Video,
+  PipelineStatus, DailyLimit, EditingState, Library, Preset, TestRender, BufferChannelChanges, BufferChannelStatus, BufferStatus, PushInfo, YouTubeApiInfo, YouTubeApiTest, SourceDiagnosis, SourceInfo, CookiesInfo, RuleChange, RuleDef, RuleValue, RuleValues, Summary, User, Video,
 } from "./types";
 
 export const auth = {
@@ -51,7 +51,9 @@ export const jobs = {
   resume: (id: number) => api<Job>(`/jobs/${id}/resume`, { method: "POST" }),
   reject: (id: number, reason: string) => api<Job>(`/jobs/${id}/reject`, { method: "POST", body: { reason } }),
   processAnyway: (videoId: number) => api<Job>(`/videos/${videoId}/process`, { method: "POST" }),
-  videos: (status?: string, limit = 20, channel_id?: number) => api<Video[]>("/videos", { query: { status, limit, channel_id } }),
+  /** `kind` splits the skipped: "limit" = usable but over a daily limit (Not Processed), "filtered" = the rest (Skipped). */
+  videos: (status?: string, limit = 20, channel_id?: number, kind?: "limit" | "filtered") => api<Video[]>("/videos", { query: { status, limit, channel_id, kind } }),
+  dailyLimit: () => api<DailyLimit>("/limits/daily"),
 };
 
 export const channels = {
@@ -148,12 +150,14 @@ export const push = {
   retryFailed: () => api<PushInfo>("/integrations/push/retry-failed", { method: "POST" }),
 };
 
-/** Buffer Settings: the member's own Buffer key and the accounts connected there. */
+/** Buffer Settings: the member's own Buffer keys (up to ten) and the accounts connected there. */
 export const buffer = {
   info: () => api<BufferStatus>("/buffer"),
   /** The key is checked with Buffer first, and refused if Buffer does not accept it. */
-  saveKey: (apiKey: string) => api<BufferStatus>("/buffer/key", { method: "PUT", body: { api_key: apiKey } }),
-  removeKey: () => api<BufferStatus>("/buffer/key", { method: "DELETE" }),
+  addKey: (apiKey: string, label?: string) => api<BufferStatus>("/buffer/keys", { method: "POST", body: { api_key: apiKey, label: label || null } }),
+  /** Rename a key, or replace it (a new key is checked with Buffer first). */
+  updateKey: (id: number, changes: { api_key?: string; label?: string }) => api<BufferStatus>(`/buffer/keys/${id}`, { method: "PATCH", body: changes }),
+  removeKey: (id: number) => api<BufferStatus>(`/buffer/keys/${id}`, { method: "DELETE" }),
   refresh: () => api<BufferStatus>("/buffer/refresh", { method: "POST" }),
   updateChannel: (id: number, changes: BufferChannelChanges) => api<BufferStatus>(`/buffer/channels/${id}`, { method: "PATCH", body: changes }),
   channelStatus: (id: number) => api<BufferChannelStatus>(`/buffer/channels/${id}/status`),

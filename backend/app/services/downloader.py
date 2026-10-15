@@ -339,6 +339,7 @@ def try_each(attempt, *, stop_on=()):
     and `detail` lists each attempt. Exceptions listed in `stop_on` are not failures and pass straight through.
     """
     global _all_failed_at
+    use_shared_packages()
     import yt_dlp
 
     ways = strategies(with_cookies=has_cookies(), client=player_client(), remembered=remembered())
@@ -378,6 +379,7 @@ def reset_state() -> None:
 # ---------------------------------------------------------------- facts, test, update
 
 def version() -> str:
+    use_shared_packages()
     try:
         import yt_dlp
 
@@ -403,6 +405,7 @@ def info() -> dict:
         "stats": {"completed": completed, "failed_downloads": failed},
         "working_route": working_route(),
         "js_runtime": js_runtime()["name"],
+        "worker": worker_status(),
     }
 
 
@@ -447,23 +450,145 @@ def test(url: str) -> dict:
     return {"ok": True, "message": f"Reachable: “{data.get('title')}” ({round(data.get('duration') or 0)}s, {len(data.get('formats') or [])} formats)" + (f", {route}." if route else ".")}
 
 
-def update() -> dict:
-    """Upgrade yt-dlp and load the new version without a restart."""
-    before = version()
+# YouTube changes often and an old yt-dlp stops working, so yt-dlp is updated — but the API and the workers
+# are separate containers, and a container forgets what was installed in it when it restarts. Updates are
+# therefore installed into a folder next to the cookies file (on the volume they all share), and every process
+# loads yt-dlp from there whenever that copy is newer than the one in its image.
+_PURGE = ("yt_dlp", "yt_dlp_ejs")
+_shared_loaded: float | None = None
+_image_version: str | None = None
+
+
+def shared_packages() -> str:
+    return os.path.join(os.path.dirname(cookies_path()), "python-packages")
+
+
+def _version_tuple(text: str | None) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", text or ""))
+
+
+def _shared_version() -> str | None:
     try:
+        with open(os.path.join(shared_packages(), "yt_dlp", "version.py"), encoding="utf-8") as fh:
+            found = re.search(r"__version__\s*=\s*['\"]([^'\"]+)", fh.read())
+    except OSError:
+        return None
+    return found.group(1) if found else None
+
+
+def image_version() -> str | None:
+    """The yt-dlp that came with the image, before any shared update is put in front of it."""
+    global _image_version
+    if _image_version is None:
+        from importlib import metadata
+
+        folder = shared_packages()
+        try:
+            dist = next((d for d in metadata.distributions(name="yt-dlp") if not str(d.locate_file("")).startswith(folder)), None)
+            _image_version = dist.version if dist else ""
+        except Exception:  # noqa: BLE001 — an unreadable install only means no comparison
+            _image_version = ""
+    return _image_version or None
+
+
+def use_shared_packages() -> None:
+    """Load yt-dlp from the shared folder when it holds a newer one than the image, also after an update made elsewhere."""
+    global _shared_loaded
+    folder = shared_packages()
+    marker = os.path.join(folder, ".updated")
+    try:
+        stamp = os.path.getmtime(marker)
+    except OSError:
+        return
+    if stamp == _shared_loaded:
+        return
+    image = image_version()  # read before the folder goes in front, or the folder would report itself
+    _shared_loaded = stamp
+    if _version_tuple(_shared_version()) <= _version_tuple(image):
+        if folder in sys.path:
+            sys.path.remove(folder)  # a newer image brought a newer yt-dlp than the old update
+        return
+    if folder in sys.path:
+        sys.path.remove(folder)
+    sys.path.insert(0, folder)
+    for name in [name for name in sys.modules if name.split(".")[0] in _PURGE]:
+        del sys.modules[name]  # the next import reads the newer copy
+
+
+def update() -> dict:
+    """Upgrade yt-dlp (and its JavaScript challenge solver) for every process, without a restart."""
+    use_shared_packages()
+    before = version()
+    folder = shared_packages()
+    try:
+        os.makedirs(folder, exist_ok=True)
+        # Only these two packages: yt-dlp's other needs rarely change, and a second copy of them could shadow the app's own.
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "--disable-pip-version-check", "yt-dlp[default]"],
+            [sys.executable, "-m", "pip", "install", "--upgrade", "--no-deps", "--disable-pip-version-check", "--target", folder, "yt-dlp", "yt-dlp-ejs"],
             capture_output=True, text=True, errors="replace", timeout=600,
         )
+    except OSError as exc:
+        return {"ok": False, "message": f"The update could not start: {exc}"}
     except subprocess.TimeoutExpired:
         return {"ok": False, "message": "The update took longer than 10 minutes and was stopped."}
     if result.returncode != 0:
-        lines = [line for line in (result.stderr or result.stdout).splitlines() if line.strip()]
+        lines = [line for line in (result.stderr or result.stdout).splitlines() if line.strip() and "WARNING" not in line]
         return {"ok": False, "message": f"The update failed: {lines[-1][:300] if lines else 'pip gave no reason'}"}
-    for name in [name for name in sys.modules if name == "yt_dlp" or name.startswith("yt_dlp.")]:
-        del sys.modules[name]  # the next download imports the freshly installed version
+    with open(os.path.join(folder, ".updated"), "w", encoding="utf-8") as fh:
+        fh.write(_shared_version() or "")  # tells the other processes to load the new copy
+    use_shared_packages()
     after = version()
     return {"ok": True, "message": f"Updated from {before} to {after}." if after != before else f"yt-dlp is up to date ({after})."}
+
+
+# ---------------------------------------------------------------- the worker's own view
+# Downloads run in the worker, not in the API that serves this page. The worker says every tick that it is
+# alive and what it sees, so a stopped worker, or one without the cookies or a JavaScript runtime, shows.
+
+WORKER_KEY = "worker_heartbeat"
+WORKER_LATE = timedelta(minutes=3)
+_facts: tuple[float, dict] | None = None
+
+
+def _worker_facts() -> dict:
+    global _facts
+    if _facts is None or time.time() - _facts[0] > 600:  # finding the runtime starts a program: not on every tick
+        _facts = (time.time(), {"ytdlp": version() or None, "js_runtime": js_runtime()["name"], "solver": has_solver()})
+    return {**_facts[1], "cookies": has_cookies(), "proxy": bool(proxy())}
+
+
+def worker_beat(inline: bool) -> None:
+    use_shared_packages()
+    import socket
+
+    beat = {"at": utcnow().isoformat(), "host": socket.gethostname(), "inline": inline, **_worker_facts()}
+    db = SessionLocal()
+    try:
+        row = db.get(AppSetting, WORKER_KEY)
+        if row:
+            row.value = beat
+        else:
+            db.add(AppSetting(key=WORKER_KEY, value=beat))
+        db.commit()
+    finally:
+        db.close()
+
+
+def worker_status() -> dict:
+    """{"alive": bool, "last_seen": …, and what the worker sees}, or alive False with no facts when it was never seen."""
+    db = SessionLocal()
+    try:
+        row = db.get(AppSetting, WORKER_KEY)
+        beat = dict(row.value) if row and isinstance(row.value, dict) else None
+    finally:
+        db.close()
+    if not beat:
+        return {"alive": False, "last_seen": None}
+    try:
+        seen = datetime.fromisoformat(beat["at"])
+    except (KeyError, ValueError):
+        return {"alive": False, "last_seen": None}
+    return {**beat, "alive": utcnow() - seen < WORKER_LATE, "last_seen": seen}
 
 
 # ---------------------------------------------------------------- diagnosis

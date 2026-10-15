@@ -74,7 +74,10 @@ export const SKIP_REASON: Record<string, string> = {
   too_short: "Too short",
   skipped_channel_cap: "Channel daily cap",
   skipped_account_cap: "Account daily cap",
+  skipped_daily_limit: "Daily limit",
 };
+/** Skips of a usable video that came over a limit: these are listed under Not Processed, the rest under Skipped. */
+export const LIMIT_REASONS = ["skipped_daily_limit", "skipped_channel_cap", "skipped_account_cap"];
 
 /** 75 → "01:15", 3725 → "1:02:05". */
 export function timecode(seconds: number): string {

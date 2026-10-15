@@ -8,7 +8,7 @@ from app.api import api_router
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import PromptTemplate
-from app.services import credentials
+from app.services import credentials, downloader
 from app.services.prompts import DEFAULT_TEMPLATE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -38,6 +38,7 @@ def health():
 @app.on_event("startup")
 def start_credential_listener() -> None:
     credentials.start_listener()
+    downloader.use_shared_packages()  # a yt-dlp updated from the app (in any container) is used from the start
 
 
 @app.on_event("startup")
