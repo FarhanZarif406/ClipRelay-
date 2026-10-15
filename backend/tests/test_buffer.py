@@ -47,7 +47,7 @@ class FakeBuffer:
             self.used.append(key)
             if self.refuse:
                 return httpx.Response(200, json={"data": {"createPost": {"message": self.refuse}}})
-            due = query.split('dueAt: "')[1].split('"')[0]
+            due = query.split('dueAt: "')[1].split('"')[0] if 'dueAt: "' in query else utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z")  # shareNow: at once
             return httpx.Response(200, json={"data": {"createPost": {"post": {"id": f"post-{len(self.posts)}", "status": "scheduled", "dueAt": due}}}})
         if query.startswith("query Post"):
             return httpx.Response(200, json={"data": {"post": {"id": "post-1", **self.post_state}}})
@@ -196,8 +196,9 @@ def test_a_clip_waits_when_buffer_cannot_take_it(client, auth, db, fake, monkeyp
         db.expire_all()
         return response
 
-    change(times=[])
+    change(times=[], start_date="2099-01-01")  # no times, and not started yet: nothing can go out
     assert pipeline.upload_job(db, job.id) == "deferred" and job.error == buffer.NO_TIMES
+    change(start_date=None)
     change(times=["09:00"], enabled=False)
     assert pipeline.upload_job(db, job.id) == "deferred" and job.error == buffer.NO_ACCOUNT
     assert client.patch(f"/api/jobs/{job.id}", headers=auth, json={"buffer_channel_id": channel.id}).status_code == 400  # switched off
@@ -257,3 +258,30 @@ def test_several_keys_and_accounts_take_turns(client, auth, db, fake, monkeypatc
     removed = client.delete(f"/api/buffer/keys/{first['keys'][0]['id']}", headers=auth).json()
     assert [k["label"] for k in removed["keys"]] == ["Brand page"]
     assert {(c["name"], c["key_label"]) for c in removed["channels"]} == {("simran_sing0", "Brand page"), ("second_tt", "Brand page")}
+
+
+def test_an_account_without_times_publishes_at_once(client, auth, db, fake, monkeypatch):
+    channel = _connect(client, auth, db, monkeypatch)
+    client.patch(f"/api/buffer/channels/{channel.id}", headers=auth, json={"times": [], "daily_limit": 2})
+    db.expire_all()
+    row = next(c for c in client.get("/api/buffer", headers=auth).json()["channels"] if c["id"] == channel.id)
+    assert row["at_once"] is True and row["next_slot"]  # it can take a clip right now
+
+    first = _make_job(db, status=JobStatus.READY, youtube_video_id="now1")
+    assert pipeline.upload_job(db, first.id) == "scheduled"
+    assert "mode: shareNow" in fake.posts[-1] and 'dueAt: "' not in fake.posts[-1]
+    db.commit()
+    assert abs((first.buffer_due_at - utcnow()).total_seconds()) < 120  # counts on today's limit
+    second = _make_job(db, status=JobStatus.READY, youtube_video_id="now2")
+    assert pipeline.upload_job(db, second.id) == "scheduled"
+    db.commit()
+    # Its daily limit of 2 is used: the third waits for room instead of going out.
+    third = _make_job(db, status=JobStatus.READY, youtube_video_id="now3")
+    assert pipeline.upload_job(db, third.id) == "deferred" and third.error == buffer.NO_TIMES and len(fake.posts) == 2
+
+    # An account with times keeps its schedule: the next clip waits for its time there.
+    client.patch(f"/api/buffer/channels/{channel.id}", headers=auth, json={"times": ["09:00"], "daily_limit": 5})
+    db.expire_all()
+    third.next_check_at = None
+    db.commit()
+    assert pipeline.upload_job(db, third.id) == "scheduled" and "mode: customScheduled" in fake.posts[-1]

@@ -54,15 +54,15 @@ def channels(api_key: str, organization_id: str) -> list[dict]:
     return data.get("channels") or []
 
 
-def create_post_query(*, channel_id: str, body: str, due_at: datetime, video_url: str) -> str:
-    """The GraphQL document that schedules one video post."""
+def create_post_query(*, channel_id: str, body: str, due_at: datetime | None, video_url: str) -> str:
+    """The GraphQL document for one video post: at `due_at`, or published at once when there is no time (None)."""
+    when = f"mode: customScheduled dueAt: {text(due_at.strftime('%Y-%m-%dT%H:%M:%S.000Z'))}" if due_at else "mode: shareNow"
     return f"""mutation CreatePost {{
   createPost(input: {{
     text: {text(body)}
     channelId: {text(channel_id)}
     schedulingType: automatic
-    mode: customScheduled
-    dueAt: {text(due_at.strftime("%Y-%m-%dT%H:%M:%S.000Z"))}
+    {when}
     assets: [{{ video: {{ url: {text(video_url)} }} }}]
   }}) {{
     ... on PostActionSuccess {{ post {{ id status dueAt }} }}
@@ -71,8 +71,8 @@ def create_post_query(*, channel_id: str, body: str, due_at: datetime, video_url
 }}"""
 
 
-def create_post(api_key: str, *, channel_id: str, body: str, due_at: datetime, video_url: str) -> dict:
-    """Schedule the post. Returns Buffer's post: {id, status, dueAt}."""
+def create_post(api_key: str, *, channel_id: str, body: str, due_at: datetime | None, video_url: str) -> dict:
+    """Schedule the post, or publish it at once when `due_at` is None. Returns Buffer's post: {id, status, dueAt}."""
     result = request(api_key, create_post_query(channel_id=channel_id, body=body, due_at=due_at, video_url=video_url)).get("createPost") or {}
     post = result.get("post") or {}
     if not post.get("id"):

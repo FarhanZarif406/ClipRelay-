@@ -35,7 +35,7 @@ CHECK_AFTER = timedelta(minutes=3)
 CHECK_EVERY = timedelta(minutes=15)
 GIVE_UP = timedelta(hours=24)
 NO_ACCOUNT = "Waiting for a Buffer account — switch one on in Buffer Settings"
-NO_TIMES = "Waiting for posting times — add times to an account in Buffer Settings"
+NO_TIMES = "Waiting for room — every switched-on Buffer account has reached its daily limit, or its start date has not come"
 NO_KEY = "Waiting for Buffer — add your Buffer API key in Buffer Settings"
 NO_PUBLIC_URL = "The public base URL is not set, so Buffer cannot fetch the clip. An admin sets it on the Integrations page."
 
@@ -77,8 +77,17 @@ def taken(db: Session, channel: BufferChannel) -> list[datetime]:
     ))
 
 
+def at_once(channel: BufferChannel) -> bool:
+    """An account without times of day publishes each clip as soon as it is its turn."""
+    return not slots.clean_times(channel.times or [])
+
+
 def next_slot(db: Session, channel: BufferChannel, now: datetime | None = None) -> datetime | None:
-    return slots.next_slot(channel.times or [], channel.daily_limit, channel.start_date, taken(db, channel), now or utcnow(), zone_of(db, channel))
+    """When the account's next clip would go out: its next free time, or now for an account without times. None when it has no room."""
+    now = now or utcnow()
+    if at_once(channel):
+        return now if slots.can_post_now([], channel.daily_limit, channel.start_date, taken(db, channel), now, zone_of(db, channel)) else None
+    return slots.next_slot(channel.times or [], channel.daily_limit, channel.start_date, taken(db, channel), now, zone_of(db, channel))
 
 
 def sync_key(db: Session, saved: BufferKey) -> None:
@@ -253,13 +262,14 @@ def channel_view(db: Session, channel: BufferChannel, now: datetime | None = Non
     now = now or utcnow()
     zone = zone_of(db, channel)
     given = taken(db, channel)
-    slot = slots.next_slot(channel.times or [], channel.daily_limit, channel.start_date, given, now, zone)
+    slot = next_slot(db, channel, now)
     return {
         "id": channel.id, "name": channel.name, "service": channel.service, "avatar": channel.avatar, "enabled": channel.enabled,
         "key_id": channel.key_id, "key_label": channel.key.label if channel.key else "", "last_picked_at": channel.last_picked_at,
         "daily_limit": channel.daily_limit, "times": slots.clean_times(channel.times or []), "time_zone": zone, "own_time_zone": bool(channel.time_zone),
         "start_date": channel.start_date, "used_today": slots.taken_today(given, now, zone),
         "uploaded": _log_count(db, channel, "published"), "waiting": _log_count(db, channel, "scheduled"), "next_slot": slot,
+        "at_once": at_once(channel),  # no times of day: each clip is published as soon as it is this account's turn
     }
 
 
@@ -366,6 +376,7 @@ def publish(db: Session, job: Job) -> str:
     slot = next_slot(db, channel)
     if slot is None:
         return _defer(job, timedelta(minutes=2), NO_TIMES)
+    direct = at_once(channel)  # no times of day: Buffer publishes it at once
 
     # Atomic claim: only one worker can move READY → UPLOADING, and only if nothing was ever handed over.
     claimed = db.execute(
@@ -382,7 +393,7 @@ def publish(db: Session, job: Job) -> str:
     job_event(db, job, JobStatus.UPLOADING, f"Handing over to Buffer for {channel.name}")
     db.commit()
     try:
-        post = api.create_post(decrypt(channel.key.api_key_enc) or "", channel_id=channel.buffer_id, body=pipeline.compose_post_text(job), due_at=slot,
+        post = api.create_post(decrypt(channel.key.api_key_enc) or "", channel_id=channel.buffer_id, body=pipeline.compose_post_text(job), due_at=None if direct else slot,
                                video_url=f"{base}/api/public/clip/{job.share_token}/clip.mp4")
     except BufferError as exc:
         _record(db, job, channel, "failed", post_id=None, done_at=utcnow(), error=str(exc))  # a clip Buffer never took is still part of the account's history
@@ -391,14 +402,14 @@ def publish(db: Session, job: Job) -> str:
             return _defer(job, timedelta(minutes=5 * job.attempts), str(exc))
         pipeline.mark_failed(db, job.id, str(exc))
         return "failed"
-    due = _parse(post.get("dueAt")) or slot
+    due = _parse(post.get("dueAt")) or (utcnow() if direct else slot)  # a post published at once counts on today's limit from now
     job.buffer_post_id, job.buffer_due_at = str(post["id"]), due
     job.publish_mode = "buffer"
     job.next_check_at = due + CHECK_AFTER
     when = due.astimezone(ZoneInfo(zone_of(db, channel))).strftime("%a %d %b, %I:%M %p")
-    job_event(db, job, JobStatus.SCHEDULED, f"Scheduled in Buffer on {channel.name} for {when}")
+    job_event(db, job, JobStatus.SCHEDULED, f"Sent to Buffer on {channel.name} to publish at once (the account has no posting times)" if direct else f"Scheduled in Buffer on {channel.name} for {when}")
     _record(db, job, channel, "scheduled", post_id=job.buffer_post_id, due_at=due)
-    activity.record(db, "Publisher", f"Video #{video.id} handed to Buffer for {channel.name} · goes out {when}", event="buffer_scheduled", job_id=job.id, user_id=video.user_id)
+    activity.record(db, "Publisher", f"Video #{video.id} handed to Buffer for {channel.name} · " + ("published at once" if direct else f"goes out {when}"), event="buffer_scheduled", job_id=job.id, user_id=video.user_id)
     return "scheduled"
 
 

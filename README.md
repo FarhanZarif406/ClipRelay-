@@ -185,8 +185,9 @@ and removed one by one; an account two keys both reach is listed once.
 - **How a clip is sent.** An approved clip is handed to Buffer
   as a post scheduled for the account's next free time. The switched-on accounts of all the member's keys take
   turns: each clip goes to the one that has waited longest for a clip (the page marks it *Next turn*), so every
-  account gets one before any gets a second. A clip set to one account in the review queue goes there. A full day
-  is not a dead end: the clip goes out on the next day. Buffer fetches the video from
+  account gets one before any gets a second. A clip set to one account in the review queue goes there. An account with no
+  posting times publishes each clip at once (Buffer's *share now*) when it is its turn, still up to its daily limit
+  and not before its start date. A full day is not a dead end: the clip goes out on the next day. Buffer fetches the video from
   `{public base URL}/api/public/clip/{token}/clip.mp4`, a private link that works only until the clip is published,
   so the server needs a public HTTPS address (Integrations → YouTube Push Notifications → *Public base URL*).
 - **Afterwards.** The clip shows as *Scheduled at Buffer* (Live Status, Published). A few minutes after its time

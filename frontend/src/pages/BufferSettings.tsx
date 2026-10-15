@@ -56,7 +56,7 @@ function ScheduleModal({ channel, onSave, onClose }: { channel: BufferChannel; o
     <Field label="Time zone" hint="The times below are on this clock."><select value={timeZone} onChange={e => setTimeZone(e.target.value)}>{zones.map(zone => <option key={zone} value={zone}>{zone.replace(/_/g, " ")}</option>)}</select></Field>
     <Field label="Start date" hint={startDate ? "No clip goes out on this account before this day." : "Empty: clips go out from the next free time."}>
       <div className="lookup-row"><input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}/>{startDate && <Button onClick={() => setStartDate("")}>Clear</Button>}</div></Field>
-    <Field label="Posting times" hint="One clip goes out at each time, every day.">
+    <Field label="Posting times" hint="One clip goes out at each time, every day. Leave it empty to publish each clip at once instead.">
       <div className="buffer-time-row">
         <select aria-label="Hour" value={hour} onChange={e => setHour(Number(e.target.value))}>{Array.from({ length: 12 }, (_, i) => <option key={i} value={i + 1}>{i + 1}</option>)}</select>
         <select aria-label="Minute" value={minute} onChange={e => setMinute(Number(e.target.value))}>{Array.from({ length: 12 }, (_, i) => <option key={i} value={i * 5}>{String(i * 5).padStart(2, "0")}</option>)}</select>
@@ -65,7 +65,7 @@ function ScheduleModal({ channel, onSave, onClose }: { channel: BufferChannel; o
       </div>
       <div className="buffer-chips">
         {times.map(time => <span className="buffer-chip" key={time}>{to12Hour(time)}<button type="button" aria-label={`Remove ${to12Hour(time)}`} onClick={() => setTimes(times.filter(item => item !== time))}>×</button></span>)}
-        {times.length === 0 && <span className="bad">No times yet: nothing can be scheduled on this account.</span>}
+        {times.length === 0 && <span className="muted">No times: each clip is published at once when it is this account’s turn, up to the daily limit.</span>}
       </div>
     </Field>
     <Field label="Daily limit" hint="At most this many clips on one day. Any more go out on the next day.">
@@ -110,9 +110,9 @@ function ChannelCard({ channel, upNext, onSave }: { channel: BufferChannel; upNe
     </div>
     <div className="buffer-card-foot">
       <div>
-        <div className="buffer-chips">{channel.times.map(time => <span className="buffer-chip" key={time}>{to12Hour(time)}</span>)}{channel.times.length === 0 && <span className="bad">No posting times yet.</span>}</div>
+        <div className="buffer-chips">{channel.times.map(time => <span className="buffer-chip" key={time}>{to12Hour(time)}</span>)}{channel.times.length === 0 && <span className="buffer-chip">Publishes at once</span>}</div>
         <small>{channel.time_zone.replace(/_/g, " ")} · up to {channel.daily_limit} a day{channel.start_date ? ` · from ${longDay(channel.start_date)}` : ""}</small>
-        <small>{!channel.enabled ? "Switched off." : channel.next_slot ? `Next free time: ${inZone(channel.next_slot, channel.time_zone)}.` : "Press Schedule and add at least one posting time."}</small>
+        <small>{!channel.enabled ? "Switched off." : channel.at_once ? (channel.next_slot ? "No posting times: its next clip is published as soon as it is its turn." : "No posting times, and today’s limit is used (or its start date has not come): its next clip waits.") : channel.next_slot ? `Next free time: ${inZone(channel.next_slot, channel.time_zone)}.` : "No free time in the next two months."}</small>
       </div>
       <span><Button onClick={() => setWatching(true)}>Live status</Button><Button variant="primary" onClick={() => setScheduling(true)}>Schedule</Button></span>
     </div>

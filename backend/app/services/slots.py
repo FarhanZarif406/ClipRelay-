@@ -1,6 +1,7 @@
 """Posting times: when the next clip can go out on a publishing account.
 
 An account has times of day ("HH:MM", on its own clock), a daily limit and, optionally, a first day.
+An account without times of day publishes each clip at once, still up to its daily limit.
 """
 
 import re
@@ -69,6 +70,18 @@ def next_slot(times: list[str], daily_limit: int, start_date: str | None, taken:
                 continue  # two posts never share a time
             return slot
     return None
+
+
+def can_post_now(times: list[str], daily_limit: int, start_date: str | None, taken: list[datetime], now: datetime, zone: str) -> bool:
+    """For an account without times of day: whether a clip may be published on it right now.
+
+    It may while today has room under its daily limit and its start date (if any) has come.
+    """
+    if clean_times(times) or daily_limit < 1:
+        return False
+    if is_day(start_date) and date.fromisoformat(start_date) > day_of(now, zone):
+        return False
+    return taken_today(taken, now, zone) < daily_limit
 
 
 def taken_today(taken: list[datetime], now: datetime, zone: str) -> int:

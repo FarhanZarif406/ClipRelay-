@@ -247,6 +247,8 @@ export type AccountRef = BufferRef & { initials: string; enabled: boolean };
 export type BufferChannel = BufferRef & {
   avatar: string | null; enabled: boolean; key_id: number | null; key_label: string; last_picked_at: string | null; daily_limit: number; times: string[]; time_zone: string; own_time_zone: boolean; start_date: string | null;
   used_today: number; uploaded: number; waiting: number; next_slot: string | null;
+  /** No times of day: each clip is published as soon as it is this account's turn (up to its daily limit). */
+  at_once: boolean;
 };
 /** One of the member's saved Buffer keys. The key itself never reaches the page, only its last four characters. */
 export type BufferKey = { id: number; label: string; last4: string; saved_at: string; synced_at: string | null; error: string | null; accounts: number; receiving: number };
