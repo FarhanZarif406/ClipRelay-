@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.integrations import youtube
 from app.integrations.http import ApiError
 from app.models import Channel, Job, Mode, SkipReason, Video, VideoStatus, utcnow
-from app.services import activity, limits, pipeline, push, rules
+from app.services import activity, limits, pipeline, push, rules, system
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +74,8 @@ def discover(db: Session, channel: Channel, video_id: str, *, meta: youtube.Vide
     """
     if db.scalar(select(Video.id).where(Video.youtube_video_id == video_id)):
         return None
+    if not system.is_on(db):
+        return None  # the admin switched the system off: uploads are not even recorded (they are left alone when it is on again)
     meta = meta or youtube.video_details(video_id)
     if meta.live or not meta.duration_seconds:
         return None  # a live stream or premiere that has not finished: it is picked up once it has a duration
@@ -162,6 +164,8 @@ def discover_by_ids(db: Session, youtube_channel_id: str, video_id: str) -> Vide
 
 
 def due_channels(db: Session) -> list[int]:
+    if not system.is_on(db):
+        return []  # switched off: no channel is checked
     now = utcnow()
     rows = db.scalars(
         select(Channel).where(Channel.active.is_(True), (Channel.next_poll_at.is_(None)) | (Channel.next_poll_at <= now)).order_by(Channel.id).limit(50)

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { SystemOffBanner } from "@/components/MainSwitch";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { dashboard } from "@/api/endpoints";
@@ -100,7 +101,7 @@ export function Layout() {
         <div className="menu-anchor profile-anchor" ref={profileRef}><button className="profile" onClick={() => setProfileOpen(o => !o)}><Avatar label={initialsOf(name)} color="violet"/><div><strong>{name}</strong><span>{user?.workspace_name}</span></div><Icon name="chevron" size={14}/></button>
           {profileOpen && <div className="menu-pop right"><div className="menu-head"><strong>{name}</strong><span>{user?.email}</span></div><button onClick={() => (PODCASTS ? window.open("/settings", "cliprelay-shorts") : navigate("/settings"))}><Icon name="settings" size={14}/><span>Settings</span></button><button className="danger" onClick={logout}><Icon name="arrow" size={14}/><span>Sign out</span></button></div>}
         </div>
-      </div></header><main><Outlet context={{ openOnboarding: () => setOnboarding(true) }}/></main></div>
+      </div></header><main><SystemOffBanner off={nav.data?.system_on === false}/><Outlet context={{ openOnboarding: () => setOnboarding(true) }}/></main></div>
     {menu && <div className="sidebar-scrim" onClick={() => setMenu(false)}/>}
     {onboarding && <Onboarding close={() => setOnboarding(false)}/>}
   </div>;

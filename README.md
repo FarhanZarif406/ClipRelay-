@@ -17,6 +17,12 @@ A video that fails the duration check is never discarded: it is held under **Ski
 processed by hand. A usable video that comes over a daily limit is held under **Not Processed** instead: it is detected
 and recorded but not downloaded or edited, and **Process now** sends it on anyway.
 
+**Main switch.** The admin has a main switch at the top of the Dashboard. Off stops everything for every member: no
+channel is checked and push notifications are ignored, nothing is downloaded, edited, captioned or handed to Buffer,
+and videos on their way are paused where they are. Members do not see the switch, but every page tells them the system
+is off. On again, the paused videos carry on, and channels are watched from that moment, so uploads made while it was
+off are left alone. Posts already scheduled at Buffer still go out.
+
 **Daily limit.** Each workspace takes only so many new uploads into processing per day. By default it matches the
 Buffer accounts: the daily limits of the switched-on accounts added up (10 accounts posting 7 a day take 70 videos; in
 Podcasts the sum is divided by the clips per podcast). It can be set by hand instead (rule *Daily limit* → *manual*),

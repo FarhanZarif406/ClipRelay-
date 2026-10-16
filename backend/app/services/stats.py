@@ -20,7 +20,7 @@ from app.models import (
     Video,
     VideoStatus,
 )
-from app.services import buffer, downloader, rules, serializers, workspace_settings
+from app.services import buffer, downloader, rules, serializers, system, workspace_settings
 from app.services.limits import LIMIT_REASONS
 from app.services.pipeline import cap_day_start
 
@@ -87,6 +87,7 @@ def nav(db: Session, mode: str = Mode.SHORTS, user_id: int | None = None) -> dic
         "channels": _count(db, select(func.count(Channel.id)).where(Channel.mode == mode, Channel.user_id == user_id)),
         # Downloads and edits run in the background worker; without it nothing moves past "Detected".
         "worker_alive": downloader.worker_status()["alive"],
+        "system_on": system.is_on(db),  # the admin's main switch
     }
 
 

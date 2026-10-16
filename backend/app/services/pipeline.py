@@ -369,7 +369,7 @@ STAGE_NAMES = {
 }
 
 
-def pause_job(db: Session, job: Job) -> None:
+def pause_job(db: Session, job: Job, *, reason: str | None = None) -> None:
     """Hold a video where it is. A download or an edit that is running stops within a few seconds (see `progress_writer`);
     what was already finished, such as the downloaded file, is kept for Resume."""
     if job.status not in JobStatus.PAUSABLE:
@@ -379,10 +379,10 @@ def pause_job(db: Session, job: Job) -> None:
     job.paused_status = job.status
     job.next_check_at = None
     job.progress = None
-    job_event(db, job, JobStatus.PAUSED, f"Paused by the operator while {STAGE_NAMES[job.status]}")
+    job_event(db, job, JobStatus.PAUSED, f"{reason or 'Paused by the operator'} while {STAGE_NAMES[job.status]}")
 
 
-def resume_job(db: Session, job: Job) -> str:
+def resume_job(db: Session, job: Job, *, reason: str | None = None) -> str:
     """Carry on from the stage the video had reached. Returns the status it resumes in."""
     if job.status != JobStatus.PAUSED:
         raise ValueError("Only a paused video can be resumed")
@@ -401,7 +401,7 @@ def resume_job(db: Session, job: Job) -> str:
     job.paused_status = None
     job.next_check_at = None
     job.attempts = 0
-    job_event(db, job, status, f"Resumed by the operator — carries on {left}")
+    job_event(db, job, status, f"{reason or 'Resumed by the operator'} — carries on {left}")
     return status
 
 
@@ -439,6 +439,10 @@ def scheduler_tick(db: Session) -> dict:
     """Called by the scheduler every few seconds. The pipeline runs around the clock: there is no schedule rule."""
     now = utcnow()
     out: dict[str, list] = {"process": [], "rewrites": [], "uploads": [], "buffer_checks": []}
+    from app.services import system  # the main switch; it imports this module
+
+    if not system.is_on(db):
+        return out  # switched off by the admin: nothing moves until it is on again
 
     def lease(status: str, limit: int) -> list[Job]:
         jobs = db.scalars(

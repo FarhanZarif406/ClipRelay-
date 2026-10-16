@@ -90,6 +90,8 @@ export type Nav = {
   not_processed_videos: number;
   /** False when the background worker has not run lately: nothing gets downloaded or edited then. */
   worker_alive: boolean;
+  /** The admin's main switch. False: nothing is detected, downloaded, edited or published for anyone. */
+  system_on: boolean;
   channels: number;
 };
 
@@ -273,3 +275,6 @@ export type TestRender = {
   id: string; status: "running" | "done" | "failed"; stage: string | null; title: string | null; message?: string;
   seconds?: number; bytes?: number; render_seconds?: number; command?: string; note?: string | null; vertical?: boolean; music?: string | null; hook?: string | null;
 };
+
+/** The main switch. `changed_by` is shown to admins only. */
+export type SystemState = { on: boolean; changed_at: string | null; changed_by: string | null };

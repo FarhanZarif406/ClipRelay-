@@ -6,6 +6,7 @@ import type { ActivityLog, Kpi, Summary } from "@/api/types";
 import { Menu } from "@/components/Menu";
 import { Icon, type IconName } from "@/components/Icon";
 import LimitBanner from "@/components/LimitBanner";
+import MainSwitch from "@/components/MainSwitch";
 import { Avatar, Badge, Button, Card, Empty, MiniBars, PageHeader, VideoThumb } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 import { duration, greeting, longAgo, relativeTime } from "@/lib/format";
@@ -89,6 +90,7 @@ export default function Dashboard() {
 
   return <>
     <PageHeader title={`${greeting()}${firstName ? `, ${firstName}` : ""}`} description={PODCASTS ? "Podcasts workspace: long videos are cut into short clips and published to this workspace’s own accounts." : "Here’s what your content network is doing today."}/>
+    <MainSwitch/>
     <LimitBanner/>
     <div className="kpi-grid">
       {(summary?.kpis ?? []).map(k => <Card className="kpi" key={k.key}><div className="kpi-label">{k.label}<Menu items={(KPI_LINKS[k.key] ?? []).filter(([, to]) => !PODCASTS || !HIDDEN_IN_PODCASTS.some(p => to.startsWith(p))).map(([label, to]) => ({ label, icon: "arrow" as const, onSelect: () => navigate(to) }))} trigger={toggle => <button type="button" className="kpi-more" aria-label={`${k.label} options`} onClick={toggle}><Icon name="more" size={16}/></button>}/></div><div className="kpi-value">{k.value.toLocaleString()}</div><div className={`kpi-meta ${k.tone}`}><span>{kpiMeta(k)}</span> vs. yesterday <MiniBars series={k.series}/></div></Card>)}

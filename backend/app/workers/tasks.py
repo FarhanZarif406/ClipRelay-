@@ -4,7 +4,7 @@ from app.config import get_settings
 from app.db import session_scope
 from app.integrations.http import ApiError, backoff_delay
 from app.models import Channel, Job, JobStatus
-from app.services import buffer, credential_checks, credentials, detection, downloader, pipeline, youtube_usage
+from app.services import buffer, credential_checks, credentials, detection, downloader, pipeline, system, youtube_usage
 from app.workers.celery_app import celery_app
 
 log = logging.getLogger(__name__)
@@ -77,8 +77,16 @@ def discover_video(self, youtube_channel_id: str, video_id: str) -> int | None:
     return job_id
 
 
+def _off() -> bool:
+    """The admin's main switch is off: a task that would move a video does nothing (the tick picks it up when it is on)."""
+    with session_scope() as db:
+        return not system.is_on(db)
+
+
 @celery_app.task
 def process_video(job_id: int) -> str | None:
+    if _off():
+        return None
     with session_scope() as db:
         status = pipeline.process_video(db, job_id)
     if status == JobStatus.READY:
@@ -88,6 +96,8 @@ def process_video(job_id: int) -> str | None:
 
 @celery_app.task
 def rewrite_job(job_id: int) -> str | None:
+    if _off():
+        return None
     with session_scope() as db:
         status = pipeline.rewrite_job(db, job_id)
     if status == JobStatus.READY:
@@ -97,6 +107,8 @@ def rewrite_job(job_id: int) -> str | None:
 
 @celery_app.task
 def upload_job(job_id: int) -> str:
+    if _off():
+        return "off"
     with session_scope() as db:
         return pipeline.upload_job(db, job_id)
 
@@ -104,6 +116,8 @@ def upload_job(job_id: int) -> str:
 @celery_app.task
 def check_buffer(job_id: int) -> str | None:
     """A post handed to Buffer: has it been published yet?"""
+    if _off():
+        return None
     with session_scope() as db:
         return buffer.check(db, job_id)
 

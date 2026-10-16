@@ -2,7 +2,7 @@ import { ApiError, api, apiUrl, getToken } from "./client";
 import type { Look } from "@/lib/look";
 import type {
   ActivityLog, Channel, ChannelRules, CredentialCard, CredentialResult, DailyReport, LLMProvider, LLMProviderList, LLMProviderName, Integration, Job, Nav, NotificationSettings, Page, Prompt,
-  PipelineStatus, DailyLimit, EditingState, Library, Preset, TestRender, BufferChannelChanges, BufferChannelStatus, BufferStatus, PushInfo, YouTubeApiInfo, YouTubeApiTest, SourceDiagnosis, SourceInfo, CookiesInfo, RuleChange, RuleDef, RuleValue, RuleValues, Summary, User, Video,
+  PipelineStatus, DailyLimit, SystemState, EditingState, Library, Preset, TestRender, BufferChannelChanges, BufferChannelStatus, BufferStatus, PushInfo, YouTubeApiInfo, YouTubeApiTest, SourceDiagnosis, SourceInfo, CookiesInfo, RuleChange, RuleDef, RuleValue, RuleValues, Summary, User, Video,
 } from "./types";
 
 export const auth = {
@@ -12,6 +12,12 @@ export const auth = {
   register: (body: { email: string; password: string; name: string; workspace_name: string; accept_terms?: boolean }) =>
     api<{ access_token: string; user: User }>("/auth/register", { method: "POST", body }),
   me: () => api<User>("/auth/me"),
+};
+
+/** The admin's main switch for the whole tool. */
+export const system = {
+  state: () => api<SystemState>("/system"),
+  switch: (on: boolean) => api<SystemState>("/system", { method: "PUT", body: { on } }),
 };
 
 export const dashboard = {
