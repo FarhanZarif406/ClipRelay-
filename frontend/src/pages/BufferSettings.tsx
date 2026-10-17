@@ -252,13 +252,13 @@ export default function BufferSettings() {
       {loadError && <div className="form-error">{message(loadError)}</div>}
       {status && !status.public_url && <div className="form-note warn">The server has no public address yet, so Buffer cannot fetch clips from it. An admin sets the public base URL in Integrations → YouTube Push Notifications.</div>}
 
-      {status && <Card><div className="card-title">Buffer API keys <span className="muted">· {status.keys.length} of {status.max_keys}</span></div>
-        <div className="card-caption">Create a key in Buffer under Settings → API. It needs the permissions <b>account:read</b>, <b>posts:read</b> and <b>posts:write</b>. Add up to {status.max_keys} key{status.max_keys === 1 ? "" : "s"}, one per Buffer account; all their accounts get clips in turn.{status.max_accounts ? ` Your plan connects up to ${status.max_accounts} social accounts in all; any more in Buffer are left out.` : ""}</div>
+      {status && <Card><div className="card-title">Buffer API keys <span className="muted">· {`${status.keys.length} of ${status.shown_keys ?? status.max_keys}`}</span></div>
+        <div className="card-caption">Create a key in Buffer under Settings → API. It needs the permissions <b>account:read</b>, <b>posts:read</b> and <b>posts:write</b>. {(status.shown_keys ?? status.max_keys) > status.max_keys ? `Your plan allows ${status.max_keys} key${status.max_keys === 1 ? "" : "s"}; a bigger plan allows up to ${status.shown_keys}. One key per Buffer account; all their accounts get clips in turn.` : `Add up to ${status.max_keys} key${status.max_keys === 1 ? "" : "s"}, one per Buffer account; all their accounts get clips in turn.`}{status.max_accounts ? ` Your plan connects up to ${status.max_accounts} social accounts in all; any more in Buffer are left out.` : ""}</div>
         <div className="buffer-keys">
           {status.keys.map(item => <KeyRow key={item.id} item={item} busy={busy} run={run}/>)}
-          {status.keys.length < status.max_keys
+          {status.keys.length < (status.shown_keys ?? status.max_keys)
             ? <AddKey key={status.keys.length === 0 ? "first" : "more"} first={status.keys.length === 0} busy={busy} run={run}/>
-            : <small className="muted">All {status.max_keys} keys are in use. Remove one to add another.</small>}
+            : <small className="muted">{`All ${status.shown_keys ?? status.max_keys} keys are in use. Remove one to add another.`}</small>}
         </div>
       </Card>}
 

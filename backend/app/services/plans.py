@@ -5,7 +5,7 @@ account one, optionally until a date. An account without a plan, or whose plan h
 Owners themselves are never limited.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -37,8 +37,9 @@ LIMITS: dict[str, tuple[str, str, int]] = {
     "podcasts_per_day": ("Podcasts per day", "Podcasts taken in per day, in the Podcasts workspace (each becomes several clips).", 1000),
     "buffer_keys": ("Buffer keys", "Buffer API keys the account may save (at most 10).", 10),
     "skipped_keep_hours": ("Keep skipped (hours)", "Skipped and not-processed videos are cleared from the server after this many hours. 0 = kept.", 8760),
-    "trial_days": ("Trial days", "A new account on this plan works for this many days, then stops until the owner gives it a plan. 0 = no end.", 365),
+    "trial_days": ("Plan length (days)", "An account works for this many days from the day it is given this plan, then stops until the owner renews it. Cloud videos are counted over this length. 0 = no end.", 365),
     "auto_check_minutes": ("Auto-check (minutes)", "How often the account's channels are checked as a backup to push notifications. 0 = never: new videos come by push notification only.", 1440),
+    "cloud_videos_per_month": ("Cloud videos", "Videos edited in Google Cloud while the member's PC is off: over the plan's length when it has one (e.g. 30 in 20 days), else per calendar month. When used up, videos wait for the PC. 0 = no limit.", 100000),
     "buffer_accounts": ("Buffer accounts", "Social accounts from Buffer the account may use, all its keys together. Any more in Buffer are not connected.", 1000),
 }
 FREE = {
@@ -52,8 +53,23 @@ FULL = {"features": {key: True for key in FEATURES}, "limits": {key: 0 for key i
 TIERS = ("Free Trial", "Bronze", "Silver", "Gold", "Platinum")
 
 
+def is_trial(name: str) -> bool:
+    """Only a trial plan is called a "free trial" on the pages; other plans with a length just end on a date."""
+    return "trial" in (name or "").lower()
+
+
 def tier_order(plan: Plan) -> tuple:
     return (TIERS.index(plan.name) if plan.name in TIERS else len(TIERS), plan.id)
+
+
+# A feature can be on, off, or on only for the first day of a plan (a trial's taste of it): "first_day".
+FIRST_DAY = "first_day"
+FIRST_DAY_FOR = timedelta(hours=24)
+
+
+def feature_value(value):
+    """A stored switch: True, False or "first_day"."""
+    return FIRST_DAY if value == FIRST_DAY else bool(value)
 
 
 class PlanError(ValueError):
@@ -66,7 +82,7 @@ class PlanLimit(PermissionError):
 
 def clean(features: dict | None, limits: dict | None) -> tuple[dict, dict]:
     """Known switches as booleans and known limits as whole numbers within bounds; anything else is dropped."""
-    out_features = {key: bool((features or {}).get(key, False)) for key in FEATURES}
+    out_features = {key: feature_value((features or {}).get(key, False)) for key in FEATURES}
     out_limits = {}
     for key, (label, _help, upper) in LIMITS.items():
         value = (limits or {}).get(key, 0)
@@ -121,11 +137,11 @@ def bigger_by(db: Session, user: User, key: str) -> list[dict]:
 
 
 def upgrade_map(db: Session) -> dict[str, str]:
-    """For each feature, the smallest plan that includes it (fewest videos a day first), to show next to a locked option."""
-    rows = sorted(db.scalars(select(Plan)).all(), key=lambda p: (int(p.limits.get("videos_per_day") or 0) or 10**9, p.id))
+    """For each feature, the smallest plan that includes it (by tier: Free Trial first), to show next to a locked option."""
+    rows = sorted(db.scalars(select(Plan)).all(), key=tier_order)  # Free Trial, Bronze, Silver, Gold, Platinum, then the owner's own
     out: dict[str, str] = {}
     for key in FEATURES:
-        plan = next((p for p in rows if p.features.get(key)), None)
+        plan = next((p for p in rows if p.features.get(key) is True), None)  # a first-day taste does not count as having it
         if plan:
             out[key] = plan.name
     return out
@@ -134,7 +150,7 @@ def upgrade_map(db: Session) -> dict[str, str]:
 def start_trial(db: Session, user: User) -> None:
     """A new account on a plan with trial days (or on the default plan, when that has them) gets its end date."""
     plan = db.get(Plan, user.plan_id) if user.plan_id else default_plan(db)
-    days = int((plan.limits or {}).get("trial_days") or 0) if plan else 0
+    days = int(effective(db, user)["limits"].get("trial_days") or 0) if plan else 0  # the plan's, or the account's own
     if plan and days and user.plan_expires_at is None:
         from datetime import timedelta
 
@@ -145,15 +161,58 @@ def start_trial(db: Session, user: User) -> None:
 def effective(db: Session, user: User | None) -> dict:
     """{"plan", "owner", "features", "limits", "expires_at", "expired"} for an account. Owners have everything."""
     if user is None or user.is_owner:
-        return {"plan": "Owner", "owner": True, **FULL, "expires_at": None, "expired": False}
+        return {"plan": "Owner", "owner": True, **FULL, "custom": [], "first_day": [], "first_day_ends": None, "expires_at": None, "expired": False}
     plan = plan_of(db, user)
     features, limits = (plan.features, plan.limits) if plan else (FULL["features"], FULL["limits"])
+    # The owner's changes for this one account win over its plan.
+    own_features = {k: v for k, v in (user.custom_features or {}).items() if k in FEATURES}
+    own_limits = {k: v for k, v in (user.custom_limits or {}).items() if k in LIMITS}
+    merged_limits = {key: int(own_limits.get(key, limits.get(key, 0)) or 0) for key in LIMITS}
+    raw = {key: feature_value(own_features.get(key, features.get(key, False))) for key in FEATURES}
+    first_day_ends = started_at(user, merged_limits) + FIRST_DAY_FOR
+    first_day_now = utcnow() < first_day_ends
     return {
         "plan": plan.name if plan else "No plan", "owner": False,
-        "features": {key: bool(features.get(key, False)) for key in FEATURES},
-        "limits": {key: int(limits.get(key, 0) or 0) for key in LIMITS},
+        "features": {key: (first_day_now if value == FIRST_DAY else value) for key, value in raw.items()},
+        "limits": merged_limits,
+        # Switches that are on for the first day only, and when that day ends (the page says "today only").
+        "first_day": sorted(key for key, value in raw.items() if value == FIRST_DAY), "first_day_ends": first_day_ends,
+        "custom": sorted([*own_features, *own_limits]),
         "expires_at": user.plan_expires_at if user.plan_id else None, "expired": expired(user) if user.plan_id else False,
     }
+
+
+def started_at(user: User, limits: dict | None = None) -> datetime:
+    """When the account's current plan was given (set on creation and on every change of plan)."""
+    return user.plan_started_at or user.created_at or utcnow()
+
+
+def cloud_period_start(db: Session, user: User) -> datetime:
+    """Cloud videos are counted per calendar month; a trial counts its whole length."""
+    limits = effective(db, user)["limits"]
+    now = utcnow()
+    month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return started_at(user, limits) if limits.get("trial_days") else month  # a plan with a length: over that length
+
+
+def cloud_left(db: Session, user_id: int | None) -> int | None:
+    """Cloud videos the account may still use in this period; None means no limit."""
+    user = _user(db, user_id)
+    if user is None or user.is_owner:
+        return None
+    most = effective(db, user)["limits"].get("cloud_videos_per_month", 0)
+    if not most:
+        return None
+    from app.models import Job, JobStatus, Video
+
+    since = cloud_period_start(db, user)
+    used = db.scalar(
+        select(func.count(Job.id)).join(Video, Job.video_id == Video.id).where(
+            Video.user_id == user.id, Job.edit_place == "cloud",
+            (Job.edited_at >= since) | Job.status.in_((JobStatus.DOWNLOADING, JobStatus.RENDERING)),  # one on its way counts too
+        )
+    ) or 0
+    return max(0, most - used)
 
 
 def _user(db: Session, user_id: int | None) -> User | None:
@@ -244,10 +303,29 @@ def light_look(look: dict) -> dict:
     return look
 
 
+def clean_custom(plan: Plan | None, features: dict | None, limits: dict | None) -> tuple[dict | None, dict | None]:
+    """An account's own switches and limits, kept only where they differ from its plan (None: none differ)."""
+    base_features = (plan.features if plan else FULL["features"]) or {}
+    base_limits = (plan.limits if plan else FULL["limits"]) or {}
+    own_features = {k: feature_value(v) for k, v in (features or {}).items()
+                    if k in FEATURES and feature_value(v) != feature_value(base_features.get(k, False))}
+    own_limits = {}
+    for key, value in (limits or {}).items():
+        if key not in LIMITS:
+            continue
+        label, _help, upper = LIMITS[key]
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= upper:
+            raise PlanError(f"{label} must be a whole number from 0 (no limit) to {upper}.")
+        if value != int(base_limits.get(key, 0) or 0):
+            own_limits[key] = value
+    return own_features or None, own_limits or None
+
+
 def view(plan: Plan, accounts: int = 0) -> dict:
     return {
         "id": plan.id, "name": plan.name, "description": plan.description, "is_default": plan.is_default,
-        "features": {key: bool(plan.features.get(key, False)) for key in FEATURES},
+        "price": plan.price or 0, "currency": plan.currency or "PKR",
+        "features": {key: feature_value(plan.features.get(key, False)) for key in FEATURES},
         "limits": {key: int(plan.limits.get(key, 0) or 0) for key in LIMITS}, "accounts": accounts,
     }
 

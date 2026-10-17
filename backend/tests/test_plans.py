@@ -38,7 +38,9 @@ def test_owner_makes_plans_and_accounts(client, auth, member_auth, db):
     # The account sees its own plan, and the plan is enforced.
     mine = client.get("/api/plan", headers=seller).json()
     assert mine["plan"] == "Starter" and mine["features"]["ai_captions"] is False and mine["limits"]["buffer_keys"] == 1
-    assert client.get("/api/channels?mode=podcasts", headers=seller).status_code == 403  # no Podcasts workspace
+    # No Podcasts in the plan: the workspace can be looked at, but nothing can be added or changed there.
+    assert client.get("/api/channels?mode=podcasts", headers=seller).status_code == 200
+    assert client.post("/api/channels?mode=podcasts", headers=seller, json={"query": "@somepodcast"}).status_code == 403
     refused = client.post("/api/library/watermark?name=logo.png", headers=seller, content=b"PNG-bytes")
     assert refused.status_code == 403 and "not part of your plan" in refused.json()["detail"]
     assert buffer.max_keys(db, account_id) == 1
@@ -155,3 +157,117 @@ def test_a_free_trial_ends_and_the_account_stops_working(client, auth, db, monke
     client.patch(f"/api/accounts/{user.id}", headers=auth, json={"plan_id": paid.id, "plan_expires_at": None})
     db.expire_all()
     assert plans.blocked(db, user.id) is None
+
+
+def test_the_owner_changes_any_limit_for_one_account(client, auth, db):
+    made = client.post("/api/plans", headers=auth, json=LIMITED).json()
+    starter = next(p for p in made["plans"] if p["name"] == "Starter")
+    bigger = client.post("/api/plans", headers=auth, json={**LIMITED, "name": "Bigger", "limits": {"channels": 9, "videos_per_day": 20, "buffer_keys": 3}}).json()
+    bigger = next(p for p in bigger["plans"] if p["name"] == "Bigger")
+
+    # Added with the plan, plus their own: 50 videos a day and a watermark (the plan has neither).
+    full_features = {**starter["features"], "watermark": True}
+    full_limits = {**starter["limits"], "videos_per_day": 50}
+    created = client.post("/api/accounts", headers=auth, json={"email": "vip@example.com", "password": "Vip-pass-123", "plan_id": starter["id"],
+                                                                "features": full_features, "limits": full_limits}).json()
+    assert created["limits"]["videos_per_day"] == 50 and created["features"]["watermark"] is True
+    assert created["limits"]["channels"] == 1 and sorted(created["custom"]) == ["videos_per_day", "watermark"]  # only what differs is kept
+    user = db.get(User, created["id"])
+    assert user.custom_limits == {"videos_per_day": 50} and user.custom_features == {"watermark": True}
+    assert plans.limit(db, user.id, "videos_per_day") == 50 and plans.allows(db, user.id, "watermark")
+
+    # A new plan: the hand-made changes stay; the rest follows the new plan.
+    moved = client.patch(f"/api/accounts/{user.id}", headers=auth, json={"plan_id": bigger["id"]}).json()
+    assert moved["plan"] == "Bigger" and moved["limits"]["channels"] == 9 and moved["limits"]["videos_per_day"] == 50
+
+    # Fewer than the plan works too, and a value out of bounds is refused.
+    fewer = client.patch(f"/api/accounts/{user.id}", headers=auth, json={"limits": {**moved["limits"], "channels": 2}}).json()
+    assert fewer["limits"]["channels"] == 2
+    assert client.patch(f"/api/accounts/{user.id}", headers=auth, json={"limits": {"channels": -5}}).status_code == 422
+
+    back = client.patch(f"/api/accounts/{user.id}", headers=auth, json={"reset_custom": True}).json()
+    assert back["custom"] == [] and back["limits"]["videos_per_day"] == 20 and back["features"]["watermark"] is False
+
+
+def test_first_day_features_and_the_cloud_limit(client, auth, db):
+    from datetime import timedelta as td
+
+    from app.models import Job, JobStatus, Video
+
+    trial = {"name": "Trial", "description": "", "is_default": False,
+             "features": {"ai_captions": True, "watermark": "first_day", "cloud_editing": True},
+             "limits": {"trial_days": 4, "cloud_videos_per_month": 2}}
+    made = client.post("/api/plans", headers=auth, json=trial).json()
+    plan = next(p for p in made["plans"] if p["name"] == "Trial")
+    assert plan["features"]["watermark"] == "first_day"
+    created = client.post("/api/accounts", headers=auth, json={"email": "try@example.com", "password": "Try-pass-123", "plan_id": plan["id"]}).json()
+    user = db.get(User, created["id"])
+    assert plans.allows(db, user.id, "watermark")  # the first day: on
+    assert plans.effective(db, user)["first_day"] == ["watermark"]
+    user.plan_started_at = utcnow() - td(days=2)  # two days in: the first day is over
+    db.commit()
+    assert not plans.allows(db, user.id, "watermark") and plans.allows(db, user.id, "ai_captions")
+    assert plans.upgrade_map(db).get("watermark") != "Trial"  # a taste of it is not "having" it
+
+    assert plans.cloud_left(db, user.id) == 2
+    for n in range(2):
+        video = Video(user_id=user.id, youtube_video_id=f"c{n}", original_title="x", original_caption="", original_tags=[], status="accepted")
+        db.add(video)
+        db.flush()
+        db.add(Job(video_id=video.id, status=JobStatus.REWRITING, edit_place="cloud", edited_at=utcnow(), caption_status="done", rewritten_tags=[]))
+    db.commit()
+    assert plans.cloud_left(db, user.id) == 0
+
+
+def test_first_day_features_and_the_cloud_limit(client, auth, db):
+    from datetime import timedelta as td
+
+    from app.models import Job, JobStatus, Video
+
+    trial = {"name": "Trial", "description": "", "is_default": False,
+             "features": {"ai_captions": True, "watermark": "first_day", "cloud_editing": True},
+             "limits": {"trial_days": 4, "cloud_videos_per_month": 2}}
+    made = client.post("/api/plans", headers=auth, json=trial).json()
+    plan = next(p for p in made["plans"] if p["name"] == "Trial")
+    assert plan["features"]["watermark"] == "first_day"
+    created = client.post("/api/accounts", headers=auth, json={"email": "try@example.com", "password": "Try-pass-123", "plan_id": plan["id"]}).json()
+    user = db.get(User, created["id"])
+    assert plans.allows(db, user.id, "watermark")  # the first day: on
+    assert plans.effective(db, user)["first_day"] == ["watermark"]
+    user.plan_started_at = utcnow() - td(days=2)  # two days in: the first day is over
+    db.commit()
+    assert not plans.allows(db, user.id, "watermark") and plans.allows(db, user.id, "ai_captions")
+    assert plans.upgrade_map(db).get("watermark") != "Trial"  # a taste of it is not "having" it
+
+    assert plans.cloud_left(db, user.id) == 2
+    for n in range(2):
+        video = Video(user_id=user.id, youtube_video_id=f"c{n}", original_title="x", original_caption="", original_tags=[], status="accepted")
+        db.add(video)
+        db.flush()
+        db.add(Job(video_id=video.id, status=JobStatus.REWRITING, edit_place="cloud", edited_at=utcnow(), caption_status="done", rewritten_tags=[]))
+    db.commit()
+    assert plans.cloud_left(db, user.id) == 0
+
+
+def test_a_plan_with_a_length_ends_that_many_days_after_it_is_given(client, auth, db):
+    made = client.post("/api/plans", headers=auth, json={**LIMITED, "name": "Twenty", "limits": {"trial_days": 20, "cloud_videos_per_month": 30}}).json()
+    twenty = next(p for p in made["plans"] if p["name"] == "Twenty")
+    created = client.post("/api/accounts", headers=auth, json={"email": "b@example.com", "password": "Bronze-pass-1"}).json()
+    moved = client.patch(f"/api/accounts/{created['id']}", headers=auth, json={"plan_id": twenty["id"], "plan_expires_at": None}).json()
+    from datetime import datetime
+
+    ends = datetime.fromisoformat(moved["plan_expires_at"])
+    assert 19 <= (ends - utcnow()).days <= 20  # given today: 20 days
+    user = db.get(User, created["id"])
+    db.refresh(user)
+    assert plans.cloud_period_start(db, user) == plans.started_at(user)  # cloud videos are counted over the plan's 20 days
+    assert not plans.is_trial("Twenty") and plans.is_trial("Free Trial")
+
+
+def test_the_owner_sets_a_price_on_a_plan(client, auth):
+    made = client.post("/api/plans", headers=auth, json={**LIMITED, "name": "Priced", "price": 999, "currency": "pkr"}).json()
+    plan = next(p for p in made["plans"] if p["name"] == "Priced")
+    assert plan["price"] == 999 and plan["currency"] == "PKR"
+    changed = client.put(f"/api/plans/{plan['id']}", headers=auth, json={**LIMITED, "name": "Priced", "price": 1499}).json()
+    assert next(p for p in changed["plans"] if p["name"] == "Priced")["price"] == 1499
+    assert client.post("/api/plans", headers=auth, json={**LIMITED, "name": "Bad", "price": -5}).status_code == 422

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui";
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
 
-/** The admin's main switch, at the top of the Dashboard. Members never see it. */
+/** The admin's main switch, in Settings → Main switch. Members never see it. */
 export default function MainSwitch() {
   const { user } = useAuth();
   const queryClient = useQueryClient();

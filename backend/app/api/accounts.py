@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from app.api.deps import DB, CurrentUser, OwnerUser, Workspace
 from app.integrations.buffer import BufferError
-from app.models import Channel, Job, Mode, Plan, User, Video
+from app.models import Channel, Job, Mode, Plan, User, Video, utcnow
 from app.integrations import youtube
 from app.security import decrypt, encrypt, hash_password
 from app.services import activity, buffer, plans
@@ -26,6 +26,9 @@ class AccountIn(BaseModel):
     name: str = Field(default="", max_length=120)
     plan_id: int | None = None  # None: the default plan
     plan_expires_at: datetime | None = None
+    # The owner's changes for this account only, on top of the plan (any switch, any limit).
+    features: dict | None = None
+    limits: dict | None = None
 
 
 class AccountChange(BaseModel):
@@ -34,6 +37,9 @@ class AccountChange(BaseModel):
     plan_id: int | None = None
     plan_expires_at: datetime | None = None
     suspended: bool | None = None
+    features: dict | None = None  # the account's switches and limits in full; what matches the plan is not kept
+    limits: dict | None = None
+    reset_custom: bool = False  # back to exactly the plan
 
 
 class PlanIn(BaseModel):
@@ -42,6 +48,8 @@ class PlanIn(BaseModel):
     features: dict = Field(default_factory=dict)
     limits: dict = Field(default_factory=dict)
     is_default: bool = False
+    price: int = Field(default=0, ge=0, le=10_000_000)  # what the owner charges; 0 = free
+    currency: str = Field(default="PKR", min_length=1, max_length=8)
 
 
 class KeyIn(BaseModel):
@@ -75,7 +83,22 @@ def _view(db, user: User) -> dict:
         "channels": db.scalar(select(func.count(Channel.id)).where(Channel.user_id == user.id)) or 0,
         "videos_today": db.scalar(select(func.count(Job.id)).join(Video, Job.video_id == Video.id).where(Video.user_id == user.id, Video.parent_id.is_(None), Job.created_at >= since)) or 0,
         "buffer_keys": len(buffer.keys(db, user.id)),
+        # In force today, except the owner's own switches for it, shown as set (one may be "first day only").
+        "features": {**effective["features"], **(user.custom_features or {})}, "limits": effective["limits"], "custom": effective.get("custom", []),
     }
+
+
+def _kept(custom: dict | None, current: dict) -> dict:
+    """On a plan change, the account keeps only the changes the owner made by hand."""
+    return {k: current[k] for k in (custom or {}) if k in current}
+
+
+def _set_custom(db, user: User, features: dict | None, limits: dict | None) -> None:
+    plan = db.get(Plan, user.plan_id) if user.plan_id else plans.default_plan(db)
+    try:
+        user.custom_features, user.custom_limits = plans.clean_custom(plan, features, limits)
+    except plans.PlanError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 def _plan_or_404(db, plan_id: int | None) -> None:
@@ -95,7 +118,8 @@ def create_account(body: AccountIn, db: DB, me: OwnerUser):
         raise HTTPException(409, "This email already has an account")
     _plan_or_404(db, body.plan_id)
     user = User(email=body.email.lower(), password_hash=hash_password(body.password), name=body.name, workspace_name=body.name or "My Workspace",
-                role="member", plan_id=body.plan_id, plan_expires_at=body.plan_expires_at)
+                role="member", plan_id=body.plan_id, plan_expires_at=body.plan_expires_at, plan_started_at=utcnow())
+    _set_custom(db, user, body.features, body.limits)
     db.add(user)
     db.flush()
     plans.start_trial(db, user)  # a free trial's end date, when the plan has trial days
@@ -115,11 +139,25 @@ def change_account(account_id: int, body: AccountChange, db: DB, me: OwnerUser):
         activity.record(db, "Accounts", f"{me.email} {'suspended' if body.suspended else 'reactivated'} {user.email}", event="account_suspended" if body.suspended else "account_reactivated")
     if "plan_id" in sent:
         _plan_or_404(db, body.plan_id)
+        if body.plan_id != user.plan_id:
+            user.plan_started_at = utcnow()  # a new plan starts today (its "first day only" switches count from here)
         user.plan_id = body.plan_id
     if "plan_expires_at" in sent:
         user.plan_expires_at = body.plan_expires_at  # None: no end date
+    if "plan_id" in sent and user.plan_expires_at is None:
+        plans.start_trial(db, user)  # a plan with a length (Free Trial 4 days, Bronze 20 days …) ends that many days from now
     if "plan_id" in sent or "plan_expires_at" in sent:
         activity.record(db, "Accounts", f"{me.email} set {user.email} to {plans.effective(db, user)['plan']}" + (f" until {user.plan_expires_at:%d %b %Y}" if user.plan_expires_at else ""), event="account_plan")
+    if body.reset_custom:
+        user.custom_features = user.custom_limits = None
+        activity.record(db, "Accounts", f"{me.email} put {user.email} back on the plan's own limits", event="account_limits")
+    elif "features" in sent or "limits" in sent or "plan_id" in sent:
+        own = (dict(plans.effective(db, user)["features"]), dict(plans.effective(db, user)["limits"]))
+        _set_custom(db, user, body.features if "features" in sent else _kept(user.custom_features, own[0]),
+                    body.limits if "limits" in sent else _kept(user.custom_limits, own[1]))
+        if "features" in sent or "limits" in sent:
+            changed = sorted([*(user.custom_features or {}), *(user.custom_limits or {})])
+            activity.record(db, "Accounts", f"{me.email} changed the limits of {user.email}" + (f": {', '.join(changed)}" if changed else " (back to the plan)"), event="account_limits")
     if body.name is not None:
         user.name = body.name
     if body.password:
@@ -200,6 +238,7 @@ def _save_plan(db, plan: Plan, body: PlanIn) -> None:
     except plans.PlanError as exc:
         raise HTTPException(422, str(exc)) from exc
     plan.name, plan.description = name, body.description.strip()
+    plan.price, plan.currency = body.price, body.currency.strip().upper() or "PKR"
     if body.is_default:
         for other in db.scalars(select(Plan).where(Plan.is_default.is_(True))):
             other.is_default = False

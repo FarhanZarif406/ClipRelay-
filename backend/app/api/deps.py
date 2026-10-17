@@ -38,7 +38,8 @@ def current_user(request: Request, db: DB, credentials: HTTPAuthorizationCredent
     if request.query_params.get("mode") == "podcasts" and not user.is_owner:
         from app.services import plans
 
-        if not plans.effective(db, user)["features"]["podcasts"]:
+        # Looking around is allowed (the page shows what Podcasts would do); anything that changes something is not.
+        if request.method not in ("GET", "HEAD") and not plans.effective(db, user)["features"]["podcasts"]:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "The Podcasts workspace is not part of your plan. Ask the owner to upgrade it.")
     return user
 

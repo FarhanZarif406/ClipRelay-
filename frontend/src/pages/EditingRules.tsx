@@ -187,8 +187,6 @@ export default function EditingRules() {
       <button type="button" className="new" title="Saves the rules on screen as a new preset" onClick={() => setModal("new")}>+ New preset <PlanTag feature="editing_presets"/></button>
       {preset && <span className="preset-actions"><button type="button" className="link-button" onClick={() => setModal("rename")}>Rename</button><button type="button" className="link-button danger" onClick={() => void removePreset(preset)}>Delete preset</button></span>}
     </div>
-    {/* Above the editing area, so that area is the last thing on the page and the preview never scrolls out of view. */}
-    <PerChannelRules state={state} onAssign={(id, presetId) => void assign(id, presetId)}/>
     <div className="section-tabs" data-i18n-skip role="tablist" aria-label="Sections of the rules">{SECTIONS.map(s => <button type="button" role="tab" key={s.value} aria-selected={tab === s.value} className={tab === s.value ? "active" : ""} onClick={() => setTab(s.value)}>{SECTION_FEATURE[s.value] && <PlanTag feature={SECTION_FEATURE[s.value]!}/>}
       {s.label}{countChanges(s.part(draft), s.part(saved)) > 0 && <i title="Unsaved changes"/>}</button>)}</div>
     <div className="editing-layout">
@@ -204,6 +202,8 @@ export default function EditingRules() {
       </div>
       <EditingPreview look={draft} watermark={watermark} token={token} rendered={state.rendered_last_day} onTest={() => setModal("test")}/>
     </div>
+    {/* Below the editing area, so the sections and their photo come first on the page. */}
+    <div className="per-channel-below"><PerChannelRules state={state} onAssign={(id, presetId) => void assign(id, presetId)}/></div>
     <div className={`save-bar${changes ? " dirty" : ""}`}>
       <div><b>{changes ? `${changes} unsaved ${changes === 1 ? "change" : "changes"}${preset ? ` to “${preset.name}”` : ""}` : "All changes saved"}</b>
         <small className="muted">Applies to new {PODCASTS ? "clips" : "videos"} only.{changes ? " Ctrl+S saves." : ""}</small></div>

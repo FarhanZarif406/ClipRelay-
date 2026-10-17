@@ -24,8 +24,18 @@ export function LanguageToggle() {
 }
 
 /** The language board on the Dashboard: English or Roman Urdu, for the whole app. */
-export function LanguageBoard() {
+export function LanguageBoard({ compact = false }: { compact?: boolean }) {
   const [lang, choose] = useLanguage();
+  if (compact) {
+    // A small square card beside the Dashboard greeting.
+    return <div className="lang-board compact" data-i18n-skip>
+      <b>{lang === "ur" ? "Zubaan" : "Language"}</b>
+      <div className="lang-board-options">
+        <button type="button" className={lang === "en" ? "active" : ""} onClick={() => choose("en")}><b>English</b><small>Everything in English</small></button>
+        <button type="button" className={lang === "ur" ? "active" : ""} onClick={() => choose("ur")}><b>Roman Urdu</b><small>Sab kuch Roman Urdu mein</small></button>
+      </div>
+    </div>;
+  }
   return <div className="lang-board" data-i18n-skip>
     <div className="lang-board-text">
       <b>{lang === "ur" ? "Zubaan (Language)" : "Language (Zubaan)"}</b>

@@ -267,6 +267,7 @@ def claim_lane(db: Session, job: Job) -> bool:
 # downloaded while every place is taken waits (still "downloading", with its file kept) and is asked again shortly;
 # downloads, captions and uploads of other videos carry on meanwhile.
 RENDER_RETRY = timedelta(seconds=15)
+CLOUD_USED_UP = "Waiting for your PC: this period's cloud videos are used up. Turn the PC Helper on, or ask the owner for a bigger plan."
 RENDER_LOCK = 724_301  # PostgreSQL advisory lock: two workers never take the last place together
 
 
@@ -334,6 +335,13 @@ def _process_video(db: Session, job_id: int) -> str | None:
             job.next_check_at = utcnow() + LANE_RETRY  # the member's PC is on: it takes the video when it is its turn
             db.commit()
             return job.status
+        if place == "wait_pc":
+            if job.error != CLOUD_USED_UP:
+                job.error = CLOUD_USED_UP
+                job_event(db, job, JobStatus.FETCHED, CLOUD_USED_UP)
+            job.next_check_at = utcnow() + timedelta(minutes=2)  # asked again: the PC may be on by then
+            db.commit()
+            return job.status
         if place is None:
             mark_failed(db, job.id, editors.nothing_can_edit(db, video))
             db.refresh(job)
@@ -343,6 +351,8 @@ def _process_video(db: Session, job_id: int) -> str | None:
             db.commit()
             return job.status
         job.edit_place = place
+        if job.error == CLOUD_USED_UP:
+            job.error = None  # it no longer waits for the PC
         first = "Reading the podcast's transcript" if video.is_podcast_source else "Downloading the clip's section from YouTube" if video.parent_id else "Downloading from YouTube"
         job_event(db, job, JobStatus.DOWNLOADING, first)  # its turn: the member's previous video is done
     if video.is_podcast_source:

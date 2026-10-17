@@ -54,6 +54,9 @@ def plans_limit(db: Session, user_id: int, key: str) -> int:
     return plans.limit(db, user_id, key)
 
 
+SHOWN_KEYS = 5  # the page offers this many key places even on a smaller plan, so a member sees what a bigger plan gives
+
+
 def max_keys(db: Session, user_id: int) -> int:
     """Ten, or fewer when the account's plan says so."""
     from app.services import plans
@@ -193,7 +196,9 @@ def add_key(db: Session, user_id: int, key: str, label: str | None = None) -> Bu
     saved = keys(db, user_id)
     most = max_keys(db, user_id)
     if len(saved) >= most:
-        raise BufferError(f"Up to {most} Buffer key{'s' if most != 1 else ''} can be saved{' on your plan' if most < MAX_KEYS else ''}. Remove one first{', or ask the owner to upgrade your plan' if most < MAX_KEYS else ''}.")
+        if most < MAX_KEYS:
+            raise BufferError(f"More Buffer keys are not part of your plan: it allows {most}. Ask the owner to upgrade it.")
+        raise BufferError(f"Up to {most} Buffer keys can be saved. Remove one first.")
     _check_key(db, user_id, key)
     taken_labels = {item.label.lower() for item in saved}
     number = next(n for n in range(1, MAX_KEYS + 2) if f"key {n}" not in taken_labels)
@@ -310,6 +315,7 @@ def status(db: Session, user_id: int, mode: str) -> dict:
     up_next = choose_from(db, [c for c in rows if c.enabled])
     return {
         "connected": bool(saved), "max_keys": max_keys(db, user_id),
+        "shown_keys": max(max_keys(db, user_id), SHOWN_KEYS),  # room shown on the page; a key beyond the plan's is refused
         "max_accounts": plans_limit(db, user_id, "buffer_accounts"),  # 0: no limit
         "keys": [{
             "id": item.id, "label": item.label, "last4": (decrypt(item.api_key_enc) or "")[-4:], "saved_at": item.saved_at, "synced_at": item.synced_at,

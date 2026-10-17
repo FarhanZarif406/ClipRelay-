@@ -30,18 +30,30 @@ password, suspend it (no sign-in, its channels are not watched) or delete it, an
 Under **Plans** the owner makes plans with switches (Podcasts workspace, AI captions, AI hook text, background music,
 watermark, own fonts, editing presets, test render) and limits (channels, videos per day, Buffer keys, Buffer accounts across all keys; 0 = no limit) and an auto-check interval: how often the channels are checked
 as a backup to push notifications (0 = push notifications only, the lightest; Silver checks hourly). There are five plans, smallest first: Free Trial,
-Bronze, Silver, Gold and Platinum. Their starting limits are below (Platinum starts as a copy of Gold; the owner sets
-its limits), sized for about 30 members on a 1-vCPU, 4 GB server (keep Gold and Platinum to about 5 accounts there):
+Bronze, Silver, Gold and Platinum. Their prices and limits, as set by the owner (Accounts → Plans changes both at any time; the price shows on each plan card):
 
-| | Free Trial (default) | Bronze | Silver | Gold / Platinum |
-|---|---|---|---|---|
-| Trial | 5 days, then the account stops | – | – | – |
-| Videos / podcasts per day | 3 / – | 8 / – | 15 / – | 30 / 3 |
-| Channels | 50 | 101 | 210 | 315 |
-| Buffer keys / accounts | 1 / 3 | 1 / 3 | 3 / 9 | 5 / 15 |
-| Auto-check | push only | push only | hourly | every 30 min |
-| Editing | Fast (720p) | Fast | Full (1080p) | Full |
-| Extras | AI captions | + AI hook, watermark, own fonts, test render | + music, presets | + Podcasts |
+| | Free Trial (default) | Bronze | Silver | Gold | Platinum |
+|---|---|---|---|---|---|
+| Price (owner sets it) | free | PKR 999 | PKR 2,999 | PKR 5,499 | PKR 8,999 |
+| Plan length | 4 days | 15 days | 30 days | 30 days | 30 days |
+| Videos / podcasts per day | 10 / – | 13 / – | 20 / – | 36 / 3 | 60 / 8 |
+| Channels | 50 | 101 | 210 | 315 | 315 |
+| Buffer keys / accounts | 1 / 3 (5 places shown) | 1 / 3 | 2 / 6 | 3 / 9 | 5 / 15 |
+| Cloud videos | 3 in the trial | 30 in 15 days | 70 in 30 days | 230 in 30 days | 500 in 30 days |
+| Editing | Fast (720p) | Fast (720p) | Full (1080p) | Full (1080p) | Full (1080p) |
+| AI hook, watermark, own fonts | first day only | yes | yes | yes | yes |
+| Music / presets / test render | – | test render | yes | yes | yes |
+| Podcasts workspace | look only | look only | look only | yes | yes |
+| Auto-check | push only | push only | every 60 min | every 30 min | every 15 min |
+| Skipped videos kept | 8 h | 12 h | 24 h | 48 h | 72 h |
+
+Every plan has AI captions (with the member's own key) and PC Helper editing. A switch can be on, off, or on for the
+plan's first day only (counted from the day the plan is given). A plan length makes the account stop that many days
+after the plan is given; the end date is filled in when the owner picks the plan. Cloud videos are counted over the
+plan's length (per calendar month for a plan without one); when they run out, videos wait for the member's PC.
+A member whose plan has no Podcasts can open the Podcasts window and look around (a pop-up says what it does and which
+plan has it) but cannot add channels or change anything there. The owner can also change any switch or limit for one
+account alone (Accounts → Edit): it is marked Custom and can be put back to the plan's.
 
 An option a plan does not include is not hidden: it carries a small tag naming the smallest plan that has it (BRONZE,
 SILVER, GOLD); it can be tried on the photo, and saving it is refused. When a trial or a plan ends, the account

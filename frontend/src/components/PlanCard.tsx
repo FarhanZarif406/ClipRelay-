@@ -10,10 +10,14 @@ export default function PlanCard() {
   shown.push(plan.limits.auto_check_minutes ? `Channels checked every ${plan.limits.auto_check_minutes} min besides push notifications` : "New videos by push notification only");
   const daysLeft = plan.expires_at ? Math.max(0, Math.ceil((Date.parse(plan.expires_at) - Date.now()) / 86_400_000)) : null;
   const when = plan.expires_at && daysLeft !== null
-    ? (plan.limits.trial_days ? `Free trial: ${daysLeft} day${daysLeft === 1 ? "" : "s"} left (ends ${day(plan.expires_at)}). ` : `Until ${day(plan.expires_at)} (${daysLeft} day${daysLeft === 1 ? "" : "s"} left). `)
+    ? (plan.limits.trial_days && plan.plan.toLowerCase().includes("trial") ? `Free trial: ${daysLeft} day${daysLeft === 1 ? "" : "s"} left (ends ${day(plan.expires_at)}). ` : `Until ${day(plan.expires_at)} (${daysLeft} day${daysLeft === 1 ? "" : "s"} left). `)
     : "";
+  const labels = Object.fromEntries(plan.definitions.features.map(f => [f.key, f.label]));
+  const firstDay = plan.first_day?.length && plan.first_day_ends && Date.parse(plan.first_day_ends) > Date.now()
+    ? `Today only (your first day): ${plan.first_day.map(k => labels[k] ?? k).join(", ")}, until ${new Date(plan.first_day_ends).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}.` : "";
   return <div className={`plan-note${daysLeft !== null && daysLeft <= 3 ? " ending" : ""}`}>
     <b>Your plan: {plan.plan}</b>
     <span>{when}{shown.join(" · ")}.{locked.length > 0 && ` Not included: ${locked.join(", ")}.`} Ask the manager to upgrade it.</span>
+    {firstDay && <span className="first-day-note">{firstDay}</span>}
   </div>;
 }

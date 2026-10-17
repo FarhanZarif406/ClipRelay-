@@ -87,6 +87,10 @@ class User(Base, TimestampMixin):
     suspended: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())  # an owner stopped the account: no login, no new videos
     youtube_api_key_enc: Mapped[str | None] = mapped_column(Text)  # a member's own YouTube Data API key (owners use the shared one)
     language: Mapped[str] = mapped_column(String(8), default="en", server_default="en")  # en | ur (Roman Urdu)
+    # The owner's changes for this account only, on top of its plan: {"watermark": true}, {"videos_per_day": 50}.
+    plan_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())  # when the current plan was given (its "first day")
+    custom_features: Mapped[dict | None] = mapped_column(JSONType)
+    custom_limits: Mapped[dict | None] = mapped_column(JSONType)
 
     @property
     def is_owner(self) -> bool:
@@ -103,6 +107,8 @@ class Plan(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)  # given to new accounts, and to any whose plan expired
     features: Mapped[dict] = mapped_column(JSONType, default=dict)
     limits: Mapped[dict] = mapped_column(JSONType, default=dict)  # 0 means no limit
+    price: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # what the owner charges for it; 0 = free
+    currency: Mapped[str] = mapped_column(String(8), default="PKR", server_default="PKR")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 

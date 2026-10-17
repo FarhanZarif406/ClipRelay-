@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LanguageToggle } from "@/components/LanguageSwitch";
-import { PlanEndedBanner, PlanTag } from "@/components/PlanTag";
-import { useToast } from "@/components/Toast";
-import { useMyPlan } from "@/hooks/useMyPlan";
+import { PlanEndedBanner, PlanTag, PodcastsLocked } from "@/components/PlanTag";
 import { SystemOffBanner } from "@/components/MainSwitch";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -65,17 +63,13 @@ const DOCS_URL = (import.meta.env.VITE_DOCS_URL as string | undefined) ?? "/api/
 
 export function Layout() {
   const { user, logout } = useAuth();
-  const { allows, upgradeFor } = useMyPlan();
   // Admin pages for owners only; the Podcasts window only for plans that include it.
   const owner = user?.role === "owner";
   // Admin pages for owners only, the members' own Integrations for members only; the Podcasts window only for plans that include it.
   const navigation = allNavigation.filter(n => (owner ? !MEMBER_ONLY.includes(n.to) : !ADMIN_ONLY.includes(n.to)));
-  const toast = useToast();
   // Without the Podcasts workspace in the plan, its link stays, with the plan that has it, and says so instead of opening.
-  const openWindow = (which: "shorts" | "podcasts") => {
-    if (which === "podcasts" && !allows("podcasts")) toast({ title: `Podcasts is part of the ${upgradeFor("podcasts") ?? "Gold"} plan`, message: "Ask the manager to upgrade your plan to cut podcasts into clips.", tone: "danger" });
-    else openWorkspace(which);
-  };
+  // Podcasts opens for everyone: without it in the plan, the window can be looked at and says what Podcasts does.
+  const openWindow = (which: "shorts" | "podcasts") => openWorkspace(which);
   const { theme, setTheme } = useTheme();
   const [menu, setMenu] = useState(false);
   const [onboarding, setOnboarding] = useState(false);
@@ -120,7 +114,7 @@ export function Layout() {
         <div className="menu-anchor profile-anchor" ref={profileRef}><button className="profile" onClick={() => setProfileOpen(o => !o)}><Avatar label={initialsOf(name)} color="violet"/><div><strong>{name}</strong><span>{user?.workspace_name}</span></div><Icon name="chevron" size={14}/></button>
           {profileOpen && <div className="menu-pop right"><div className="menu-head"><strong>{name}</strong><span>{user?.email}</span></div><button onClick={() => (PODCASTS ? window.open("/settings", "cliprelay-shorts") : navigate("/settings"))}><Icon name="settings" size={14}/><span>Settings</span></button><button className="danger" onClick={logout}><Icon name="arrow" size={14}/><span>Sign out</span></button></div>}
         </div>
-      </div></header><main><SystemOffBanner off={nav.data?.system_on === false}/><PlanEndedBanner/><Outlet context={{ openOnboarding: () => setOnboarding(true) }}/></main></div>
+      </div></header><main><SystemOffBanner off={nav.data?.system_on === false}/><PlanEndedBanner/>{PODCASTS && <PodcastsLocked/>}<Outlet context={{ openOnboarding: () => setOnboarding(true) }}/></main></div>
     {menu && <div className="sidebar-scrim" onClick={() => setMenu(false)}/>}
     {onboarding && <Onboarding close={() => setOnboarding(false)}/>}
   </div>;

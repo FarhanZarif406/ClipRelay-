@@ -45,6 +45,8 @@ PATTERNS: list[tuple[str, str]] = [
      "Aap ke plan mein na PC Helper hai na cloud editing. Manager se plan upgrade karwayein."),
     (r"That is not a key file: Google Cloud gives it as a \.json file\.", "Ye key file nahi: Google Cloud ise .json file ki shakal mein deta hai."),
     # Buffer
+    (r"More Buffer keys are not part of your plan: it allows (\d+)\. Ask the owner to upgrade it\.",
+     r"Zyada Buffer keys aap ke plan mein shamil nahi: plan \1 key deta hai. Manager se plan upgrade karwayein."),
     (r"This key is already saved\.", "Ye key pehle se save hai."),
     (r"Buffer refused the API key\. Check that it was copied whole and has not expired\.", "Buffer ne API key qubool nahi ki. Dekhein ke poori copy hui hai aur expire nahi hui."),
     (r"That does not look like a Buffer API key\. It should be one line with no spaces\.", "Ye Buffer API key nahi lagti. Key ek line mein, bina space ke honi chahiye."),

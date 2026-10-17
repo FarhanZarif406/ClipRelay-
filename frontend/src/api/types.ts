@@ -260,7 +260,7 @@ export type BufferChannel = BufferRef & {
 /** One of the member's saved Buffer keys. The key itself never reaches the page, only its last four characters. */
 export type BufferKey = { id: number; label: string; last4: string; saved_at: string; synced_at: string | null; error: string | null; accounts: number; receiving: number };
 /** What the Buffer page shows. `up_next` is the account whose turn it is to get the next clip. */
-export type BufferStatus = { connected: boolean; max_keys: number; /** Buffer accounts the plan allows, all keys together; 0 = no limit. */ max_accounts: number; keys: BufferKey[]; public_url: boolean; time_zone: string; up_next: number | null; channels: BufferChannel[] };
+export type BufferStatus = { connected: boolean; max_keys: number; /** Key places the page shows; one beyond max_keys is refused. */ shown_keys: number; /** Buffer accounts the plan allows, all keys together; 0 = no limit. */ max_accounts: number; keys: BufferKey[]; public_url: boolean; time_zone: string; up_next: number | null; channels: BufferChannel[] };
 export type BufferChannelChanges = { enabled?: boolean; daily_limit?: number; times?: string[]; time_zone?: string; start_date?: string | null };
 type PeriodCounts = { today: number; week: number; month: number; lifetime: number };
 export type BufferChannelStatus = {
@@ -288,12 +288,17 @@ export type SystemState = { on: boolean; changed_at: string | null; changed_by: 
 
 /** Plans: what each account may use. 0 in a limit means no limit. */
 export type PlanDefinitions = { features: { key: string; label: string; help: string }[]; limits: { key: string; label: string; help: string; max: number }[] };
-export type PlanRow = { id: number; name: string; description: string; is_default: boolean; features: Record<string, boolean>; limits: Record<string, number>; accounts: number };
+/** A plan switch: on, off, or on for the first day of the plan only (a trial's taste of it). */
+export type FeatureValue = boolean | "first_day";
+/** `price`: what the owner charges for the plan (0 = free), in `currency`. */
+export type PlanRow = { id: number; name: string; description: string; is_default: boolean; features: Record<string, FeatureValue>; limits: Record<string, number>; accounts: number; price: number; currency: string };
 export type PlanList = PlanDefinitions & { plans: PlanRow[] };
-export type PlanInput = { name: string; description: string; is_default: boolean; features: Record<string, boolean>; limits: Record<string, number> };
+export type PlanInput = { name: string; description: string; is_default: boolean; features: Record<string, FeatureValue>; limits: Record<string, number>; price: number; currency: string };
 /** The plan in force for the signed-in account. Owners have everything. */
 export type MyPlan = {
   plan: string; owner: boolean; features: Record<string, boolean>; limits: Record<string, number>; expires_at: string | null; expired: boolean; definitions: PlanDefinitions;
+  /** Switches the plan gives on its first day only, and when that day ends. */
+  first_day: string[]; first_day_ends: string | null;
   /** Why the account may not work: its trial or plan has ended, or it is suspended. */
   blocked: "expired" | "suspended" | null;
   /** For each feature, the smallest plan that includes it: shown next to a locked option. */
@@ -302,8 +307,11 @@ export type MyPlan = {
 export type Account = {
   id: number; email: string; name: string; role: "owner" | "member"; suspended: boolean; created_at: string;
   plan_id: number | null; plan: string; plan_expires_at: string | null; plan_expired: boolean; channels: number; videos_today: number; buffer_keys: number;
+  /** What the account may use in force: its plan, with the owner's own changes for it on top (listed in `custom`). */
+  features: Record<string, FeatureValue>; limits: Record<string, number>; custom: string[];
 };
-export type AccountChanges = Partial<{ name: string; password: string; plan_id: number | null; plan_expires_at: string | null; suspended: boolean }>;
+export type AccountChanges = Partial<{ name: string; password: string; plan_id: number | null; plan_expires_at: string | null; suspended: boolean;
+  features: Record<string, FeatureValue>; limits: Record<string, number>; reset_custom: boolean }>;
 
 /** PC Helper: a member's computer that downloads and edits their videos itself. */
 export type HelperDevice = { id: number; name: string; platform: string; version: string; online: boolean; paused: boolean; last_seen_at: string | null; created_at: string; outdated: boolean };

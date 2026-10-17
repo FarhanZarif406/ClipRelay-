@@ -205,6 +205,8 @@ def place_for(db: Session, video: Video) -> str | None:
     if plans.allows(db, video.user_id, "pc_editing") and online_device(db, video.user_id):
         return "pc"
     if plans.allows(db, video.user_id, "cloud_editing") and cloud_editor.ready(db):
+        if plans.cloud_left(db, video.user_id) == 0:
+            return "wait_pc"  # this period's cloud videos are used up: it waits for the member's PC
         return "cloud"
     if cloud_editor.fallback(db) == "server":
         return "server"
@@ -284,6 +286,8 @@ def next_job(db: Session, device: EditorDevice) -> Job | None:
         if not pipeline.claim_lane(db, job):  # the member's previous video is still on its way
             break
         job.edit_place, job.editor_device_id, job.progress = "pc", device.id, 0
+        if job.error and job.error.startswith("Waiting for your PC"):
+            job.error = None
         job.next_check_at = None
         job.edit_spec = _spec(db, job)
         job_event(db, job, JobStatus.DOWNLOADING, f"Downloading on {device.name} (PC Helper)")
@@ -477,7 +481,7 @@ def overview(db: Session, device: EditorDevice) -> dict:
     return {
         "account": user.email, "name": user.name,
         "plan": {
-            "name": plan["plan"], "owner": plan["owner"], "trial": int(plan["limits"].get("trial_days") or 0) > 0,
+            "name": plan["plan"], "owner": plan["owner"], "trial": plans.is_trial(plan["plan"]),
             "ends_at": ends, "days_left": max(0, (ends - now).days) if ends else None, "blocked": blocked,
             "videos_per_day": plan["limits"].get("videos_per_day", 0),
         },

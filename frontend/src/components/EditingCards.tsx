@@ -69,17 +69,22 @@ export function FrameCard({ look, onChange, onReset }: CardProps) {
   const height = (fit === "ends" ? source / (w / h) : 1) * (fit === "whole" ? 1 : 1 / zoom) * 100;
   const x = POSITIONS.find(p => p.value === position)!.x;
   return <RuleCard title="Frame" desc="Choose the clip’s shape and how the widescreen source is fitted into it." onReset={onReset}>
-    {grid(<>
-      <Field label="Aspect ratio" hint="Vertical 9:16 suits TikTok, Reels and Shorts.">
-        <select value={aspect} onChange={e => onChange(patch(look, "frame", { aspect: e.target.value as Look["frame"]["aspect"] }))}>{ASPECTS.map(a => <option key={a} value={a}>{a} — {ASPECT_NAMES[a]}</option>)}</select></Field>
-      <Field label="Horizontal flip"><Toggle checked={flip} label="Horizontal flip" onChange={() => onChange(patch(look, "frame", { flip: !flip }))}/></Field>
-    </>)}
-    <Field label="Crop position" hint={FIT_HELP[fit]}>
-      <div className="crop-source"><i style={{ width: `${width}%`, height: `${height}%`, left: `${(100 - width) * (fit === "sides" ? x : 0.5)}%`, top: `${(100 - height) / 2}%` }}/></div>
-      <div className="segmented crop-buttons">{POSITIONS.map(p => <button type="button" key={p.value} className={position === p.value ? "active" : ""} disabled={fit !== "sides"} aria-pressed={position === p.value}
-        onClick={() => onChange(patch(look, "frame", { position: p.value }))}>{p.label}</button>)}</div>
-    </Field>
-    <Field label="Zoom" hint="Crops in tighter when the subject is small."><Range min={100} max={130} value={Math.round(zoom * 100)} readout={`${Math.round(zoom * 100)}%`} onChange={v => onChange(patch(look, "frame", { zoom: v / 100 }))}/></Field>
+    {/* Settings on the left (shape, zoom, flip), the picture of the crop filling the right. */}
+    <div className="frame-layout">
+      <div className="frame-controls">
+        <Field label="Aspect ratio" hint="Vertical 9:16 suits TikTok, Reels and Shorts.">
+          <select value={aspect} onChange={e => onChange(patch(look, "frame", { aspect: e.target.value as Look["frame"]["aspect"] }))}>{ASPECTS.map(a => <option key={a} value={a}>{a} — {ASPECT_NAMES[a]}</option>)}</select></Field>
+        <Field label="Zoom" hint="Crops in tighter when the subject is small."><Range min={100} max={130} value={Math.round(zoom * 100)} readout={`${Math.round(zoom * 100)}%`} onChange={v => onChange(patch(look, "frame", { zoom: v / 100 }))}/></Field>
+        <Field label="Horizontal flip" hint="Mirrors the picture left to right."><Toggle checked={flip} label="Horizontal flip" onChange={() => onChange(patch(look, "frame", { flip: !flip }))}/></Field>
+      </div>
+      <div className="frame-crop">
+        <Field label="Crop position" hint={FIT_HELP[fit]}>
+          <div className="crop-source"><i style={{ width: `${width}%`, height: `${height}%`, left: `${(100 - width) * (fit === "sides" ? x : 0.5)}%`, top: `${(100 - height) / 2}%` }}/></div>
+          <div className="segmented crop-buttons">{POSITIONS.map(p => <button type="button" key={p.value} className={position === p.value ? "active" : ""} disabled={fit !== "sides"} aria-pressed={position === p.value}
+            onClick={() => onChange(patch(look, "frame", { position: p.value }))}>{p.label}</button>)}</div>
+        </Field>
+      </div>
+    </div>
   </RuleCard>;
 }
 

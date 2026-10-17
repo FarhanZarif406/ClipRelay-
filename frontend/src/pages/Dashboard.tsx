@@ -6,7 +6,6 @@ import type { ActivityLog, Kpi, Summary } from "@/api/types";
 import { Menu } from "@/components/Menu";
 import { Icon, type IconName } from "@/components/Icon";
 import LimitBanner from "@/components/LimitBanner";
-import MainSwitch from "@/components/MainSwitch";
 import { LanguageBoard } from "@/components/LanguageSwitch";
 import PlanCard from "@/components/PlanCard";
 import { PlanEndedCard } from "@/components/PlanTag";
@@ -92,9 +91,7 @@ export default function Dashboard() {
   const firstName = (user?.name || "").split(" ")[0];
 
   return <>
-    <PageHeader title={`${greeting()}${firstName ? `, ${firstName}` : ""}`} description={PODCASTS ? "Podcasts workspace: long videos are cut into short clips and published to this workspace’s own accounts." : "Here’s what your content network is doing today."}/>
-    <LanguageBoard/>
-    <MainSwitch/>
+    <PageHeader title={`${greeting()}${firstName ? `, ${firstName}` : ""}`} description={PODCASTS ? "Podcasts workspace: long videos are cut into short clips and published to this workspace’s own accounts." : "Here’s what your content network is doing today."}><LanguageBoard compact/></PageHeader>
     <PlanEndedCard/>
     <PlanCard/>
     <LimitBanner/>

@@ -5,6 +5,7 @@ import { credentials, settings, users } from "@/api/endpoints";
 import type { NotificationSettings } from "@/api/types";
 import { CredentialCard } from "@/components/CredentialCard";
 import { ChannelOverrides, GlobalRules, RuleHistory } from "@/components/RulesEditor";
+import MainSwitch from "@/components/MainSwitch";
 import { Icon, type IconName } from "@/components/Icon";
 import { Field } from "@/components/Modal";
 import { useErrorToast, useToast } from "@/components/Toast";
@@ -13,12 +14,13 @@ import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { initialsOf } from "@/lib/format";
 
-const TABS = ["Pipeline rules", "Channel overrides", "Change history", "API keys", "Notifications", "Team members", "Appearance"] as const;
-/** Tabs only the admin sees: API keys and everything else that belongs to the whole workspace. */
-const ADMIN_TABS: readonly string[] = ["API keys", "Notifications", "Team members"];
+const TABS = ["Main switch", "Pipeline rules", "Channel overrides", "Change history", "API keys", "Notifications", "Team members", "Appearance"] as const;
+/** Tabs only the admin sees: the main switch, API keys and everything else that belongs to the whole workspace. */
+const ADMIN_TABS: readonly string[] = ["Main switch", "API keys", "Notifications", "Team members"];
 type Tab = (typeof TABS)[number];
 /** Each tab's icon and what it holds, for the menu and the heading above the tab. */
 const TAB_INFO: Record<Tab, { icon: IconName; text: string }> = {
+  "Main switch": { icon: "pause", text: "Stop or start the whole tool for every member" },
   "Pipeline rules": { icon: "rules", text: "How new videos are found, limited, captioned and kept" },
   "Channel overrides": { icon: "filter", text: "Different rules for one of your channels" },
   "Change history": { icon: "clock", text: "Who changed which rule, and when" },
@@ -116,10 +118,20 @@ export default function Settings() {
     <div className="settings-head"><i><Icon name={TAB_INFO[tab].icon} size={19}/></i><div><b data-i18n-skip>{tab}</b><span>{TAB_INFO[tab].text}.</span></div></div>
     {tab === "Pipeline rules" && <>
       <Card><div className="card-title">Set in one place</div><div className="card-caption">These are not repeated here, so there is only one place to change each of them.</div>
-        <div className="api-row"><div><strong>Shape, speed, sound, text and watermark</strong><span>The edit every video gets, and presets per channel</span></div><Link className="button secondary" to="/editing">Open Editing Rules</Link></div>
-        <div className="api-row"><div><strong>Caption prompt</strong><span>What the AI model is asked to write</span></div><Link className="button secondary" to="/prompts">Open Prompt Studio</Link></div>
-        <div className="api-row"><div><strong>Require approval</strong><span>Review each video, or publish automatically</span></div><Link className="button secondary" to="/review">Open Review Queue</Link></div></Card>
+        <div className="api-row plain"><div><strong>Shape, speed, sound, text and watermark</strong><span>The edit every video gets, and presets per channel</span></div><Link className="button secondary" to="/editing">Open Editing Rules</Link></div>
+        <div className="api-row plain"><div><strong>Caption prompt</strong><span>What the AI model is asked to write</span></div><Link className="button secondary" to="/prompts">Open Prompt Studio</Link></div>
+        <div className="api-row plain"><div><strong>Require approval</strong><span>Review each video, or publish automatically</span></div><Link className="button secondary" to="/review">Open Review Queue</Link></div></Card>
       <GlobalRules groups={["Detection", "Publishing", "Caption", "Storage"]} hideKeys={["approval_required"]} caption="Your own defaults: they apply to your channels only, not to other members. A change applies to the next video, with no restart. One of your channels can override most of them under “Channel overrides”."/>
+    </>}
+    {tab === "Main switch" && <>
+      <MainSwitch/>
+      <div className="switch-facts">
+        {[["pause", "When it is off", "No channel is checked and push notifications are ignored. Nothing is downloaded, edited, captioned or handed to Buffer, for any member."],
+          ["clock", "Videos on their way", "They are paused where they are, and carry on from there as soon as the system is on again."],
+          ["arrow", "Posts at Buffer", "Posts already scheduled in Buffer still go out: Buffer publishes them itself."],
+          ["bell", "What members see", "Members cannot switch it, but every page tells them the system is off."]].map(([icon, title, text]) =>
+          <Card key={title} className="switch-fact"><span className="switch-fact-icon"><Icon name={icon as IconName} size={17}/></span><div><b>{title}</b><span>{text}</span></div></Card>)}
+      </div>
     </>}
     {tab === "Channel overrides" && <ChannelOverrides/>}
     {tab === "Change history" && <RuleHistory/>}
