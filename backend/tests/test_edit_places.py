@@ -221,10 +221,25 @@ def test_the_helper_can_disconnect_itself(client, auth, db):
 
 def test_the_server_can_hand_out_the_helper_program(client, auth, tmp_path, monkeypatch):
     monkeypatch.setattr(editors, "helper_folder", lambda: str(tmp_path))
-    assert client.get("/api/helper", headers=auth).json()["download_windows"] == ""
-    assert client.get("/api/helper/download/windows").status_code == 404
+    page = client.get("/api/helper", headers=auth).json()
+    assert page["download_mac"] == "/api/helper/download/mac" and page["ready_mac"] is False  # the button works, and says the file is on its way
+    missing = client.get("/api/helper/download/windows")
+    assert missing.status_code == 404 and "on its way" in missing.text and "text/html" in missing.headers["content-type"]
     (tmp_path / "ClipRelay-Helper-windows.exe").write_bytes(b"MZ program")
-    assert client.get("/api/helper", headers=auth).json()["download_windows"] == "/api/helper/download/windows"
+    page = client.get("/api/helper", headers=auth).json()
+    assert page["download_windows"] == "/api/helper/download/windows" and page["ready_windows"] is True
     r = client.get("/api/helper/download/windows")
     assert r.status_code == 200 and r.content == b"MZ program" and "ClipRelay-Helper-windows.exe" in r.headers["content-disposition"]
     assert client.get("/api/helper/download/linux").status_code == 404
+
+
+def test_the_helper_window_shows_the_plan_and_three_months(client, auth, db, fake_media):
+    helper = _connect(client, auth)
+    job = _make_job(db, rendered=False)
+    got = client.post("/api/helper/next", headers=helper).json()["job"]
+    assert got["link"].endswith("watch?v=v1") and got["thumbnail"].startswith("https://i.ytimg.com/vi/v1/")
+    client.post(f"/api/helper/jobs/{job.id}/result", headers=helper, files={"file": ("clip.mp4", io.BytesIO(_mp4()), "video/mp4")})
+    view = client.get("/api/helper/overview", headers=helper).json()
+    assert view["plan"]["name"] == "Owner" and len(view["months"]) == 3
+    assert view["months"][0]["edited_on_pc"] == 1 and view["months"][0]["edited"] == 1 and view["months"][1]["edited"] == 0
+    assert view["recent"][0]["title"] == "Hidden beaches in Crete" and view["recent"][0]["url"].endswith("v=v1")

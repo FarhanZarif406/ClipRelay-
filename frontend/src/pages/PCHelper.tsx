@@ -74,8 +74,9 @@ export default function PCHelper() {
     <Card><div className="credential-head"><div><div className="card-title">Download the PC Helper</div>
       <div className="card-caption">{`Version ${data.latest_version}. Free, about 60 MB. No admin rights needed; it starts with your computer once connected.`}</div></div></div>
       <div className="helper-downloads">
-        {data.download_windows ? <a className="button primary" href={data.download_windows} target="_blank" rel="noopener noreferrer">Windows 10 / 11</a> : <span className="button" aria-disabled="true">Windows: ask the owner for the link</span>}
-        {data.download_mac ? <a className="button primary" href={data.download_mac} target="_blank" rel="noopener noreferrer">Mac</a> : <span className="button" aria-disabled="true">Mac: ask the owner for the link</span>}
+        {([["Windows 10 / 11", data.download_windows, data.ready_windows], ["Mac (Apple chip)", data.download_mac, data.ready_mac], ["Mac (Intel)", data.download_mac_intel, data.ready_mac_intel]] as const).map(([label, href, ready]) =>
+          <a key={label} className={ready ? "button primary" : "button"} href={href} target="_blank" rel="noopener noreferrer" title={ready ? undefined : "Not added by the owner yet"}>
+            <Icon name="download"/><span>{label}</span>{!ready && <Badge tone="neutral" dot={false}>Soon</Badge>}</a>)}
       </div>
       <p className="howto" style={{ paddingLeft: 0 }}>On a Mac, the first time: right-click the app, choose Open, then Open again (it is not from the App Store).</p>
     </Card>

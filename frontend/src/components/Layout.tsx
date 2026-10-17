@@ -73,7 +73,7 @@ export function Layout() {
   const toast = useToast();
   // Without the Podcasts workspace in the plan, its link stays, with the plan that has it, and says so instead of opening.
   const openWindow = (which: "shorts" | "podcasts") => {
-    if (which === "podcasts" && !allows("podcasts")) toast({ title: `Podcasts is part of the ${upgradeFor("podcasts") ?? "Business"} plan`, message: "Ask the manager to upgrade your plan to cut podcasts into clips.", tone: "danger" });
+    if (which === "podcasts" && !allows("podcasts")) toast({ title: `Podcasts is part of the ${upgradeFor("podcasts") ?? "Gold"} plan`, message: "Ask the manager to upgrade your plan to cut podcasts into clips.", tone: "danger" });
     else openWorkspace(which);
   };
   const { theme, setTheme } = useTheme();

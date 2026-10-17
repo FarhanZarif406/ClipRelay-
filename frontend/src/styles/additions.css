@@ -747,3 +747,8 @@ a.button { text-decoration: none; display: inline-flex; align-items: center; }
 .helper-page .helper-step { padding: 16px; }
 .helper-page .helper-device .status-note, .helper-page .form-note { font-size: 11px; }
 .form-note.warn { color: var(--warning, #c47f00); }
+.file-pick { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.file-pick input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.file-pick label.button { cursor: pointer; }
+.file-pick small { color: var(--muted); font-size: 11px; line-height: 1.5; flex: 1; min-width: 220px; }
+.helper-downloads .button { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; }

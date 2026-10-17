@@ -47,8 +47,10 @@ export function CloudEditingCard() {
       {data.has_key
         ? <div className="source-secret"><div><code>{data.client_email}</code><small>{data.project_id ? `Project ${data.project_id} · ` : ""}kept encrypted on the server, never shown again</small></div>
           <Button variant="danger" disabled={removeKey.isPending} onClick={() => window.confirm("Remove the service account key? Cloud editing stops until a new one is saved.") && removeKey.mutate()}>Remove</Button></div>
-        : <div className="inline-form"><input ref={file} type="file" accept=".json,application/json" onChange={e => { const f = e.target.files?.[0]; if (f) upload.mutate(f); }}/>
-          <small className="muted">The .json key file deploy.ps1 wrote (cliprelay-cloud-key.json). Delete it from your computer once saved.</small></div>}
+        : <div className="file-pick">
+          <input ref={file} id="cloud-key-file" type="file" accept=".json,application/json" onChange={e => { const f = e.target.files?.[0]; if (f) upload.mutate(f); }}/>
+          <label htmlFor="cloud-key-file" className="button">{upload.isPending ? "Saving…" : "Choose key file"}</label>
+          <small>The .json key file deploy.ps1 wrote (cliprelay-cloud-key.json). Delete it from your computer once saved.</small></div>}
     </Field>
 
     <Field label="When neither the PC nor the cloud can edit a video" hint="For example a member without the PC Helper while cloud editing is not set up, or not in their plan.">

@@ -67,6 +67,10 @@ class Client:
     def beat(self, paused: bool) -> dict:
         return self._call("POST", "/api/helper/beat", json={"version": VERSION, "paused": paused})
 
+    def overview(self) -> dict:
+        """The member's plan and when it ends, monthly figures for three months, and recent videos."""
+        return self._call("GET", "/api/helper/overview")
+
     def next_job(self) -> dict | None:
         return self._call("POST", "/api/helper/next").get("job")
 

@@ -186,7 +186,7 @@ def _counts(db) -> dict[int, int]:
 def list_plans(db: DB, _: OwnerUser):
     counts = _counts(db)
     default = plans.default_plan(db)
-    rows = db.scalars(select(Plan).order_by(Plan.id)).all()
+    rows = sorted(db.scalars(select(Plan)).all(), key=plans.tier_order)  # Free Trial, Bronze, Silver, Gold, Platinum
     # Accounts without a plan of their own are on the default one.
     return {"plans": [plans.view(p, counts.get(p.id, 0) + (counts.get(None, 0) if default and p.id == default.id else 0)) for p in rows], **plans.definitions()}
 

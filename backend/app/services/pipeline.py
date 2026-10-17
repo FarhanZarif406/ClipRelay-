@@ -417,6 +417,7 @@ def _process_video(db: Session, job_id: int) -> str | None:
         os.remove(rendered.path)
         return job.status
     video.rendered_file_path = storage.save(rendered.path, f"videos/{video.id}.mp4")
+    job.edited_at = utcnow()
     if video.source_file_path:
         storage.delete(video.source_file_path)  # the edit is made: the original is not needed again, and it is half the disk
         video.source_file_path = None

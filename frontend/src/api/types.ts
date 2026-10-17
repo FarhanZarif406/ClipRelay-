@@ -309,7 +309,9 @@ export type AccountChanges = Partial<{ name: string; password: string; plan_id: 
 export type HelperDevice = { id: number; name: string; platform: string; version: string; online: boolean; paused: boolean; last_seen_at: string | null; created_at: string; outdated: boolean };
 export type HelperPage = {
   devices: HelperDevice[]; allowed: boolean; cloud_allowed: boolean; cloud_ready: boolean; server_address: string; latest_version: string;
-  working_on: { job_id: number; title: string } | null; download_windows: string; download_mac: string;
+  working_on: { job_id: number; title: string } | null; download_windows: string; download_mac: string; download_mac_intel: string;
+  /** Whether the file behind each button is there (a button without one says it is on its way). */
+  ready_windows: boolean; ready_mac: boolean; ready_mac_intel: boolean;
 };
 /** Integrations → Cloud editing (owner only). The key itself never comes back. */
 export type CloudEditing = {

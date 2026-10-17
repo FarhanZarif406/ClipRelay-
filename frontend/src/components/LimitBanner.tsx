@@ -25,8 +25,8 @@ export function useDailyLimit() {
 /** What a member at their limit is told to do, by plan: a bigger plan, or (on the biggest) that the limit is reached. */
 export function upgradeLine(planName: string | undefined, owner: boolean) {
   if (owner || !planName) return null;
-  if (planName === "Business") return "Limit reached: Business is the biggest plan.";
-  if (planName === "Pro") return "Choose the Business plan for more videos a day.";
+  if (planName === "Platinum") return "Limit reached: Platinum is the biggest plan.";
+  if (planName === "Gold") return "Choose the Platinum plan for more videos a day.";
   return "Choose your plan: a bigger plan takes more videos a day.";
 }
 

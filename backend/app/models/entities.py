@@ -337,7 +337,8 @@ class Job(Base, TimestampMixin):
     edit_place: Mapped[str | None] = mapped_column(String(8))
     editor_device_id: Mapped[int | None] = mapped_column(ForeignKey("editor_devices.id", ondelete="SET NULL"), index=True)
     edit_spec: Mapped[dict | None] = mapped_column(JSONType)  # what a PC or the cloud is asked to make: the look, the hook line, the files
-    edit_token_hash: Mapped[str | None] = mapped_column(String(64))  # the cloud's one-job key for fetching the files and sending the result
+    edit_token_hash: Mapped[str | None] = mapped_column(String(64))
+    edited_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), index=True)  # when its edit was finished, wherever it was made  # the cloud's one-job key for fetching the files and sending the result
 
     video: Mapped[Video] = relationship(lazy="joined")
     tiktok_account: Mapped[TikTokAccount | None] = relationship(lazy="joined")

@@ -36,7 +36,7 @@ TOKEN_PREFIX = "crh_"
 PLATFORMS = ("windows", "mac")
 WORKING = (JobStatus.DOWNLOADING, JobStatus.RENDERING)
 MAX_RESULT_BYTES = 1024 * 1024 * 1024
-LATEST_VERSION = "1.0.0"  # the newest PC Helper; an older one is told an update is ready
+LATEST_VERSION = "1.1.0"  # the newest PC Helper; an older one is told an update is ready
 
 
 class EditorError(ValueError):
@@ -129,7 +129,7 @@ def beat(db: Session, device: EditorDevice, *, version: str | None = None, pause
 
 # The built PC Helper can be served by this server: put the files in this folder (next to the media folder,
 # so /data/helper on Docker). A link in .env (HELPER_DOWNLOAD_*) wins over the folder.
-HELPER_FILES = {"windows": "ClipRelay-Helper-windows.exe", "mac": "ClipRelay-Helper-mac.zip"}
+HELPER_FILES = {"windows": "ClipRelay-Helper-windows.exe", "mac": "ClipRelay-Helper-mac.zip", "mac-intel": "ClipRelay-Helper-mac-intel.zip"}
 
 
 def helper_folder() -> str:
@@ -143,12 +143,15 @@ def helper_file(platform: str) -> str | None:
 
 
 def downloads() -> dict:
+    """Where the page's download buttons go: a link from .env, else this server (which says so when it has no file yet)."""
     s = get_settings()
-    links = {"windows": s.helper_download_windows, "mac": s.helper_download_mac}
+    links = {"windows": s.helper_download_windows, "mac": s.helper_download_mac, "mac-intel": ""}
+    ready = {}
     for platform in HELPER_FILES:
-        if not links[platform] and helper_file(platform):
-            links[platform] = f"/api/helper/download/{platform}"
-    return {"download_windows": links["windows"], "download_mac": links["mac"]}
+        ready[platform] = bool(links[platform] or helper_file(platform))
+        links[platform] = links[platform] or f"/api/helper/download/{platform}"
+    return {"download_windows": links["windows"], "download_mac": links["mac"], "download_mac_intel": links["mac-intel"],
+            "ready_windows": ready["windows"], "ready_mac": ready["mac"], "ready_mac_intel": ready["mac-intel"]}
 
 
 def device_view(device: EditorDevice, now=None) -> dict:
@@ -334,6 +337,7 @@ def public_spec(job: Job) -> dict:
     files = {kind: {"cache": value["cache"], "url": f"/api/helper/jobs/{job.id}/files/{kind}"} for kind, value in (spec.get("files") or {}).items()}
     return {
         "job_id": job.id, "title": job.video.original_title or "", "url": spec.get("url"), "clip": spec.get("clip"),
+        "link": _watch_link(job.video), "thumbnail": _thumbnail(job.video), "channel": job.video.channel.display_name if job.video.channel else "",
         "short_side": spec.get("short_side", 720), "look": spec.get("look"), "hook_text": spec.get("hook_text"),
         "summary": spec.get("summary", ""), "files": files,
     }
@@ -388,6 +392,7 @@ def finish(db: Session, device: EditorDevice, job_id: int, upload) -> str:
         raise EditorError(f"The edited video could not be read: {exc}") from exc
     video = job.video
     video.rendered_file_path = get_storage().save(path, f"videos/{video.id}.mp4")
+    job.edited_at = utcnow()
     if not video.duration_sec:
         video.duration_sec = round(info.duration, 2)
     music = ((job.edit_spec or {}).get("files") or {}).get("music") or {}
@@ -422,3 +427,89 @@ def failed(db: Session, device: EditorDevice, job_id: int, stage: str, message: 
     label = "Download" if stage == "download" else "Render"
     pipeline._stage_failed(db, job, f"{label} on {device.name}", (message or "no reason given")[:300])
     db.commit()
+
+
+# ---------------------------------------------------------------- the helper's window: plan, monthly figures, recent videos
+
+MONTHS_SHOWN = 3
+
+
+def _month_starts(now, count: int) -> list:
+    """The first moment of this month and of the months before it, newest first (UTC)."""
+    starts, year, month = [], now.year, now.month
+    for _ in range(count):
+        starts.append(now.replace(year=year, month=month, day=1, hour=0, minute=0, second=0, microsecond=0))
+        year, month = (year - 1, 12) if month == 1 else (year, month - 1)
+    return starts
+
+
+def _count(db: Session, *conditions) -> int:
+    from sqlalchemy import func
+
+    return db.scalar(select(func.count(Job.id)).join(Video, Job.video_id == Video.id).where(*conditions)) or 0
+
+
+def overview(db: Session, device: EditorDevice) -> dict:
+    """What the helper's window shows besides its own work: the member's plan and when it ends, and per month (this
+    one and the two before) how many videos this account's PCs edited, how many were edited in all, and published."""
+    user = device.user
+    now = utcnow()
+    plan = plans.effective(db, user)
+    ends = plan["expires_at"]
+    blocked = plans.blocked(db, user.id)
+    starts = _month_starts(now, MONTHS_SHOWN)
+    months = []
+    for i in range(MONTHS_SHOWN):
+        start, end = starts[i], (starts[i - 1] if i else now)  # this month so far, then each month before it
+        mine = Video.user_id == user.id
+        months.append({
+            "month": start.strftime("%Y-%m"),
+            "edited_on_pc": _count(db, mine, Job.edit_place == "pc", Job.edited_at >= start, Job.edited_at < end),
+            "edited_in_cloud": _count(db, mine, Job.edit_place == "cloud", Job.edited_at >= start, Job.edited_at < end),
+            "edited": _count(db, mine, Job.edited_at >= start, Job.edited_at < end),
+            "published": _count(db, mine, Job.posted_at >= start, Job.posted_at < end),
+        })
+    recent = db.scalars(
+        select(Job).join(Video, Job.video_id == Video.id)
+        .where(Video.user_id == user.id, Job.edit_place == "pc", Job.edited_at.is_not(None))
+        .order_by(Job.edited_at.desc()).limit(6)
+    ).unique().all()
+    return {
+        "account": user.email, "name": user.name,
+        "plan": {
+            "name": plan["plan"], "owner": plan["owner"], "trial": int(plan["limits"].get("trial_days") or 0) > 0,
+            "ends_at": ends, "days_left": max(0, (ends - now).days) if ends else None, "blocked": blocked,
+            "videos_per_day": plan["limits"].get("videos_per_day", 0),
+        },
+        "months": months,
+        "recent": [{
+            "title": job.video.original_title or job.video.youtube_video_id, "status": job.status,
+            "url": _watch_link(job.video), "thumbnail": _thumbnail(job.video), "edited_at": job.edited_at, "posted_at": job.posted_at,
+        } for job in recent],
+    }
+
+
+def _youtube_id(video: Video) -> str:
+    source = video.parent if video.parent_id and video.parent else video
+    return (source.youtube_video_id or "").split("#", 1)[0]
+
+
+def _watch_link(video: Video) -> str | None:
+    vid = _youtube_id(video)
+    return video.permalink or (youtube.watch_url(vid) if vid else None)
+
+
+def _thumbnail(video: Video) -> str | None:
+    vid = _youtube_id(video)
+    return video.thumbnail_url or (f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg" if vid else None)
+
+
+def not_ready_page(platform: str) -> str:
+    """A friendly page for a download button whose file the owner has not put on the server yet."""
+    which = {"windows": "Windows", "mac": "Mac (Apple chip)", "mac-intel": "Mac (Intel)"}.get(platform, "this computer")
+    return f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ClipRelay Helper</title><style>body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d12;color:#e6e8ee;
+font:15px/1.6 Inter,system-ui,sans-serif}}div{{max-width:460px;padding:28px;border:1px solid #232938;border-radius:16px;background:#11141b;margin:16px}}
+b{{display:block;font-size:19px;margin-bottom:8px}}p{{color:#8a91a5;margin:6px 0}}</style></head><body><div>
+<b>The PC Helper for {which} is on its way</b><p>Your manager has not added this download to ClipRelay yet. Please ask them, then press the button again.</p>
+<p>PC Helper abhi tayyar nahi hua. Manager se kahein ke ise ClipRelay mein lagayein, phir dobara button dabayein.</p></div></body></html>"""

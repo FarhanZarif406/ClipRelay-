@@ -15,7 +15,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-latest, macos-13]  # macos-latest: Apple chip; macos-13: Intel
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +34,7 @@ jobs:
           path: |
             helper/dist/ClipRelay-Helper-windows.exe
             helper/dist/ClipRelay-Helper-mac.zip
+            helper/dist/ClipRelay-Helper-mac-intel.zip
           if-no-files-found: ignore
 
   release:

@@ -29,10 +29,11 @@ public sign-up. Each account gets a plan, optionally until a date, and the owner
 password, suspend it (no sign-in, its channels are not watched) or delete it, and add or remove its Buffer keys for it.
 Under **Plans** the owner makes plans with switches (Podcasts workspace, AI captions, AI hook text, background music,
 watermark, own fonts, editing presets, test render) and limits (channels, videos per day, Buffer keys, Buffer accounts across all keys; 0 = no limit) and an auto-check interval: how often the channels are checked
-as a backup to push notifications (0 = push notifications only, the lightest; Pro checks hourly). A fresh install has four plans, sized for about 30
-members on a 1-vCPU, 4 GB server (keep Business to about 5 accounts there):
+as a backup to push notifications (0 = push notifications only, the lightest; Silver checks hourly). There are five plans, smallest first: Free Trial,
+Bronze, Silver, Gold and Platinum. Their starting limits are below (Platinum starts as a copy of Gold; the owner sets
+its limits), sized for about 30 members on a 1-vCPU, 4 GB server (keep Gold and Platinum to about 5 accounts there):
 
-| | Free (default) | Starter | Pro | Business |
+| | Free Trial (default) | Bronze | Silver | Gold / Platinum |
 |---|---|---|---|---|
 | Trial | 5 days, then the account stops | – | – | – |
 | Videos / podcasts per day | 3 / – | 8 / – | 15 / – | 30 / 3 |
@@ -42,8 +43,8 @@ members on a 1-vCPU, 4 GB server (keep Business to about 5 accounts there):
 | Editing | Fast (720p) | Fast | Full (1080p) | Full |
 | Extras | AI captions | + AI hook, watermark, own fonts, test render | + music, presets | + Podcasts |
 
-An option a plan does not include is not hidden: it carries a small tag naming the smallest plan that has it (PRO,
-STARTER, BUSINESS); it can be tried on the photo, and saving it is refused. When a trial or a plan ends, the account
+An option a plan does not include is not hidden: it carries a small tag naming the smallest plan that has it (BRONZE,
+SILVER, GOLD); it can be tried on the photo, and saving it is refused. When a trial or a plan ends, the account
 can still sign in, but nothing is detected, downloaded, edited or uploaded for it; the Dashboard says so in a large
 notice until the owner gives it a plan.
 One plan is the default: new accounts get it, and so does an account whose plan has ended. A member sees their plan on

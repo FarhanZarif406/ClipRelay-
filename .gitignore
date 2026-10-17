@@ -18,3 +18,5 @@ helper/dist/
 helper/app/services/media.py
 helper/*.spec
 helper/build.log
+helper/app/icon.ico
+helper/app/icon.png

@@ -6,7 +6,7 @@ The helper signs in with its own key (`Authorization: Bearer crh_…`), which on
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from app.api.deps import DB, CurrentUser
@@ -44,7 +44,7 @@ def download_helper(platform: str):
     """The PC Helper program, when the owner put it in the server's helper folder. It holds no secrets."""
     path = editors.helper_file(platform)
     if not path:
-        raise HTTPException(404, "The PC Helper for this computer is not on the server. Ask the owner for the link.")
+        return HTMLResponse(editors.not_ready_page(platform), status_code=404)
     return FileResponse(path, filename=editors.HELPER_FILES[platform], media_type="application/octet-stream")
 
 
@@ -90,6 +90,12 @@ class BeatIn(BaseModel):
 def beat(body: BeatIn, db: DB, device: Device):
     return {**editors.beat(db, device, version=body.version, paused=body.paused), "device": editors.device_view(device),
             "account": device.user.email, "language": device.user.language}
+
+
+@router.get("/helper/overview")
+def overview(db: DB, device: Device):
+    """For the helper's window: the member's plan and when it ends, monthly figures (3 months), recent videos."""
+    return editors.overview(db, device)
 
 
 @router.post("/helper/next")

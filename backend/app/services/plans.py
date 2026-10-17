@@ -48,6 +48,14 @@ FREE = {
 FULL = {"features": {key: True for key in FEATURES}, "limits": {key: 0 for key in LIMITS}}
 
 
+# The tiers from smallest to biggest; plans the owner adds with other names come after them.
+TIERS = ("Free Trial", "Bronze", "Silver", "Gold", "Platinum")
+
+
+def tier_order(plan: Plan) -> tuple:
+    return (TIERS.index(plan.name) if plan.name in TIERS else len(TIERS), plan.id)
+
+
 class PlanError(ValueError):
     """A plan or a plan change the owner asked for is not valid. The message is written for people."""
 

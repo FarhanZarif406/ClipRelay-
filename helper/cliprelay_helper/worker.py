@@ -31,7 +31,8 @@ class Worker:
         self.wake = threading.Event()
         self.lock = threading.Lock()
         self.state = {"stage": "starting", "title": "", "percent": None, "message": "", "online": False, "done_today": 0,
-                      "last_error": "", "latest_version": VERSION, "download_windows": "", "download_mac": ""}
+                      "last_error": "", "latest_version": VERSION, "download_windows": "", "download_mac": "",
+                      "link": "", "thumbnail": "", "channel": "", "overview": None, "started_at": None}
         self.listeners: list = []
 
     # ---- state shown in the tray and the helper window
@@ -76,6 +77,10 @@ class Worker:
                         self.settings.update(account=account, language=language)
                     self.set(online=True, latest_version=answer.get("latest_version") or VERSION,
                              download_windows=answer.get("download_windows") or "", download_mac=answer.get("download_mac") or "")
+                    try:
+                        self.set(overview=self.client.overview())
+                    except ServerError:
+                        pass  # the figures wait for the next beat; the helper itself is fine
                 except NotConnected as exc:
                     self._lost(str(exc))
                 except ServerError as exc:
@@ -158,7 +163,8 @@ class Worker:
         os.makedirs(folder)
         title = job.get("title") or f"Video {job_id}"
         try:
-            self.set(stage="downloading", title=title, percent=0, message="")
+            self.set(stage="downloading", title=title, percent=0, message="", link=job.get("link") or "", thumbnail=job.get("thumbnail") or "",
+                     channel=job.get("channel") or "", started_at=time.time())
             self.client.progress(job_id, "download", 0)
             try:
                 files = self._files(job)
@@ -191,7 +197,11 @@ class Worker:
                     os.remove(result.path)
             with self.lock:
                 self.state["done_today"] += 1
-            self.set(stage="idle", title="", percent=None)
+            self.set(stage="idle", title="", percent=None, link="", thumbnail="")
+            try:
+                self.set(overview=self.client.overview())  # the figures count this video at once
+            except ServerError:
+                pass
         except Stop:
             self.set(stage="idle", title="", percent=None, message="The video was paused, stopped or moved on")
         except ServerError as exc:

@@ -1,8 +1,7 @@
 """The icon next to the clock: its colour says what the helper is doing; its menu opens the window, pauses or quits."""
 
-from PIL import Image, ImageDraw
+from cliprelay_helper.logo import mark
 
-COLOURS = {"ok": (15, 157, 88), "work": (79, 70, 229), "warn": (196, 127, 0), "bad": (217, 48, 37)}
 LABELS = {
     "idle": "Ready: waiting for the next video", "downloading": "Downloading", "editing": "Editing", "sending": "Sending the video",
     "paused": "Paused", "offline": "ClipRelay cannot be reached", "not_connected": "Not connected: open the window", "starting": "Starting…",
@@ -17,13 +16,9 @@ def mood(state: dict, connected: bool, paused: bool) -> str:
     return "work" if state.get("stage") in ("downloading", "editing", "sending") else "ok"
 
 
-def picture(colour: str) -> Image.Image:
-    size = 64
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((2, 2, size - 2, size - 2), radius=16, fill=COLOURS[colour])
-    draw.arc((16, 16, 48, 48), start=40, end=320, fill="white", width=7)  # a "C"
-    return image
+def picture(colour: str):
+    """The ClipRelay mark with a small dot saying how the helper is: green ready, white working, amber paused, red not connected."""
+    return mark(64, colour)
 
 
 def run(settings, worker, window, on_quit) -> bool:
