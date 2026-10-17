@@ -109,7 +109,7 @@ def _cut(inputs: list[tuple[str, float]], length: float, has_audio_input: bool) 
     cmd += ["-t", f"{length:.3f}", "-map", "0:v:0", "-map", "1:a:0?" if has_audio_input else "0:a:0?"]
     cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=900)
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=900, **media.child())
     except (OSError, subprocess.TimeoutExpired) as exc:
         os.remove(out)
         raise SourceError(f"The clip could not be cut: {exc}") from exc

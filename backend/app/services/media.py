@@ -46,6 +46,15 @@ def ffmpeg_exe() -> str:
         return configured
 
 
+def child() -> dict:
+    """How FFmpeg is started: with no input (a program without a console, like the PC Helper started from the
+    desktop, has none to give, and FFmpeg would stop at once), and on Windows without a console window of its own."""
+    extra: dict = {"stdin": subprocess.DEVNULL}
+    if os.name == "nt":
+        extra["creationflags"] = subprocess.CREATE_NO_WINDOW
+    return extra
+
+
 DURATION_RE = re.compile(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)")
 VIDEO_RE = re.compile(r"Stream #\S+ Video: .*?\b(\d{2,5})x(\d{2,5})\b")
 
@@ -53,7 +62,7 @@ VIDEO_RE = re.compile(r"Stream #\S+ Video: .*?\b(\d{2,5})x(\d{2,5})\b")
 def probe(path: str) -> ProbeResult:
     """Read duration, size and whether there is sound, from FFmpeg's description of the file."""
     try:
-        out = subprocess.run([ffmpeg_exe(), "-hide_banner", "-i", path], capture_output=True, text=True, errors="replace", timeout=60).stderr
+        out = subprocess.run([ffmpeg_exe(), "-hide_banner", "-i", path], capture_output=True, text=True, errors="replace", timeout=60, **child()).stderr
     except FileNotFoundError as exc:
         raise ProbeError("FFmpeg was not found — install FFmpeg on the server") from exc
     except subprocess.TimeoutExpired as exc:
@@ -275,7 +284,7 @@ def render_command(src: str, dst: str, look: dict, *, width: int, height: int, d
     speed = look["speed"]["speed"]
     take = min(duration, max_seconds * speed) if max_seconds else duration
     seconds = _tidy(take / speed)
-    cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y", "-filter_complex_threads", "1"]
+    cmd = [ffmpeg_exe(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-filter_complex_threads", "1"]
     cmd += (["-t", f"{_tidy(take)}"] if max_seconds else []) + ["-i", src]
     sound = "[0:a]" if has_audio and look["encoding"]["keep_audio"] else None
     music = bool(look["music"]["enabled"] and music_file)
@@ -360,9 +369,9 @@ def render_command(src: str, dst: str, look: dict, *, width: int, height: int, d
     return cmd + ["-movflags", "+faststart", dst], seconds
 
 
-def _ffmpeg_message(stderr: str) -> str:
+def _ffmpeg_message(stderr: str, code: int | None = None) -> str:
     lines = [line.strip() for line in (stderr or "").splitlines() if line.strip()]
-    text = lines[-1] if lines else "FFmpeg stopped without an error message"
+    text = lines[-1] if lines else f"FFmpeg stopped without an error message (exit code {code})"
     lowered = text.lower()
     if "no space left" in lowered:
         return "The disk is full"
@@ -388,9 +397,9 @@ def _gentle(cmd: list[str]) -> list[str]:
 def _run(cmd: list[str], seconds: float, on_progress: Progress | None, timeout: float) -> tuple[int, str]:
     """Run FFmpeg and return (exit code, error text). With `on_progress`, reports how much of the output is written."""
     if on_progress is None or seconds <= 0:
-        result = subprocess.run(_gentle(cmd), capture_output=True, text=True, errors="replace", timeout=timeout)
+        result = subprocess.run(_gentle(cmd), capture_output=True, text=True, errors="replace", timeout=timeout, **child())
         return result.returncode, result.stderr
-    proc = subprocess.Popen(_gentle(cmd[:1] + ["-progress", "pipe:1", "-nostats"] + cmd[1:]), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
+    proc = subprocess.Popen(_gentle(cmd[:1] + ["-progress", "pipe:1", "-nostats"] + cmd[1:]), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace", **child())
     errors: list[str] = []
     reader = threading.Thread(target=lambda: errors.append(proc.stderr.read()), daemon=True)
     reader.start()
@@ -468,6 +477,6 @@ def render(src: str, look: dict, *, hook_text: str | None = None, font_file: str
         shutil.rmtree(work, ignore_errors=True)
     if code != 0 or os.path.getsize(dst) == 0:
         os.remove(dst)
-        raise RenderError(_ffmpeg_message(errors))
+        raise RenderError(_ffmpeg_message(errors, code))
     shown = " ".join(f'"{part}"' if " " in part else part for part in cmd)
     return RenderResult(dst, shown, seconds, note, bool(info.width and info.height and info.height > info.width))

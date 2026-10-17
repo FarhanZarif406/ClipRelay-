@@ -217,3 +217,14 @@ def test_the_helper_can_disconnect_itself(client, auth, db):
     assert client.post("/api/helper/disconnect", headers=helper).status_code == 204
     assert client.get("/api/helper", headers=auth).json()["devices"] == []
     assert client.post("/api/helper/beat", headers=helper, json={}).status_code == 401
+
+
+def test_the_server_can_hand_out_the_helper_program(client, auth, tmp_path, monkeypatch):
+    monkeypatch.setattr(editors, "helper_folder", lambda: str(tmp_path))
+    assert client.get("/api/helper", headers=auth).json()["download_windows"] == ""
+    assert client.get("/api/helper/download/windows").status_code == 404
+    (tmp_path / "ClipRelay-Helper-windows.exe").write_bytes(b"MZ program")
+    assert client.get("/api/helper", headers=auth).json()["download_windows"] == "/api/helper/download/windows"
+    r = client.get("/api/helper/download/windows")
+    assert r.status_code == 200 and r.content == b"MZ program" and "ClipRelay-Helper-windows.exe" in r.headers["content-disposition"]
+    assert client.get("/api/helper/download/linux").status_code == 404

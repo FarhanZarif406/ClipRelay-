@@ -127,9 +127,28 @@ def beat(db: Session, device: EditorDevice, *, version: str | None = None, pause
     return {"ok": True, "latest_version": LATEST_VERSION, **downloads()}
 
 
+# The built PC Helper can be served by this server: put the files in this folder (next to the media folder,
+# so /data/helper on Docker). A link in .env (HELPER_DOWNLOAD_*) wins over the folder.
+HELPER_FILES = {"windows": "ClipRelay-Helper-windows.exe", "mac": "ClipRelay-Helper-mac.zip"}
+
+
+def helper_folder() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(get_settings().storage_local_path)), "helper")
+
+
+def helper_file(platform: str) -> str | None:
+    name = HELPER_FILES.get(platform)
+    path = os.path.join(helper_folder(), name) if name else None
+    return path if path and os.path.isfile(path) else None
+
+
 def downloads() -> dict:
     s = get_settings()
-    return {"download_windows": s.helper_download_windows, "download_mac": s.helper_download_mac}
+    links = {"windows": s.helper_download_windows, "mac": s.helper_download_mac}
+    for platform in HELPER_FILES:
+        if not links[platform] and helper_file(platform):
+            links[platform] = f"/api/helper/download/{platform}"
+    return {"download_windows": links["windows"], "download_mac": links["mac"]}
 
 
 def device_view(device: EditorDevice, now=None) -> dict:

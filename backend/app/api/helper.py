@@ -39,6 +39,15 @@ def disconnect(device_id: int, db: DB, user: CurrentUser):
     editors.remove(db, device)
 
 
+@router.get("/helper/download/{platform}", include_in_schema=False)
+def download_helper(platform: str):
+    """The PC Helper program, when the owner put it in the server's helper folder. It holds no secrets."""
+    path = editors.helper_file(platform)
+    if not path:
+        raise HTTPException(404, "The PC Helper for this computer is not on the server. Ask the owner for the link.")
+    return FileResponse(path, filename=editors.HELPER_FILES[platform], media_type="application/octet-stream")
+
+
 # ---------------------------------------------------------------- the helper program
 
 def current_device(db: DB, authorization: Annotated[str | None, Header()] = None) -> EditorDevice:

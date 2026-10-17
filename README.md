@@ -106,8 +106,11 @@ Retry) or **edit it on this server** (within `MAX_RENDERS`). Plans have two swit
 
 **Building the PC Helper.** `cd helper && python -m venv .venv && .venv/Scripts/pip install -r requirements.txt &&
 .venv/Scripts/python build.py` makes `dist/ClipRelay-Helper-windows.exe` (a Mac build needs a Mac). The GitHub workflow
-*PC Helper* (`.github/workflows/helper.yml`) builds both; a tag `helper-v1.0.0` publishes them as a release. Put the two
-download links in `.env` (`HELPER_DOWNLOAD_WINDOWS`, `HELPER_DOWNLOAD_MAC`) so members see them on the PC Helper page.
+*PC Helper* (`.github/workflows/helper.yml`) builds both; a tag `helper-v1.0.0` publishes them as a release. Members get
+the program from the PC Helper page in either of two ways: put the built files (`ClipRelay-Helper-windows.exe`,
+`ClipRelay-Helper-mac.zip`) in the server's `helper` folder next to the media folder (`/data/helper` on Docker,
+`backend/data/helper` locally) and this server hands them out; or put links in `.env` (`HELPER_DOWNLOAD_WINDOWS`,
+`HELPER_DOWNLOAD_MAC`), which win over the folder.
 On first run the Windows program copies itself to `%LOCALAPPDATA%\Programs\ClipRelay Helper` (no admin rights); a Mac
 user opens it once with right-click → Open, since it is not from the App Store. If no Deno or Node.js is on the
 computer, the helper fetches Deno once from its official releases (yt-dlp needs it to read YouTube).
