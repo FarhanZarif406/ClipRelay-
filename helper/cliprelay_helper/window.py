@@ -34,11 +34,57 @@ def running_link() -> str | None:
     return f"http://127.0.0.1:{PORT}/?k={key}" if key else None
 
 
+def ask_running_to_quit() -> bool:
+    """Ask a helper that already runs here to close (a newer version is taking its place). True when it was asked."""
+    link = running_link()
+    if not link:
+        return False
+    try:
+        import httpx
+
+        httpx.post(link.replace("/?k=", "/quit?k="), headers={"X-Helper": "1"}, json={}, timeout=5)
+        return True
+    except Exception:  # noqa: BLE001 — none running, or it closed before answering
+        return False
+
+
+def _saved_key() -> str:
+    """The window's key: made once and kept, so a bookmarked or reopened window keeps working after a restart."""
+    try:
+        with open(_key_file(), encoding="utf-8") as fh:
+            key = fh.read().strip()
+        if len(key) >= 20:
+            return key
+    except OSError:
+        pass
+    key = secrets.token_urlsafe(18)
+    with open(_key_file(), "w", encoding="utf-8") as fh:
+        fh.write(key)
+    if os.name == "posix":
+        os.chmod(_key_file(), 0o600)
+    return key
+
+
+class OnlyServer(ThreadingHTTPServer):
+    """Holds the port alone. (On Windows a reusable address lets a second helper share it, and the browser then
+    talks to the wrong one.) A second helper finds the port taken and shows the first one's window instead."""
+
+    allow_reuse_address = False
+    daemon_threads = True
+
+    def server_bind(self):
+        if os.name == "nt":
+            import socket
+
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 class Window:
     def __init__(self, settings: Settings, worker):
         self.settings = settings
         self.worker = worker
-        self.key = secrets.token_urlsafe(18)
+        self.key = _saved_key()
         self.server: ThreadingHTTPServer | None = None
 
     @property
@@ -55,7 +101,7 @@ class Window:
 
             def _ok(self) -> bool:
                 query = parse_qs(urlparse(self.path).query)
-                return secrets.compare_digest((query.get("k") or [""])[0], window.key)
+                return self._local() and secrets.compare_digest((query.get("k") or [""])[0], window.key)
 
             def _send(self, code: int, body: bytes, kind: str) -> None:
                 self.send_response(code)
@@ -68,8 +114,17 @@ class Window:
             def _json(self, value: dict, code: int = 200) -> None:
                 self._send(code, json.dumps(value, default=str).encode(), "application/json")
 
+            def _local(self) -> bool:
+                # Only this computer's own address: a web page using a look-alike name (DNS rebinding) is refused.
+                return (self.headers.get("Host") or "") in (f"127.0.0.1:{PORT}", f"localhost:{PORT}")
+
             def do_GET(self):
                 if not self._ok():
+                    if self._local() and urlparse(self.path).path == "/":  # an old or bookmarked link: to the window
+                        self.send_response(302)
+                        self.send_header("Location", f"/?k={window.key}")
+                        self.end_headers()
+                        return None
                     return self._send(403, b"Open this window from the ClipRelay Helper icon.", "text/plain")
                 path = urlparse(self.path).path
                 if path == "/":
@@ -92,13 +147,9 @@ class Window:
                     return self._json({"error": str(exc)}, 400)
 
         try:
-            self.server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+            self.server = OnlyServer(("127.0.0.1", PORT), Handler)
         except OSError:
             return False
-        with open(_key_file(), "w", encoding="utf-8") as fh:
-            fh.write(self.key)
-        if os.name == "posix":
-            os.chmod(_key_file(), 0o600)
         threading.Thread(target=self.server.serve_forever, name="window", daemon=True).start()
         return True
 
@@ -132,6 +183,10 @@ class Window:
             set_start_with_computer(bool(body.get("on")))
         elif path == "/language":
             s.update(language="ur" if body.get("language") == "ur" else "en", language_chosen=True)
+        elif path == "/quit":
+            # A newer version is replacing this one: close straight away, so its file can be overwritten.
+            threading.Timer(0.3, lambda: os._exit(0)).start()
+            return {"ok": True}
         elif path == "/disconnect":
             Client(s).disconnect()
             s.update(token="", account="")

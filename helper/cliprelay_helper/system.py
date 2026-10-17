@@ -135,12 +135,23 @@ def install_windows() -> str | None:
     target = os.path.join(home, f"{APP_NAME}.exe")
     if os.path.normcase(os.path.abspath(exe)) == os.path.normcase(os.path.abspath(target)):
         return None
-    try:
-        os.makedirs(home, exist_ok=True)
-        shutil.copy2(exe, target)
-    except OSError:
-        return None  # in use or not allowed: run from where it is
-    return target
+    import time
+
+    from cliprelay_helper.window import ask_running_to_quit
+
+    os.makedirs(home, exist_ok=True)
+    asked = False
+    for _ in range(20):  # a new version over a running one: the running helper is asked to close, then replaced
+        try:
+            shutil.copy2(exe, target)
+            return target
+        except OSError:
+            if not asked:
+                asked = ask_running_to_quit()
+                if not asked:
+                    break
+            time.sleep(0.5)
+    return None  # not allowed: run from where it is
 
 
 # ---------------------------------------------------------------- the JavaScript runtime yt-dlp needs for YouTube

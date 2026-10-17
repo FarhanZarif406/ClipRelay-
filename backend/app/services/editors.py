@@ -36,7 +36,7 @@ TOKEN_PREFIX = "crh_"
 PLATFORMS = ("windows", "mac")
 WORKING = (JobStatus.DOWNLOADING, JobStatus.RENDERING)
 MAX_RESULT_BYTES = 1024 * 1024 * 1024
-LATEST_VERSION = "1.1.0"  # the newest PC Helper; an older one is told an update is ready
+LATEST_VERSION = "1.1.1"  # the newest PC Helper; an older one is told an update is ready
 
 
 class EditorError(ValueError):
