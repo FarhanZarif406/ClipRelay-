@@ -8,3 +8,13 @@ node_modules/
 frontend/dist/
 *.db
 .DS_Store
+
+# Google Cloud key files and the editing code copied in for a local cloud-editor run
+cliprelay-cloud-key.json
+*-cloud-key.json
+cloud-editor/app/services/media.py
+helper/build/
+helper/dist/
+helper/app/services/media.py
+helper/*.spec
+helper/build.log

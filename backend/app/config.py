@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     # Media
     ffmpeg_path: str = "ffmpeg"
     font_file: str = ""  # a bold .ttf for hook text; without one a system bold font is looked for
+    # How many videos are edited at the same time on the whole server; more wait for a free place, while downloads carry on.
+    max_renders: int = 3
+    render_threads: int = 1  # encoder threads per edit, so a few edits share a small server's processor fairly
+    # Where members download the PC Helper (for example the files of a GitHub release); shown on the PC Helper page.
+    helper_download_windows: str = ""
+    helper_download_mac: str = ""
 
     # Limits from the design
 

@@ -22,7 +22,7 @@ export function Avatar({ label, color = "violet" }: { label: string; color?: str
 }
 
 export function PageHeader({ title, description, children }: { title: string; description: string; children?: ReactNode }) {
-  return <div className="page-heading"><div><div className="eyebrow">CLIPRELAY</div><div className="page-title">{title}</div><div className="page-subtitle">{description}</div></div><div className="header-actions">{children}</div></div>;
+  return <div className="page-heading"><div><div className="eyebrow">CLIPRELAY</div><div className="page-title" data-i18n-skip>{title}</div><div className="page-subtitle">{description}</div></div><div className="header-actions">{children}</div></div>;
 }
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {

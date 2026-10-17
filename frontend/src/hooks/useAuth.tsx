@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { language, setLanguage } from "@/lib/i18n";
 import { useQueryClient } from "@tanstack/react-query";
 import { auth } from "@/api/endpoints";
 import { getToken, setToken } from "@/api/client";
@@ -14,6 +15,11 @@ type AuthState = {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+/** Use the language the account chose, on any device it signs in on. */
+function followLanguage(user: User) {
+  if (user.language && user.language !== language()) setLanguage(user.language);
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(!!getToken());
@@ -21,7 +27,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!getToken()) return;
-    auth.me().then(setUser).catch(() => setToken(null)).finally(() => setLoading(false));
+    auth.me().then(u => { setUser(u); followLanguage(u); }).catch(() => setToken(null)).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -34,6 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const res = await auth.login(email, password, acceptTerms);
     setToken(res.access_token);
     setUser(res.user);
+    followLanguage(res.user);
   }, []);
 
   const register = useCallback(async (body: { email: string; password: string; name: string; workspace_name: string; accept_terms?: boolean }) => {

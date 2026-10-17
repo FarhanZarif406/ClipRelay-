@@ -7,16 +7,16 @@ reason, and can be processed by hand later.
 """
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.integrations import youtube
 from app.integrations.http import ApiError
-from app.models import Channel, Job, Mode, SkipReason, Video, VideoStatus, utcnow
-from app.services import activity, limits, pipeline, push, rules, system
+from app.models import Channel, Job, Mode, SkipReason, User, Video, VideoStatus, utcnow
+from app.services import acting, activity, limits, pipeline, plans, push, rules, system
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +66,43 @@ def _check(db: Session, video: Video, channel: Channel) -> tuple[str, str] | Non
     return None
 
 
-def discover(db: Session, channel: Channel, video_id: str, *, meta: youtube.VideoMeta | None = None) -> Video | None:
+def _account_may_take(db: Session, channel: Channel) -> bool:
+    owner = db.get(User, channel.user_id) if channel.user_id else None
+    if owner is None or owner.is_owner:
+        return True
+    if plans.blocked(db, owner.id):
+        return False  # suspended, or its trial or plan has ended
+    return channel.mode != Mode.PODCASTS or plans.allows(db, owner.id, "podcasts")
+
+
+def discover(db: Session, channel: Channel, video_id: str, *, meta: youtube.VideoMeta | None = None, hint: youtube.FeedEntry | None = None) -> Video | None:
+    """Store one upload and decide whether it enters the pipeline, looked up with the channel owner's own YouTube key.
+
+    `hint` is what the push notification or the feed already says (title, upload time).
+    """
+    with acting.acting_for(db, channel.user_id):
+        return _discover(db, channel, video_id, meta=meta, hint=hint)
+
+
+def _record_unread(db: Session, channel: Channel, video_id: str, hint: youtube.FeedEntry | None, reason: str) -> Video | None:
+    """The member's daily limit is used up: keep the upload under Not Processed without reading it from YouTube at all."""
+    if hint and hint.published_at and hint.published_at <= channel.monitoring_since:
+        return None
+    video = Video(
+        channel_id=channel.id, mode=channel.mode, user_id=channel.user_id, youtube_video_id=video_id, permalink=youtube.watch_url(video_id),
+        posted_at=hint.published_at if hint else None, original_title=((hint.title if hint else "") or f"YouTube video {video_id}")[:500], original_caption="",
+        status=VideoStatus.SKIPPED, skip_reason=SkipReason.DAILY_LIMIT, rejection_reason=reason,
+    )
+    try:
+        with db.begin_nested():
+            db.add(video)
+            db.flush()
+    except IntegrityError:
+        return None
+    return video
+
+
+def _discover(db: Session, channel: Channel, video_id: str, *, meta: youtube.VideoMeta | None = None, hint: youtube.FeedEntry | None = None) -> Video | None:
     """Store one upload and decide whether it enters the pipeline. Returns None when there is nothing new.
 
     A YouTube video id is processed once, forever: repeat notifications (YouTube sends one whenever a title
@@ -76,6 +112,11 @@ def discover(db: Session, channel: Channel, video_id: str, *, meta: youtube.Vide
         return None
     if not system.is_on(db):
         return None  # the admin switched the system off: uploads are not even recorded (they are left alone when it is on again)
+    if not _account_may_take(db, channel):
+        return None  # the account is suspended, or its plan no longer has this workspace
+    if meta is None and (over := limits.check(db, channel.user_id, channel.mode)):
+        # Nothing more is taken today, so nothing is read: no lookup, no download. It costs the server nothing.
+        return _record_unread(db, channel, video_id, hint, over[1] + " · recorded without reading the video")
     meta = meta or youtube.video_details(video_id)
     if meta.live or not meta.duration_seconds:
         return None  # a live stream or premiere that has not finished: it is picked up once it has a duration
@@ -131,9 +172,9 @@ def process_anyway(db: Session, video: Video) -> Job:
 def poll_channel(db: Session, channel: Channel) -> list[Video]:
     """Polling fallback: read the channel's uploads feed so a missed push never means a missed video."""
     now = utcnow()
-    interval = int(rules.global_values(db, user_id=channel.user_id)["poll_interval_minutes"])
+    interval = plans.auto_check_minutes(db, channel.user_id, int(rules.global_values(db, user_id=channel.user_id)["poll_interval_minutes"]))
     channel.last_checked_at = now
-    channel.next_poll_at = now + timedelta(minutes=interval)
+    channel.next_poll_at = now + timedelta(minutes=interval or 60)  # a manual check on a push-only plan
     try:
         entries = youtube.feed(channel.youtube_channel_id)
     except ApiError as exc:
@@ -147,7 +188,7 @@ def poll_channel(db: Session, channel: Channel) -> list[Video]:
         if entry.video_id in known or (entry.published_at and entry.published_at <= channel.monitoring_since):
             continue
         try:
-            video = discover(db, channel, entry.video_id)
+            video = discover(db, channel, entry.video_id, hint=entry)
         except ApiError as exc:
             channel.last_error = str(exc)[:500]
             log.warning("could not read video %s: %s", entry.video_id, exc)
@@ -157,10 +198,38 @@ def poll_channel(db: Session, channel: Channel) -> list[Video]:
     return found
 
 
-def discover_by_ids(db: Session, youtube_channel_id: str, video_id: str) -> Video | None:
+def discover_by_ids(db: Session, youtube_channel_id: str, video_id: str, *, title: str | None = None, published: str | None = None) -> Video | None:
     """A push notification: look the channel up and run the same discovery as polling."""
     channel = db.scalar(select(Channel).where(Channel.youtube_channel_id == youtube_channel_id, Channel.active.is_(True)))
-    return discover(db, channel, video_id) if channel else None
+    if not channel:
+        return None
+    when = None
+    if published:
+        try:
+            when = datetime.fromisoformat(published)
+        except ValueError:
+            when = None
+    return discover(db, channel, video_id, hint=youtube.FeedEntry(video_id, title or "", when))
+
+
+def forget_skipped(db: Session, now: datetime | None = None) -> dict:
+    """Clear skipped and not-processed videos after the keep time of their owner's plan (hours; 0 = keep).
+
+    Only the video's id stays, so a repeat notification for it is not taken as a new upload; those marks go after 90 days.
+    """
+    now = now or utcnow()
+    cleared = 0
+    for user in db.scalars(select(User).where(User.is_active.is_(True))):
+        hours = plans.limit(db, user.id, "skipped_keep_hours")
+        if not hours:
+            continue
+        for video in db.scalars(select(Video).where(Video.user_id == user.id, Video.status == VideoStatus.SKIPPED, Video.parent_id.is_(None), Video.created_at < now - timedelta(hours=hours))):
+            video.status = VideoStatus.DISCARDED
+            video.original_title, video.original_caption, video.original_tags, video.thumbnail_url, video.rejection_reason = "", "", [], None, None
+            cleared += 1
+    gone = db.execute(delete(Video).where(Video.status == VideoStatus.DISCARDED, Video.created_at < now - timedelta(days=90)).execution_options(synchronize_session=False)).rowcount
+    db.flush()
+    return {"cleared": cleared, "deleted": gone}
 
 
 def due_channels(db: Session) -> list[int]:
@@ -170,10 +239,23 @@ def due_channels(db: Session) -> list[int]:
     rows = db.scalars(
         select(Channel).where(Channel.active.is_(True), (Channel.next_poll_at.is_(None)) | (Channel.next_poll_at <= now)).order_by(Channel.id).limit(50)
     ).all()
+    due = []
+    full: dict[tuple[int | None, str], bool] = {}
     for channel in rows:
+        key = (channel.user_id, channel.mode)
+        if key not in full:
+            full[key] = bool(channel.user_id) and limits.check(db, channel.user_id, channel.mode) is not None
+        if full[key]:
+            channel.next_poll_at = now + timedelta(hours=1)  # today's limit is used up: no checking until there is room again
+            continue
+        minutes = plans.auto_check_minutes(db, channel.user_id, int(rules.global_values(db, user_id=channel.user_id)["poll_interval_minutes"]))
+        if minutes is None:
+            channel.next_poll_at = now + timedelta(hours=1)  # push only on this plan: looked at again in an hour, in case the plan changed
+            continue
         channel.next_poll_at = now + timedelta(minutes=10)  # lease; the poll sets the real time
+        due.append(channel.id)
     db.flush()
-    return [channel.id for channel in rows]
+    return due
 
 
 def subscribe(db: Session, channel: Channel) -> bool:

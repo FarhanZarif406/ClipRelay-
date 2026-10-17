@@ -9,6 +9,7 @@ export function Modal({ title, caption, onClose, children, footer, className = "
   </div></div>;
 }
 
-export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
-  return <div className="field"><label>{label}</label>{children}{hint && <small>{hint}</small>}</div>;
+/** A labelled control. `tag` goes next to the label, e.g. the plan an option needs. */
+export function Field({ label, children, hint, tag }: { label: string; children: ReactNode; hint?: string; tag?: ReactNode }) {
+  return <div className="field"><label>{label}{tag}</label>{children}{hint && <small>{hint}</small>}</div>;
 }

@@ -48,9 +48,24 @@ const PUSH: Record<Channel["push_status"], { label: string; tone: Tone }> = {
   off: { label: "Off", tone: "neutral" },
 };
 
-function PushStatus({ channel, pollMinutes }: { channel: Channel; pollMinutes: number }) {
+/** How many channels the plan allows, how many are added, and how many are left. Both workspaces count together. */
+function ChannelAllowance({ used, allowed, plan, bigger = [] }: { used: number; allowed: number; plan: string; bigger?: { name: string; value: number }[] }) {
+  if (!allowed) return <div className="channel-allowance"><div><small>Channels</small><b>{used} <span>added · no limit</span></b></div></div>;
+  const left = Math.max(0, allowed - used);
+  const share = Math.min(100, (used / allowed) * 100);
+  return <div className={`channel-allowance${left === 0 ? " full" : left <= Math.max(1, Math.round(allowed * 0.1)) ? " low" : ""}`}>
+    <div><small>Channels on your {plan} plan</small><b>{used} <span>of {allowed} added</span></b></div>
+    <div className="channel-allowance-bar" aria-hidden><i style={{ width: `${share}%` }}/></div>
+    <p>{left === 0
+      ? `You have added all ${allowed} channels your plan allows. Remove one to add another, or choose a bigger plan from the manager.`
+      : `You can add ${left} more channel${left === 1 ? "" : "s"} (up to ${allowed} in all, Shorts and Podcasts together).`}</p>
+    {bigger.length > 0 && <div className="plan-slots"><span>More channel slots on a bigger plan:</span>{bigger.map(p => <span className="plan-slot" key={p.name}><b>{p.name}</b>{p.value ? `${p.value} channels` : "no limit"}</span>)}<small>Ask the manager to upgrade.</small></div>}
+  </div>;
+}
+
+function PushStatus({ channel, pollMinutes }: { channel: Channel; pollMinutes: number | null }) {
   const status = PUSH[channel.push_status];
-  const label = channel.push_status === "unavailable" ? `Checked every ${pollMinutes} min` : status.label;
+  const label = channel.push_status === "unavailable" ? (pollMinutes ? `Checked every ${pollMinutes} min` : "Waiting for push notifications") : status.label;
   const detail = channel.push_status === "subscribed" && channel.push_expires_at ? `Renews before ${dayTime(channel.push_expires_at)}` : channel.push_detail;
   return <div title={detail ?? undefined}><Badge tone={status.tone}>{label}</Badge>{detail && <div className="cell-sub">{detail}</div>}</div>;
 }
@@ -72,14 +87,16 @@ export default function Channels() {
   const askRemove = (c: Channel) => { if (window.confirm(`Stop monitoring ${c.display_name}? Its published history is kept.`)) remove.mutate(c.id); };
 
   return <><PageHeader title={PODCASTS ? "Podcast Channels" : "Channels"} description={PODCASTS ? "YouTube channels that publish long videos. Every new podcast is cut into short clips and published through Buffer." : "The YouTube channels being watched. Every new short-form upload is republished through Buffer."}></PageHeader>
+    {list.data && <ChannelAllowance used={list.data.channels_used} allowed={list.data.channels_allowed} plan={list.data.plan} bigger={list.data.bigger_plans}/>}
     <AddChannelForm/>
-    {list.data && !list.data.push_available && <p className="note-row">No public address is set for YouTube push notifications, so new uploads are found by checking each channel every {list.data.poll_minutes} minutes instead. An admin can set the address in Integrations → YouTube Push Notifications.</p>}
+    {list.data && !list.data.push_available && <p className="note-row">{list.data.poll_minutes ? `No public address is set for YouTube push notifications, so new uploads are found by checking each channel every ${list.data.poll_minutes} minutes instead.` : "No public address is set for YouTube push notifications, and your plan finds new uploads by push notification only, so none arrive yet."} An admin can set the address in Integrations → YouTube Push Notifications.</p>}
+    {list.data && list.data.push_available && list.data.poll_minutes === null && <p className="note-row">New uploads arrive by YouTube push notification. Your plan has no extra automatic checks; “Check now” looks a channel over by hand.</p>}
     <Card className="table-card"><div className="table-wrap"><table><thead><tr><th>Channel</th><th>Last upload</th><th>{PODCASTS ? "Clips published" : "Published"}</th><th>Skipped</th><th>Push status</th><th>Last checked</th><th>Active</th><th/></tr></thead><tbody>
       {items.map(c => <tr key={c.id}>
         <td><div className="channel-cell"><ChannelAvatar channel={c}/><div><strong>{c.display_name}</strong><span>{c.handle ?? c.youtube_channel_id}{c.override_count ? ` · ${c.override_count} override${c.override_count === 1 ? "" : "s"}` : ""}</span></div></div></td>
         <td>{c.last_upload_at ? relativeTime(c.last_upload_at, { suffix: true }) : "—"}</td>
         <td>{c.videos_published}</td><td>{c.videos_skipped}</td>
-        <td><PushStatus channel={c} pollMinutes={list.data?.poll_minutes ?? 15}/></td>
+        <td><PushStatus channel={c} pollMinutes={list.data ? list.data.poll_minutes : 60}/></td>
         <td>{c.last_error ? <span className="cell-error" title={c.last_error}>{c.last_error}</span> : c.last_checked_at ? relativeTime(c.last_checked_at, { suffix: true }) : "Not yet"}</td>
         <td><Toggle checked={c.active} disabled={update.isPending} label={`Monitor ${c.display_name}`} onChange={() => { if (!update.isPending) update.mutate({ id: c.id, body: { active: !c.active } }); }}/></td>
         <td><Menu items={[{ label: "Check now", icon: "refresh", disabled: !c.active, onSelect: () => check.mutate(c) }, { label: "Open on YouTube", icon: "link", onSelect: () => window.open(c.url, "_blank", "noopener") }, { label: "Remove", icon: "close", danger: true, onSelect: () => askRemove(c) }]} trigger={t => <Button variant="ghost" icon="more" onClick={t}/>}/></td>

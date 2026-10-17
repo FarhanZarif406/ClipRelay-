@@ -93,7 +93,7 @@ def test_push_notifications_card(client, auth, member_auth, db, channel):
     client.post("/api/youtube/webhook", content=body, headers={"X-Hub-Signature": "sha1=forged"})
     client.post("/api/youtube/webhook", content=body, headers={"X-Hub-Signature": signature})
     assert client.get("/api/integrations/push", headers=auth).json()["notifications"]["today"] == 1
-    assert dispatch.sent == [("discover_video", (channel.youtube_channel_id, "abc"))]
+    assert [(name, args[:2]) for name, args in dispatch.sent] == [("discover_video", (channel.youtube_channel_id, "abc"))]  # the title and upload time come along
 
 
 @respx.mock

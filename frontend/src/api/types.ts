@@ -1,6 +1,6 @@
 export type Tone = "success" | "warning" | "danger" | "primary" | "neutral";
 
-export type User = { id: number; email: string; name: string; workspace_name: string; role: "owner" | "member"; created_at: string; terms_accepted_at?: string | null };
+export type User = { id: number; email: string; name: string; workspace_name: string; role: "owner" | "member"; created_at: string; terms_accepted_at?: string | null; language?: "en" | "ur" };
 
 export type ActivityLog = {
   id: number;
@@ -205,6 +205,11 @@ export type StatusItem = {
   clip: { start: number; end: number; podcast_title: string } | null; buffer_channel: BufferRef | null; due_at: string | null;
   /** For a paused video: the stage it was paused in. */
   paused_while: string | null;
+  /** Downloaded, waiting for a free editing place on the server. */
+  waiting_edit?: boolean;
+  /** Where it is edited: the member's PC (PC Helper), Google Cloud, or this server. */
+  edit_place?: "pc" | "cloud" | "server" | null;
+  editor_name?: string | null;
 };
 export type PipelineStatus = {
   mode: "shorts" | "podcasts"; timezone: string; podcasts_analysing: number;
@@ -255,7 +260,7 @@ export type BufferChannel = BufferRef & {
 /** One of the member's saved Buffer keys. The key itself never reaches the page, only its last four characters. */
 export type BufferKey = { id: number; label: string; last4: string; saved_at: string; synced_at: string | null; error: string | null; accounts: number; receiving: number };
 /** What the Buffer page shows. `up_next` is the account whose turn it is to get the next clip. */
-export type BufferStatus = { connected: boolean; max_keys: number; keys: BufferKey[]; public_url: boolean; time_zone: string; up_next: number | null; channels: BufferChannel[] };
+export type BufferStatus = { connected: boolean; max_keys: number; /** Buffer accounts the plan allows, all keys together; 0 = no limit. */ max_accounts: number; keys: BufferKey[]; public_url: boolean; time_zone: string; up_next: number | null; channels: BufferChannel[] };
 export type BufferChannelChanges = { enabled?: boolean; daily_limit?: number; times?: string[]; time_zone?: string; start_date?: string | null };
 type PeriodCounts = { today: number; week: number; month: number; lifetime: number };
 export type BufferChannelStatus = {
@@ -267,6 +272,8 @@ export type BufferChannelStatus = {
 export type Preset = { id: number; name: string; look: import("@/lib/look").Look; channels: number; updated_at: string };
 export type EditingState = {
   default: import("@/lib/look").Look; presets: Preset[]; font_available: boolean; rendered_last_day: number;
+  /** No "Full editing" in the plan: videos are made in Fast mode (720p, 30 fps, quick encoding), and paid parts cannot be saved. */
+  fast_mode?: boolean;
   channels: { id: number; display_name: string; thumbnail_url: string | null; preset_id: number | null }[];
 };
 export type LibraryItem = { id: number; name: string; type: string; bytes: number; width: number | null; height: number | null; uploaded_at: string };
@@ -278,3 +285,34 @@ export type TestRender = {
 
 /** The main switch. `changed_by` is shown to admins only. */
 export type SystemState = { on: boolean; changed_at: string | null; changed_by: string | null };
+
+/** Plans: what each account may use. 0 in a limit means no limit. */
+export type PlanDefinitions = { features: { key: string; label: string; help: string }[]; limits: { key: string; label: string; help: string; max: number }[] };
+export type PlanRow = { id: number; name: string; description: string; is_default: boolean; features: Record<string, boolean>; limits: Record<string, number>; accounts: number };
+export type PlanList = PlanDefinitions & { plans: PlanRow[] };
+export type PlanInput = { name: string; description: string; is_default: boolean; features: Record<string, boolean>; limits: Record<string, number> };
+/** The plan in force for the signed-in account. Owners have everything. */
+export type MyPlan = {
+  plan: string; owner: boolean; features: Record<string, boolean>; limits: Record<string, number>; expires_at: string | null; expired: boolean; definitions: PlanDefinitions;
+  /** Why the account may not work: its trial or plan has ended, or it is suspended. */
+  blocked: "expired" | "suspended" | null;
+  /** For each feature, the smallest plan that includes it: shown next to a locked option. */
+  upgrade: Record<string, string>;
+};
+export type Account = {
+  id: number; email: string; name: string; role: "owner" | "member"; suspended: boolean; created_at: string;
+  plan_id: number | null; plan: string; plan_expires_at: string | null; plan_expired: boolean; channels: number; videos_today: number; buffer_keys: number;
+};
+export type AccountChanges = Partial<{ name: string; password: string; plan_id: number | null; plan_expires_at: string | null; suspended: boolean }>;
+
+/** PC Helper: a member's computer that downloads and edits their videos itself. */
+export type HelperDevice = { id: number; name: string; platform: string; version: string; online: boolean; paused: boolean; last_seen_at: string | null; created_at: string; outdated: boolean };
+export type HelperPage = {
+  devices: HelperDevice[]; allowed: boolean; cloud_allowed: boolean; cloud_ready: boolean; server_address: string; latest_version: string;
+  working_on: { job_id: number; title: string } | null; download_windows: string; download_mac: string;
+};
+/** Integrations → Cloud editing (owner only). The key itself never comes back. */
+export type CloudEditing = {
+  url: string; enabled: boolean; has_key: boolean; client_email: string; project_id: string; fallback: "fail" | "server"; ready: boolean; public_url: string;
+  last_test: { ok: boolean; message: string; at: string } | null;
+};

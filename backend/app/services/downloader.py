@@ -50,6 +50,23 @@ SOURCE_FORMAT = "/".join([
 # 1920×1080. (A plain height limit would give an upright video only 608×1080.)
 FORMAT_SORT = ["res:1080"]
 
+
+def source_format(short_side: int = 1080) -> tuple[str, list[str]]:
+    """The format choice and sort for a download of at most `short_side` (1080 Full HD, 720 for Fast mode).
+
+    Neither side may be longer than the matching long side (1920 or 1280), so a 4K or 1440p version is never
+    fetched; only a video that has nothing that small falls back to its smallest version.
+    """
+    long_side = round(short_side * 16 / 9)
+    cap = f"[width<={long_side}][height<={long_side}]"
+    capped = [
+        f"bv*[vcodec^=avc1][protocol=https]{cap}+ba[ext=m4a]",
+        f"bv*[protocol=https]{cap}+ba",
+        f"bv*{cap}+ba",
+        f"b{cap}",
+    ]
+    return "/".join(capped + ["wv*+ba", "w"]), [f"res:{short_side}"]
+
 _all_failed_at = 0.0
 _lock = threading.Lock()
 

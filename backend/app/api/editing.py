@@ -20,11 +20,14 @@ from app.integrations import youtube
 from app.integrations.http import ApiError
 from app.models import Channel, EditingLook, Job, JobStatus, LibraryFile, Mode, User, Video, utcnow
 from app.security import decode_token
-from app.services import activity, downloader, library, looks, media, pipeline, sources
+from app.services import activity, downloader, library, looks, media, pipeline, plans, sources
 
 router = APIRouter(tags=["editing"])
+LIBRARY_FEATURE = {"music": "background_music", "fonts": "custom_fonts", "watermark": "watermark"}  # the plan feature each library needs
 
-TEST_SECONDS = 20  # a test render shows at most this much of the clip, so it finishes quickly
+TEST_SECONDS = 15  # a test render shows at most this much of the clip, so it finishes quickly
+TESTS_PER_DAY = 5  # per member: a test is a real edit, and it shares the server with the real videos
+_tests_today: dict[tuple[int, str], int] = {}
 TESTS_DIR = Path(__file__).resolve().parents[2] / "data" / "tests"
 KEEP_TESTS = 60 * 60
 _tests: dict[str, dict] = {}
@@ -65,8 +68,11 @@ def _state(db, user: User, mode: str) -> dict:
     default = looks.default_row(db, user.id, mode)
     since = utcnow().timestamp() - 86400
     recent = [j for j in db.scalars(select(Job).join(Video, Job.video_id == Video.id).where(Video.user_id == user.id, Video.mode == mode, Job.status.notin_([JobStatus.FAILED, JobStatus.CANCELLED])).order_by(Job.id.desc()).limit(50)) if j.created_at.timestamp() >= since and j.video.rendered_file_path]
+    fast = not plans.effective(db, user)["features"]["full_editing"]
+    shown = lambda look: plans.fast_view(look) if fast else look  # noqa: E731 — Fast mode starts within the plan
     return {
-        "default": looks.complete(default.look, mode),
+        "fast_mode": fast,
+        "default": shown(looks.complete(default.look, mode)),
         "presets": [_preset_view(db, row) for row in looks.presets(db, user.id, mode)],
         "channels": [{"id": c.id, "display_name": c.display_name, "thumbnail_url": c.thumbnail_url, "preset_id": c.preset_id} for c in db.scalars(select(Channel).where(Channel.user_id == user.id, Channel.mode == mode).order_by(Channel.display_name))],
         "font_available": media.default_font() is not None,
@@ -87,6 +93,7 @@ def save_default(body: LookIn, db: DB, user: CurrentUser, mode: Workspace = Mode
         look = looks.validate(body.look, mode)
     except looks.LookError as exc:
         raise HTTPException(422, str(exc)) from exc
+    plans.check_look(db, user, look)  # trying paid parts out is fine; saving them is for paid plans
     looks.save(looks.default_row(db, user.id, mode), look)
     activity.record(db, "Settings", f"{user.email} saved the editing rules: {looks.summary(look)}", event="editing_saved", user_id=user.id)
     db.commit()
@@ -95,11 +102,13 @@ def save_default(body: LookIn, db: DB, user: CurrentUser, mode: Workspace = Mode
 
 @router.post("/editing/presets", status_code=201)
 def create_preset(body: PresetIn, db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
+    plans.require(db, user, "editing_presets")
     try:
         name = looks.check_name(db, user.id, mode, body.name)
         look = looks.validate(body.look, mode)
     except looks.LookError as exc:
         raise HTTPException(422, str(exc)) from exc
+    plans.check_look(db, user, look)
     row = EditingLook(user_id=user.id, mode=mode, name=name, look=look)
     db.add(row)
     activity.record(db, "Settings", f"{user.email} saved the editing preset “{name}”", event="preset_saved", user_id=user.id)
@@ -114,7 +123,9 @@ def update_preset(preset_id: int, body: PresetIn, db: DB, user: CurrentUser, mod
         if body.name is not None:
             row.name = looks.check_name(db, user.id, mode, body.name, preset_id=row.id)
         if body.look is not None:
-            looks.save(row, looks.validate(body.look, mode))
+            look = looks.validate(body.look, mode)
+            plans.check_look(db, user, look)
+            looks.save(row, look)
     except looks.LookError as exc:
         raise HTTPException(422, str(exc)) from exc
     row.updated_at = utcnow()
@@ -138,6 +149,7 @@ def assign_preset(channel_id: int, body: AssignIn, db: DB, user: CurrentUser, mo
     if not channel or channel.user_id != user.id or channel.mode != mode:
         raise HTTPException(404, "Channel not found")
     if body.preset_id is not None:
+        plans.require(db, user, "editing_presets")
         _mine(db, body.preset_id, user, mode)
     channel.preset_id = body.preset_id
     db.commit()
@@ -169,6 +181,7 @@ def library_list(kind: str, db: DB, user: CurrentUser):
 @router.post("/library/{kind}")
 async def library_upload(kind: str, request: Request, db: DB, user: CurrentUser, name: str = "file"):
     """The file itself is the request body; its name comes in `name`."""
+    plans.require(db, user, LIBRARY_FEATURE[_kind(kind)])
     data = await request.body()
     try:
         row = library.add(db, user.id, _kind(kind), name, data)
@@ -256,18 +269,27 @@ def _run_test(test_id: str, url: str, look: dict) -> None:
 
 
 @router.post("/editing/test")
-def start_test(body: TestIn, user: CurrentUser, mode: Workspace = Mode.SHORTS):
+def start_test(body: TestIn, db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
+    plans.require(db, user, "test_render")
     try:
         look = looks.validate(body.look, mode)
         downloader.video_id_from(body.url)
     except (looks.LookError, ValueError) as exc:
         raise HTTPException(422, str(exc) or "That is not a YouTube video link.") from exc
     _forget_old_tests()
+    today = utcnow().date().isoformat()
     with _tests_lock:
         if any(t["status"] == "running" and t["user_id"] == user.id for t in _tests.values()):
             raise HTTPException(409, "A test render is already running. Wait for it to finish.")
+        if not user.is_owner and _tests_today.get((user.id, today), 0) >= TESTS_PER_DAY:
+            raise HTTPException(429, f"You have used today's {TESTS_PER_DAY} test renders. They are available again tomorrow.")
+        for key in [k for k in _tests_today if k[1] != today]:
+            del _tests_today[key]
+        _tests_today[(user.id, today)] = _tests_today.get((user.id, today), 0) + 1
         test_id = uuid.uuid4().hex
         _tests[test_id] = {"id": test_id, "status": "running", "stage": "Looking the video up", "title": None, "user_id": user.id, "started": time.time()}
+    if not plans.effective(db, user)["features"]["full_editing"]:
+        look = plans.light_look(look)  # the test shows what Fast mode really makes
     threading.Thread(target=_run_test, args=(test_id, body.url.strip(), look), name="cliprelay-test-render", daemon=True).start()
     return _public(_tests[test_id])
 

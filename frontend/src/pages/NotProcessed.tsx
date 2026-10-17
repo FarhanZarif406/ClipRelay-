@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { channels, jobs } from "@/api/endpoints";
 import type { Video } from "@/api/types";
-import { limitSource, untilReset, useDailyLimit } from "@/components/LimitBanner";
+import { limitSource, untilReset, upgradeLine, useDailyLimit } from "@/components/LimitBanner";
+import { useMyPlan } from "@/hooks/useMyPlan";
 import { FilterSelect } from "@/components/Menu";
 import { useErrorToast, useToast } from "@/components/Toast";
 import { Badge, Button, Card, Empty, PageHeader, Spinner, VideoThumb } from "@/components/ui";
@@ -20,6 +21,7 @@ export default function NotProcessed() {
   const [channelId, setChannelId] = useState("");
   const [reason, setReason] = useState("");
   const { data: limit } = useDailyLimit();
+  const { plan } = useMyPlan();
   const list = useQuery({ queryKey: ["videos", "not-processed", channelId], queryFn: () => jobs.videos("skipped", 500, channelId ? Number(channelId) : undefined, "limit"), refetchInterval: 30_000 });
   const channelList = useQuery({ queryKey: ["channels"], queryFn: channels.list });
   const process = useMutation({
@@ -33,10 +35,11 @@ export default function NotProcessed() {
   const items = (list.data ?? []).filter(v => !reason || v.skip_reason === reason);
   const noun = PODCASTS ? "podcasts" : "videos";
 
-  return <><PageHeader title="Not Processed" description={`Usable ${noun} that were detected but not ${PODCASTS ? "cut into clips" : "edited"}, because a daily limit was used up. Nothing is discarded: press Process now to send one on anyway.`}><Badge tone={items.length ? "warning" : "success"}>{items.length} waiting</Badge></PageHeader>
+  return <><PageHeader title="Not Processed" description={`Usable ${noun} that were detected but not ${PODCASTS ? "cut into clips" : "edited"}, because a daily limit was used up. Press Process now to send one on anyway.${plan && !plan.owner && plan.limits.skipped_keep_hours ? ` They are cleared after ${plan.limits.skipped_keep_hours} hours.` : ""}`}><Badge tone={items.length ? "warning" : "success"}>{items.length} waiting</Badge></PageHeader>
     {limit && <Card className="limit-meter">
       <div><small>Today’s daily limit</small><b>{limit.used} <span>of {limit.limit}</span></b></div>
       <div className="limit-meter-bar" aria-hidden><i style={{ width: `${Math.min(100, (limit.used / Math.max(1, limit.limit)) * 100)}%` }} className={limit.reached ? "full" : ""}/></div>
+      {limit.reached && upgradeLine(plan?.plan, !!plan?.owner) && <div className="limit-upgrade-box"><b>{upgradeLine(plan?.plan, !!plan?.owner)}</b><span>Ask the manager to upgrade your plan.</span></div>}
       <p>{limit.reached ? `Used up: new ${noun} wait here.` : `${limit.remaining} more ${noun} can be taken today.`} The limit is {limitSource(limit)}. It starts again in {untilReset(limit)} (midnight, {limit.time_zone.replace(/_/g, " ")}). Change it under {PODCASTS ? "Clip Rules" : "Settings → Pipeline rules"} → Daily limit.</p>
     </Card>}
     <div className="toolbar">

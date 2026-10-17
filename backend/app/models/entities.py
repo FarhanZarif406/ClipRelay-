@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import false as sa_false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -45,6 +46,7 @@ class VideoStatus:
     FETCHED = "fetched"
     ACCEPTED = "accepted"
     SKIPPED = "skipped"  # held with a reason; can be processed by hand later
+    DISCARDED = "discarded"  # a skipped video cleared after its plan's keep time: only its id is kept, so it is never taken again
 
 
 class SkipReason:
@@ -79,10 +81,29 @@ class User(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     role: Mapped[str] = mapped_column(String(16), default="member", server_default="member")  # owner | member
     terms_accepted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # The account's plan (set by an owner). NULL, or a plan whose expiry has passed, means the default plan.
+    plan_id: Mapped[int | None] = mapped_column(ForeignKey("plans.id", ondelete="SET NULL"), index=True)
+    plan_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    suspended: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())  # an owner stopped the account: no login, no new videos
+    youtube_api_key_enc: Mapped[str | None] = mapped_column(Text)  # a member's own YouTube Data API key (owners use the shared one)
+    language: Mapped[str] = mapped_column(String(8), default="en", server_default="en")  # en | ur (Roman Urdu)
 
     @property
     def is_owner(self) -> bool:
         return self.role == "owner"
+
+
+class Plan(Base):
+    """What an account may use: switches for features and numbers for limits. Owners make and change plans."""
+
+    __tablename__ = "plans"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(60), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)  # given to new accounts, and to any whose plan expired
+    features: Mapped[dict] = mapped_column(JSONType, default=dict)
+    limits: Mapped[dict] = mapped_column(JSONType, default=dict)  # 0 means no limit
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class Credential(Base):
@@ -173,10 +194,14 @@ class PromptTemplate(Base, TimestampMixin):
 
 
 class LLMProvider(Base, TimestampMixin):
-    """An AI model connection (API key encrypted). One is the workspace default; templates may pick another."""
+    """An AI model connection (API key encrypted). The owners share theirs (no user); every member has their own.
+
+    In each of those sets one is the default; templates may pick another.
+    """
 
     __tablename__ = "llm_providers"
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)  # NULL: the owners' own
     label: Mapped[str] = mapped_column(String(120))
     provider: Mapped[str] = mapped_column(String(24))  # anthropic | openai | gemini | openrouter | groq | mistral | custom
     api_key_enc: Mapped[str] = mapped_column(Text)
@@ -307,6 +332,12 @@ class Job(Base, TimestampMixin):
     buffer_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     buffer_link: Mapped[str | None] = mapped_column(Text)  # the published post, as Buffer reports it
     share_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)  # the private link Buffer fetches the clip from
+    # Where the video is edited: "pc" (the member's own computer, through the PC Helper), "cloud" (Google Cloud Run)
+    # or "server" (this server). Set when its edit starts; None while it waits.
+    edit_place: Mapped[str | None] = mapped_column(String(8))
+    editor_device_id: Mapped[int | None] = mapped_column(ForeignKey("editor_devices.id", ondelete="SET NULL"), index=True)
+    edit_spec: Mapped[dict | None] = mapped_column(JSONType)  # what a PC or the cloud is asked to make: the look, the hook line, the files
+    edit_token_hash: Mapped[str | None] = mapped_column(String(64))  # the cloud's one-job key for fetching the files and sending the result
 
     video: Mapped[Video] = relationship(lazy="joined")
     tiktok_account: Mapped[TikTokAccount | None] = relationship(lazy="joined")
@@ -437,3 +468,29 @@ class LibraryFile(Base):
     uses: Mapped[int] = mapped_column(Integer, default=0)
     last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class EditorDevice(Base):
+    """A member's computer running the PC Helper: it downloads and edits that member's videos itself."""
+
+    __tablename__ = "editor_devices"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    platform: Mapped[str] = mapped_column(String(16), default="")  # windows | mac
+    version: Mapped[str] = mapped_column(String(20), default="")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # the helper's key, stored only as a hash
+    paused: Mapped[bool] = mapped_column(Boolean, default=False)  # paused from its tray icon: its videos go elsewhere
+    last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+    user: Mapped[User] = relationship(lazy="joined")
+
+
+class EditorPairing(Base):
+    """A short code shown on the website for a few minutes, typed into the PC Helper to connect it."""
+
+    __tablename__ = "editor_pairings"
+    code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime())

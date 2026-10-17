@@ -48,6 +48,20 @@ def keys(db: Session, user_id: int | None) -> list[BufferKey]:
     return list(db.scalars(select(BufferKey).where(BufferKey.user_id == user_id).order_by(BufferKey.position, BufferKey.id)))
 
 
+def plans_limit(db: Session, user_id: int, key: str) -> int:
+    from app.services import plans
+
+    return plans.limit(db, user_id, key)
+
+
+def max_keys(db: Session, user_id: int) -> int:
+    """Ten, or fewer when the account's plan says so."""
+    from app.services import plans
+
+    capped = plans.limit(db, user_id, "buffer_keys")
+    return min(MAX_KEYS, capped) if capped else MAX_KEYS
+
+
 def uses_buffer(db: Session, user_id: int | None) -> bool:
     """Whether the member has saved a Buffer API key. Clips are published through Buffer only."""
     return bool(user_id) and db.scalar(select(func.count(BufferKey.id)).where(BufferKey.user_id == user_id)) > 0
@@ -93,7 +107,9 @@ def next_slot(db: Session, channel: BufferChannel, now: datetime | None = None) 
 def sync_key(db: Session, saved: BufferKey) -> None:
     """Read the accounts one key reaches in Buffer and keep their switches, limits and times.
 
-    An account two keys both reach stays with the key that found it first, so it is never listed twice.
+    An account two keys both reach stays with the key that found it first, so it is never listed twice. The
+    account's plan may allow only so many Buffer accounts, all keys together: the ones it already has are kept
+    first, then new ones in Buffer's order, and the rest are not connected (the key says so).
     """
     key = decrypt(saved.api_key_enc) or ""
     try:
@@ -103,8 +119,19 @@ def sync_key(db: Session, saved: BufferKey) -> None:
         saved.error = str(exc)
         db.flush()
         raise
+    from app.services import plans
+
+    most = plans.limit(db, saved.user_id, "buffer_accounts")  # 0: no limit
+    elsewhere = set(db.scalars(select(BufferChannel.buffer_id).where(BufferChannel.user_id == saved.user_id, BufferChannel.key_id != saved.id, BufferChannel.key_id.is_not(None))))
+    mine = set(db.scalars(select(BufferChannel.buffer_id).where(BufferChannel.key_id == saved.id)))
+    wanted, skipped = [], []
+    for item in sorted(found, key=lambda item: item["id"] not in mine):  # the ones it already has first
+        if item["id"] in elsewhere or not most or len(elsewhere) + len(wanted) < most:
+            wanted.append(item)
+        else:
+            skipped.append(item.get("displayName") or item.get("name") or item["id"])
     seen = set()
-    for item in found:
+    for item in wanted:
         service = str(item.get("service") or "").lower()
         name = item.get("displayName") or item.get("name") or item["id"]
         for mode in Mode.ALL:  # each workspace has its own switch and schedule for the same account
@@ -122,7 +149,9 @@ def sync_key(db: Session, saved: BufferKey) -> None:
     for row in db.scalars(select(BufferChannel).where(BufferChannel.key_id == saved.id)):
         if row.buffer_id not in seen:
             db.delete(row)
-    saved.organization_id, saved.synced_at, saved.error = organization, utcnow(), None
+    note = (f"Your plan allows {most} Buffer account{'s' if most != 1 else ''} in all, so {len(skipped)} more were not connected: {', '.join(skipped[:10])}"
+            if skipped else None)
+    saved.organization_id, saved.synced_at, saved.error = organization, utcnow(), note
     db.flush()
 
 
@@ -162,8 +191,9 @@ def _label(db: Session, user_id: int, label: str | None, ignore: int | None = No
 def add_key(db: Session, user_id: int, key: str, label: str | None = None) -> BufferKey:
     """Keep a new key only if Buffer accepts it."""
     saved = keys(db, user_id)
-    if len(saved) >= MAX_KEYS:
-        raise BufferError(f"Up to {MAX_KEYS} Buffer keys can be saved. Remove one first.")
+    most = max_keys(db, user_id)
+    if len(saved) >= most:
+        raise BufferError(f"Up to {most} Buffer key{'s' if most != 1 else ''} can be saved{' on your plan' if most < MAX_KEYS else ''}. Remove one first{', or ask the owner to upgrade your plan' if most < MAX_KEYS else ''}.")
     _check_key(db, user_id, key)
     taken_labels = {item.label.lower() for item in saved}
     number = next(n for n in range(1, MAX_KEYS + 2) if f"key {n}" not in taken_labels)
@@ -279,7 +309,8 @@ def status(db: Session, user_id: int, mode: str) -> dict:
     rows = channels(db, user_id, mode)
     up_next = choose_from(db, [c for c in rows if c.enabled])
     return {
-        "connected": bool(saved), "max_keys": MAX_KEYS,
+        "connected": bool(saved), "max_keys": max_keys(db, user_id),
+        "max_accounts": plans_limit(db, user_id, "buffer_accounts"),  # 0: no limit
         "keys": [{
             "id": item.id, "label": item.label, "last4": (decrypt(item.api_key_enc) or "")[-4:], "saved_at": item.saved_at, "synced_at": item.synced_at,
             "error": item.error, "accounts": sum(1 for c in rows if c.key_id == item.id), "receiving": sum(1 for c in rows if c.key_id == item.id and c.enabled),
@@ -362,6 +393,10 @@ def publish(db: Session, job: Job) -> str:
     if job.status != JobStatus.READY or job.buffer_post_id:
         return "skipped"
     video = job.video
+    from app.services import plans
+
+    if plans.blocked(db, video.user_id):
+        return _defer(job, timedelta(hours=1), "Waiting — this account's plan has ended or it is suspended. The owner can give it a plan.")
     if not uses_buffer(db, video.user_id):
         return _defer(job, timedelta(minutes=10), NO_KEY)
     channel, reason = choose(db, job)

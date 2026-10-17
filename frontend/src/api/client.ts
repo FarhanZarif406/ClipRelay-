@@ -1,4 +1,5 @@
 import { PODCASTS } from "@/lib/mode";
+import { language } from "@/lib/i18n";
 
 const TOKEN_KEY = "cliprelay.token";
 const BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
@@ -53,6 +54,7 @@ export async function api<T>(path: string, options: { method?: string; body?: un
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
+  headers["X-Lang"] = language();  // the server answers its common messages in this language
   const response = await fetch(apiUrl(path, options.query), {
     method: options.method ?? "GET",
     headers,

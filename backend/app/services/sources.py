@@ -37,8 +37,8 @@ Progress = Callable[[float], None]  # called with 0–100
 class SourceAdapter(Protocol):
     name: str
 
-    def download(self, video: Video, on_progress: Progress | None = None) -> str:
-        """Fetch the original file and return the path of a local temporary copy."""
+    def download(self, video: Video, on_progress: Progress | None = None, short_side: int = 1080) -> str:
+        """Fetch the original file, at most `short_side` pixels on its short side, and return a local temporary copy."""
 
 
 def _readable(message: str) -> str:
@@ -131,16 +131,17 @@ class YtDlpAdapter:
             raise SourceError("yt-dlp is not installed on the server") from exc
         return yt_dlp
 
-    def download(self, video: Video, on_progress: Progress | None = None) -> str:
+    def download(self, video: Video, on_progress: Progress | None = None, short_side: int = 1080) -> str:
         if video.clip_start is not None and video.clip_end is not None and video.parent is not None:
-            return self.download_clip(video, on_progress)
-        return self._download_whole(video.permalink or youtube.watch_url(video.youtube_video_id or ""), on_progress)
+            return self.download_clip(video, on_progress, short_side)
+        return self._download_whole(video.permalink or youtube.watch_url(video.youtube_video_id or ""), on_progress, short_side)
 
-    def _download_whole(self, url: str, on_progress: Progress | None = None) -> str:
+    def _download_whole(self, url: str, on_progress: Progress | None = None, short_side: int = 1080) -> str:
         """Download a whole video: Full HD first, and when YouTube refuses, by every other way of asking in turn."""
         yt_dlp = self._yt_dlp()
         folder = tempfile.mkdtemp(prefix="cliprelay-src-")
         state = {"video_seen": False, "audio_first": False, "best": 0.0}
+        chosen_format, chosen_sort = downloader.source_format(short_side)  # never more than the plan's quality
 
         def hook(d: dict) -> None:
             # The picture and the sound arrive as two files, in either order; the picture is nearly all of the bytes.
@@ -162,7 +163,7 @@ class YtDlpAdapter:
         options = {
             "progress_hooks": [hook],
             "quiet": True, "no_warnings": True, "noprogress": True, "noplaylist": True, "socket_timeout": 30, "retries": 3,
-            "format": downloader.SOURCE_FORMAT, "format_sort": downloader.FORMAT_SORT, "concurrent_fragment_downloads": 4, "overwrites": True,
+            "format": chosen_format, "format_sort": chosen_sort, "concurrent_fragment_downloads": 4, "overwrites": True,
             "merge_output_format": "mp4",
             "outtmpl": os.path.join(folder, "source.%(ext)s"),
             "ffmpeg_location": media.ffmpeg_exe(),
@@ -183,7 +184,7 @@ class YtDlpAdapter:
 
     # ---- podcast clips: a long video is never downloaded whole when only a minute of it is needed
 
-    def download_clip(self, video: Video, on_progress: Progress | None = None) -> str:
+    def download_clip(self, video: Video, on_progress: Progress | None = None, short_side: int = 1080) -> str:
         """Return a file holding exactly the clip's section of its podcast."""
         start, end = float(video.clip_start), float(video.clip_end)
         url = youtube.watch_url(video.parent.youtube_video_id or "")
@@ -191,7 +192,7 @@ class YtDlpAdapter:
             return self._clip_from_pieces(url, start, end, on_progress)
         except SourceError as exc:
             log.warning("section download failed for %s (%s); downloading the whole video instead", url, exc)
-        return self._clip_from_whole(url, video.parent.youtube_video_id or "", start, end, on_progress)
+        return self._clip_from_whole(url, video.parent.youtube_video_id or "", start, end, on_progress, short_side)
 
     def _clip_from_pieces(self, url: str, start: float, end: float, on_progress: Progress | None = None) -> str:
         yt_dlp = self._yt_dlp()
@@ -231,7 +232,7 @@ class YtDlpAdapter:
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
-    def _clip_from_whole(self, url: str, video_id: str, start: float, end: float, on_progress: Progress | None = None) -> str:
+    def _clip_from_whole(self, url: str, video_id: str, start: float, end: float, on_progress: Progress | None = None, short_side: int = 1080) -> str:
         """Fallback: download the podcast once (kept for a few hours for its other clips) and cut the clip from it."""
         cached = os.path.join(tempfile.gettempdir(), f"cliprelay-podcast-{video_id}.mp4")
         with _whole_guard:
@@ -241,7 +242,7 @@ class YtDlpAdapter:
                     os.remove(old)
         with lock:
             if not os.path.exists(cached):
-                shutil.move(self._download_whole(url, on_progress), cached)
+                shutil.move(self._download_whole(url, on_progress, short_side), cached)
         return _cut([(cached, start)], end - start, has_audio_input=False)
 
 

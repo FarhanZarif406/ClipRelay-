@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from app.api.deps import DB, CurrentUser
@@ -16,6 +17,8 @@ def login(body: LoginIn, db: DB):
     user = db.scalar(select(User).where(func.lower(User.email) == body.email.lower()))
     if not user or not user.is_active or not verify_password(body.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password")
+    if user.suspended and not user.is_owner:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Your account is suspended. Contact the owner.")
     if body.accept_terms and user.terms_accepted_at is None:
         user.terms_accepted_at = utcnow()
         db.commit()
@@ -50,6 +53,18 @@ def register(body: RegisterIn, db: DB):
 
 @router.get("/me", response_model=UserOut)
 def me(user: CurrentUser):
+    return user
+
+
+class ProfileIn(BaseModel):
+    language: str = Field(pattern="^(en|ur)$")
+
+
+@router.patch("/me", response_model=UserOut)
+def update_me(body: ProfileIn, db: DB, user: CurrentUser):
+    """The account's own choices: for now its language (English or Roman Urdu), kept for every device it signs in on."""
+    user.language = body.language
+    db.commit()
     return user
 
 

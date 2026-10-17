@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 TTL = 30.0
 
 _lock = threading.Lock()
-_cache: tuple[dict[int, LLMConfig], int | None] | None = None
+_cache: tuple[dict[int, LLMConfig], dict[int, int | None], dict[int | None, int]] | None = None
 _loaded_at = 0.0
 
 
@@ -40,13 +40,15 @@ def to_config(row: LLMProvider) -> LLMConfig:
     )
 
 
-def _load() -> tuple[dict[int, LLMConfig], int | None]:
+def _load() -> tuple[dict[int, LLMConfig], dict[int, int | None], dict[int | None, int]]:
+    """Every AI model, whose it is (None: the owners'), and the default of each owner of models."""
     global _cache, _loaded_at
     with _lock:
         if _cache is not None and time.monotonic() - _loaded_at < TTL:
             return _cache
     configs: dict[int, LLMConfig] = {}
-    default_id: int | None = None
+    owners: dict[int, int | None] = {}
+    defaults: dict[int | None, int] = {}
     db = SessionLocal()
     try:
         for row in db.scalars(select(LLMProvider).order_by(LLMProvider.id)):
@@ -55,17 +57,18 @@ def _load() -> tuple[dict[int, LLMConfig], int | None]:
             except RuntimeError:
                 log.error("LLM provider %s key could not be decrypted", row.id)
                 continue
-            if row.is_default and default_id is None:
-                default_id = row.id
+            owners[row.id] = row.user_id
+            if row.is_default and row.user_id not in defaults:
+                defaults[row.user_id] = row.id
     except Exception as exc:  # table missing before migrations, DB down, …
         log.warning("LLM providers unavailable, falling back to .env: %s", exc)
     finally:
         db.close()
-    if default_id is None and configs:
-        default_id = next(iter(configs))
+    for provider_id, scope in owners.items():
+        defaults.setdefault(scope, provider_id)  # a set without a default uses its first model
     with _lock:
-        _cache, _loaded_at = (configs, default_id), time.monotonic()
-    return configs, default_id
+        _cache, _loaded_at = (configs, owners, defaults), time.monotonic()
+    return configs, owners, defaults
 
 
 def env_config() -> LLMConfig | None:
@@ -77,10 +80,17 @@ def env_config() -> LLMConfig | None:
 
 
 def get_config(provider_id: int | None = None) -> LLMConfig | None:
-    """The requested provider if it exists, else the default, else the .env fallback (when no providers exist)."""
-    configs, default_id = _load()
-    if provider_id is not None and provider_id in configs:
+    """The AI model to use for whoever the code is acting for (app.services.acting).
+
+    The requested one if it is theirs, else their default. A member only ever gets their own models, so with none
+    there is no AI for them (None). The owners fall back to the LLM_* values in .env when they have no model.
+    """
+    from app.services import acting
+
+    scope = acting.current()
+    configs, owners, defaults = _load()
+    if provider_id is not None and provider_id in configs and owners.get(provider_id) == scope:
         return configs[provider_id]
-    if default_id is not None:
-        return configs[default_id]
-    return env_config()
+    if scope in defaults:
+        return configs[defaults[scope]]
+    return env_config() if scope is None else None

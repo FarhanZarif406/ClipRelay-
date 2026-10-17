@@ -16,14 +16,17 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import or_, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, delete, exists, func, or_, select, text, update
+from sqlalchemy.orm import Session, aliased
 
 from app.integrations.http import ApiError
 from app.models import (
+    ActivityLog,
     CaptionStatus,
     Job,
+    JobEvent,
     JobStatus,
+    User,
     Video,
     utcnow,
 )
@@ -36,6 +39,7 @@ from app.services.storage import get_storage
 log = logging.getLogger(__name__)
 
 LEASE = timedelta(minutes=10)
+LOG_DAYS = 60
 PROCESS_LEASE = timedelta(minutes=45)  # a download plus a render may take a while
 MAX_STAGE_ATTEMPTS = 3
 
@@ -197,12 +201,150 @@ def _set_progress(db: Session, job: Job, value: int | None) -> None:
     job.progress = value
 
 
+def _allows(db: Session, video: Video, feature: str) -> bool:
+    from app.services import plans
+
+    return plans.allows(db, video.user_id, feature)
+
+
+def _plan_look(db: Session, video: Video, look: dict) -> dict:
+    """The look with what the account's plan does not include switched off: music, watermark, own fonts."""
+    look = {section: dict(value) if isinstance(value, dict) else value for section, value in look.items()}
+    if not _allows(db, video, "background_music"):
+        look["music"]["enabled"] = False
+    if not _allows(db, video, "watermark"):
+        look["watermark"]["enabled"] = False
+    if not _allows(db, video, "custom_fonts") and look.get("hook"):
+        look["hook"]["font"] = "default"  # the built-in bold font
+    if not _allows(db, video, "full_editing"):
+        from app.services import plans
+
+        look = plans.light_look(look)  # Fast mode: 720p, 30 fps, quick encoding, no heavy filters
+    return look
+
+
+# ---- one video at a time per member
+# To keep the server light, a member's videos go through one by one: the next one is not downloaded until the
+# one before has been downloaded, edited, captioned and handed to Buffer (or has reached the review queue, been
+# paused, failed or been stopped). Each member has their own line, oldest video first.
+LANE_BUSY = (JobStatus.DOWNLOADING, JobStatus.RENDERING, JobStatus.REWRITING, JobStatus.UPLOADING)
+LANE_RETRY = timedelta(seconds=20)
+
+
+def _lane_blocked(job: Job, user_id: int):
+    """SQL condition: another of the member's videos is on its way, or an older one is waiting for its turn."""
+    other, theirs = aliased(Job), aliased(Video)
+    busy = or_(
+        other.status.in_(LANE_BUSY),
+        # Ready and about to be handed to Buffer. One left waiting for an account, a key or the public address does not hold the line.
+        and_(other.status == JobStatus.READY, other.error.is_(None), other.buffer_post_id.is_(None)),
+        and_(other.status == JobStatus.FETCHED, other.id < job.id),  # oldest first
+    )
+    return exists(select(other.id).join(theirs, other.video_id == theirs.id).where(theirs.user_id == user_id, other.id != job.id, busy))
+
+
+def lane_free(db: Session, job: Job) -> bool:
+    """Whether this waiting video may start now (read only)."""
+    user_id = job.video.user_id
+    return user_id is None or not db.scalar(select(_lane_blocked(job, user_id)))
+
+
+def claim_lane(db: Session, job: Job) -> bool:
+    """Start a waiting video if it is its member's turn. Atomic, so two workers never start two of one member's videos."""
+    user_id = job.video.user_id
+    if user_id is not None:
+        db.execute(select(User.id).where(User.id == user_id).with_for_update())  # PostgreSQL: one member's claims run one after another
+    condition = [Job.id == job.id, Job.status == JobStatus.FETCHED]
+    if user_id is not None:
+        condition.append(~_lane_blocked(job, user_id))
+    claimed = db.execute(update(Job).where(*condition).values(status=JobStatus.DOWNLOADING).execution_options(synchronize_session=False)).rowcount
+    db.refresh(job)
+    return bool(claimed)
+
+
+# ---- a few edits at a time on the whole server
+# Editing is the heavy part, so only `MAX_RENDERS` videos are edited at once across all members. A video that is
+# downloaded while every place is taken waits (still "downloading", with its file kept) and is asked again shortly;
+# downloads, captions and uploads of other videos carry on meanwhile.
+RENDER_RETRY = timedelta(seconds=15)
+RENDER_LOCK = 724_301  # PostgreSQL advisory lock: two workers never take the last place together
+
+
+def max_renders() -> int:
+    from app.config import get_settings
+
+    return max(1, get_settings().max_renders)
+
+
+def renders_running(db: Session, *, besides: int | None = None) -> int:
+    # Only edits made on this server take a place; a PC or Cloud Run edits with its own processor.
+    query = select(func.count(Job.id)).where(Job.status == JobStatus.RENDERING, or_(Job.edit_place.is_(None), Job.edit_place == "server"))
+    if besides is not None:
+        query = query.where(Job.id != besides)
+    return db.scalar(query) or 0
+
+
+def claim_render(db: Session, job: Job, message: str) -> bool:
+    """Start editing if a place is free; the place is held from the commit that follows."""
+    if job.status == JobStatus.RENDERING:
+        return True  # it has its place already (a retry, or a worker that stopped mid-edit)
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": RENDER_LOCK})  # released by the commit
+    if renders_running(db, besides=job.id) >= max_renders():
+        return False
+    job_event(db, job, JobStatus.RENDERING, message)
+    return True
+
+
+def _for_owner_of(db: Session, job_id: int):
+    """Act for the member whose video it is: their own AI model (hook text, captions, podcast moments) and YouTube key."""
+    from app.services import acting
+
+    video_owner = db.scalar(select(Video.user_id).join(Job, Job.video_id == Video.id).where(Job.id == job_id))
+    return acting.acting_for(db, video_owner)
+
+
 def process_video(db: Session, job_id: int) -> str | None:
+    with _for_owner_of(db, job_id):
+        return _process_video(db, job_id)
+
+
+def rewrite_job(db: Session, job_id: int) -> str | None:
+    with _for_owner_of(db, job_id):
+        return _rewrite_job(db, job_id)
+
+
+def _process_video(db: Session, job_id: int) -> str | None:
     """Download the original and apply the edits. A failure is retried from the stage that broke."""
     job = db.get(Job, job_id)
     if not job or job.status not in (JobStatus.FETCHED, JobStatus.DOWNLOADING, JobStatus.RENDERING):
         return job.status if job else None
     video = job.video
+    if job.edit_place == "pc":
+        return job.status  # the member's PC Helper has it (see editors.release_lost for a PC that went quiet)
+    if job.status == JobStatus.FETCHED:
+        from app.services import editors, plans
+
+        if plans.blocked(db, video.user_id):  # its trial or plan has ended, or it is suspended: it waits
+            job.next_check_at = utcnow() + timedelta(hours=1)
+            db.commit()
+            return job.status
+        place = editors.place_for(db, video)
+        if place == "pc":
+            job.next_check_at = utcnow() + LANE_RETRY  # the member's PC is on: it takes the video when it is its turn
+            db.commit()
+            return job.status
+        if place is None:
+            mark_failed(db, job.id, editors.nothing_can_edit(db, video))
+            db.refresh(job)
+            return job.status
+        if not claim_lane(db, job):
+            job.next_check_at = utcnow() + LANE_RETRY  # the member's previous video is still on its way: asked again shortly
+            db.commit()
+            return job.status
+        job.edit_place = place
+        first = "Reading the podcast's transcript" if video.is_podcast_source else "Downloading the clip's section from YouTube" if video.parent_id else "Downloading from YouTube"
+        job_event(db, job, JobStatus.DOWNLOADING, first)  # its turn: the member's previous video is done
     if video.is_podcast_source:
         from app.services import podcasts
 
@@ -216,7 +358,8 @@ def process_video(db: Session, job_id: int) -> str | None:
         _set_progress(db, job, 0)
         db.commit()
         try:
-            path = sources.get_adapter().download(video, progress_writer(job.id))
+            # Fast mode makes 720p, so 720p is all it downloads; Full editing never goes above Full HD.
+            path = sources.get_adapter().download(video, progress_writer(job.id), short_side=1080 if _allows(db, video, "full_editing") else 720)
             info = media.probe(path)
         except JobStopped:
             db.rollback()
@@ -233,32 +376,50 @@ def process_video(db: Session, job_id: int) -> str | None:
         job.attempts = 0
         activity.record(db, "Download", f"Video #{video.id} downloaded · {video.size_bytes / 1_048_576:.1f} MB", event="downloaded", job_id=job.id)
 
-    look = looks.for_video(db, video)  # the channel's preset, or the member's default editing rules
+    look = _plan_look(db, video, looks.for_video(db, video))  # the channel's preset, or the member's default editing rules, within the plan
     summary = looks.summary(look)
+    in_cloud = job.edit_place == "cloud"
+    if in_cloud:
+        if job.status != JobStatus.RENDERING:
+            job_event(db, job, JobStatus.RENDERING, f"Editing in Google Cloud · {summary}")
+    elif not claim_render(db, job, f"Rendering · {summary}"):
+        if job.progress is not None:  # just downloaded: said once, not on every check
+            job_event(db, job, JobStatus.DOWNLOADING, f"Downloaded · waiting for a free editing place ({max_renders()} videos are edited at a time)")
+            job.progress = None
+        job.next_check_at = utcnow() + RENDER_RETRY
+        db.commit()
+        return job.status
+    _set_progress(db, job, 0)
+    db.commit()  # the editing place is taken
     font = library.font_file(db, video.user_id, look["hook"]["font"]) if look["hook"]["enabled"] else None
     mark = library.watermark(db, video.user_id) if look["watermark"]["enabled"] else None
     track = library.next_track(db, video.user_id) if look["music"]["enabled"] else None
-    hook_text = hook_words(look, video.original_title or "") if look["hook"]["enabled"] else None
-    if job.status != JobStatus.RENDERING:
-        job_event(db, job, JobStatus.RENDERING, f"Rendering · {summary}")
-    _set_progress(db, job, 0)
-    db.commit()
+    hook_text = hook_words(look, video.original_title or "", ai=_allows(db, video, "ai_hook")) if look["hook"]["enabled"] else None
+    from app.services import cloud_editor
+
     try:
         with storage.local_copy(video.source_file_path) as source_path:
-            rendered = media.render(
-                source_path, look, hook_text=hook_text, font_file=font, watermark_file=str(library.path_of(mark)) if mark else None,
-                music_file=str(library.path_of(track)) if track else None, on_progress=progress_writer(job.id),
-            )
+            files = dict(font_file=font, watermark_file=str(library.path_of(mark)) if mark else None, music_file=str(library.path_of(track)) if track else None)
+            if in_cloud:
+                rendered = cloud_editor.render(db, job, source_path, look, hook_text=hook_text, **files)
+            else:
+                rendered = media.render(source_path, look, hook_text=hook_text, on_progress=progress_writer(job.id), **files)
     except JobStopped:
         db.rollback()
         db.refresh(job)
         return job.status
-    except (media.RenderError, OSError) as exc:
-        return _stage_failed(db, job, "Render", str(exc))
+    except (media.RenderError, cloud_editor.CloudError, OSError) as exc:
+        if _stopped(db, job):
+            return job.status  # paused or stopped while Cloud Run was editing it
+        job.status = JobStatus.DOWNLOADING  # gives its editing place up while it waits to try again; the downloaded file is kept
+        return _stage_failed(db, job, "Cloud edit" if in_cloud else "Render", str(exc))
     if _stopped(db, job):
         os.remove(rendered.path)
         return job.status
     video.rendered_file_path = storage.save(rendered.path, f"videos/{video.id}.mp4")
+    if video.source_file_path:
+        storage.delete(video.source_file_path)  # the edit is made: the original is not needed again, and it is half the disk
+        video.source_file_path = None
     if track:
         library.mark_used(track)  # the member's next clip gets the next track
     if rendered.note == "hook_font_missing":
@@ -274,9 +435,9 @@ HOOK_PROMPT = (
 )
 
 
-def hook_words(look: dict, title: str) -> str:
+def hook_words(look: dict, title: str, *, ai: bool = True) -> str:
     """The words of the hook text: a line written by the AI model from the title, or the title itself."""
-    if look["hook"]["source"] == "ai" and title:
+    if look["hook"]["source"] == "ai" and title and ai:
         try:
             line = " ".join(llm.complete(HOOK_PROMPT.format(title=title), max_tokens=40).split()).strip("\"'“”‘’ ")
             if line:
@@ -291,11 +452,13 @@ def fallback_caption(video: Video, values: dict) -> dict:
     return {"title": video.original_title, "caption": video.original_title, "tags": tags[: int(values["hashtag_count"])]}
 
 
-def rewrite_job(db: Session, job_id: int) -> str | None:
+def _rewrite_job(db: Session, job_id: int) -> str | None:
     """Write the caption and hashtags. A model failure never fails the job: it falls back to the title."""
     job = db.get(Job, job_id)
     if not job or job.status not in JobStatus.PROCESSING:
         return job.status if job else None
+    if job.status == JobStatus.FETCHED and not lane_free(db, job):
+        return job.status  # waiting for its turn: the caption is written once the video starts
     if job.caption_status != CaptionStatus.PENDING:
         return _advance(db, job)  # the caption was already written; make sure the job has moved on
     video = job.video
@@ -303,7 +466,11 @@ def rewrite_job(db: Session, job_id: int) -> str | None:
     count = int(values["hashtag_count"])
     channel_name = video.channel.display_name if video.channel else ""
     template = prompts.resolve_template(db, job.prompt_template_id)
+    from app.services import plans  # plans reads the models only; imported here to keep this module's imports light
+
     try:
+        if not plans.allows(db, video.user_id, "ai_captions"):
+            raise ApiError("AI captions are not part of this account's plan")
         if template:
             result = prompts.rewrite(
                 title_prompt=template.title_prompt, caption_prompt=template.caption_prompt, hashtags_prompt=template.hashtags_prompt,
@@ -352,6 +519,8 @@ def retry_job(db: Session, job: Job) -> str:
     job.attempts = 0
     job.buffer_post_id = job.buffer_due_at = job.buffer_checked_at = None  # a failed Buffer post is handed over afresh
     job.next_check_at = None
+    if not job.video.source_file_path:
+        job.edit_place = job.editor_device_id = job.edit_spec = None  # the PC, the cloud or the server is chosen again
     if not job.video.rendered_file_path:
         if job.video.files_deleted_at:
             raise ValueError("The files of this video were deleted after the retention period")
@@ -379,6 +548,8 @@ def pause_job(db: Session, job: Job, *, reason: str | None = None) -> None:
     job.paused_status = job.status
     job.next_check_at = None
     job.progress = None
+    if job.edit_place == "pc":
+        job.edit_place = job.editor_device_id = job.edit_spec = None  # the PC drops it; Resume finds it a place again
     job_event(db, job, JobStatus.PAUSED, f"{reason or 'Paused by the operator'} while {STAGE_NAMES[job.status]}")
 
 
@@ -391,7 +562,8 @@ def resume_job(db: Session, job: Job, *, reason: str | None = None) -> str:
         if video.files_deleted_at:
             raise ValueError("The files of this video were deleted after the retention period")
         # Downloaded already: only the edit is left. A download or an edit that was cut short starts again.
-        status, left = (JobStatus.RENDERING, "editing") if video.source_file_path else (JobStatus.FETCHED, "downloading")
+        # A downloaded one waits for a free editing place like any other (see `claim_render`).
+        status, left = (JobStatus.DOWNLOADING, "editing") if video.source_file_path else (JobStatus.FETCHED, "downloading")
     elif job.caption_status == CaptionStatus.PENDING:
         status, left = JobStatus.REWRITING, "writing the caption"
     elif job.paused_status == JobStatus.READY or not job.approval_required:
@@ -443,6 +615,9 @@ def scheduler_tick(db: Session) -> dict:
 
     if not system.is_on(db):
         return out  # switched off by the admin: nothing moves until it is on again
+    from app.services import editors
+
+    editors.release_lost(db)  # a PC Helper quiet for three minutes: its video moves on, and is leased below
 
     def lease(status: str, limit: int) -> list[Job]:
         jobs = db.scalars(
@@ -495,7 +670,7 @@ def cleanup_files(db: Session, now: datetime | None = None) -> int:
     retention: dict[int | None, int] = {}
     for video, job in rows:
         if video.channel_id not in retention:
-            retention[video.channel_id] = int(rules.for_video(db, video)["file_retention_days"])
+            retention[video.channel_id] = min(rules.MAX_RETENTION_DAYS, int(rules.for_video(db, video)["file_retention_days"]))
         finished = job.posted_at or job.updated_at
         if job.status == JobStatus.UPLOADING or finished > now - timedelta(days=retention[video.channel_id]):
             continue
@@ -507,5 +682,9 @@ def cleanup_files(db: Session, now: datetime | None = None) -> int:
         deleted += 1
     if deleted:
         activity.record(db, "Storage", f"Deleted the files of {deleted} video(s) past the retention period", event="files_deleted")
+    # The logs and the videos' timelines are kept for 60 days, so the database stays small and quick.
+    old = now - timedelta(days=LOG_DAYS)
+    db.execute(delete(ActivityLog).where(ActivityLog.created_at < old).execution_options(synchronize_session=False))
+    db.execute(delete(JobEvent).where(JobEvent.created_at < old).execution_options(synchronize_session=False))
     db.flush()
     return deleted

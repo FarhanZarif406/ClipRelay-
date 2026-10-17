@@ -73,7 +73,8 @@ def test_process_downloads_renders_and_waits_for_the_caption(db, fake_media):
     assert fake_media == [{"speed": 1.2, "flip": False, "keep_audio": True, "aspect": "9:16"}]  # read from the editing rules at job time
     video = job.video
     root = get_storage().root
-    assert os.path.exists(os.path.join(root, video.source_file_path)) and os.path.exists(os.path.join(root, video.rendered_file_path))
+    assert video.source_file_path is None and not os.path.exists(os.path.join(root, f"source/{video.id}.mp4"))  # the original goes once the edit is made
+    assert os.path.exists(os.path.join(root, video.rendered_file_path))
     db.commit()
     db.refresh(job)
     assert [e.status for e in job.events] == [JobStatus.DOWNLOADING, JobStatus.RENDERING, JobStatus.REWRITING]
@@ -105,12 +106,12 @@ def test_render_failure_resumes_from_the_render(db, fake_media, monkeypatch):
 
     working = media.render
     monkeypatch.setattr(media, "render", broken)
-    assert pipeline.process_video(db, job.id) == JobStatus.RENDERING
+    assert pipeline.process_video(db, job.id) == JobStatus.DOWNLOADING  # its editing place is given up while it waits
     source = job.video.source_file_path
     assert source and job.attempts == 1
     monkeypatch.setattr(media, "render", working)
     assert pipeline.process_video(db, job.id) == JobStatus.AWAITING_APPROVAL
-    assert job.video.source_file_path == source  # not downloaded again
+    assert job.video.source_file_path is None and job.video.rendered_file_path  # the kept original was edited, then removed
 
 
 def test_reject_keeps_the_reason(db):
@@ -121,11 +122,11 @@ def test_reject_keeps_the_reason(db):
 
 def test_files_are_deleted_after_the_retention_period(db):
     job = _make_job(db, status=JobStatus.CLEAN)
-    job.posted_at = utcnow() - timedelta(days=6)
+    job.posted_at = utcnow() - timedelta(hours=12)  # kept 1 day after publishing by default
     db.commit()
     path = os.path.join(get_storage().root, job.video.rendered_file_path)
     assert pipeline.cleanup_files(db) == 0 and os.path.exists(path)
-    job.posted_at = utcnow() - timedelta(days=8)
+    job.posted_at = utcnow() - timedelta(days=2)
     db.commit()
     assert pipeline.cleanup_files(db) == 1
     assert not os.path.exists(path) and job.video.rendered_file_path is None and job.video.files_deleted_at
@@ -153,7 +154,7 @@ def test_stop_halts_a_running_download(db, monkeypatch):
     class Adapter:
         name = "slow"
 
-        def download(self, video, on_progress=None):
+        def download(self, video, on_progress=None, short_side=1080):
             on_progress(10)
             other = SessionLocal()  # the operator presses Stop while the download is running
             pipeline.cancel_job(other, other.get(Job, job.id))
@@ -192,3 +193,16 @@ def test_stop_halts_a_running_render(db, fake_media, monkeypatch):
     assert job.video.rendered_file_path is None and [e.message for e in job.events][-1] == "Editing stopped by the operator"
     # A stopped video can be started again from where it was.
     assert pipeline.retry_job(db, job) == JobStatus.FETCHED
+
+
+def test_old_logs_and_timelines_are_cleared_after_60_days(db):
+    from app.models import ActivityLog, JobEvent
+
+    job = _make_job(db, status=JobStatus.CLEAN)
+    db.add_all([ActivityLog(service="Test", message="old", request_id="t1", created_at=utcnow() - timedelta(days=61)), ActivityLog(service="Test", message="new", request_id="t2"),
+                JobEvent(job_id=job.id, status="clean", message="old step", created_at=utcnow() - timedelta(days=61))])
+    db.commit()
+    pipeline.cleanup_files(db)
+    db.commit()
+    assert [row.message for row in db.query(ActivityLog).filter(ActivityLog.service == "Test")] == ["new"]
+    assert db.query(JobEvent).filter(JobEvent.message == "old step").count() == 0

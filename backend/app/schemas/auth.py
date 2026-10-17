@@ -30,6 +30,7 @@ class UserOut(BaseModel):
     role: str
     created_at: datetime
     terms_accepted_at: datetime | None = None
+    language: str = "en"
 
 
 class RoleIn(BaseModel):

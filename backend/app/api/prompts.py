@@ -6,7 +6,7 @@ from app.integrations import llm
 from app.integrations.http import ApiError
 from app.models import LLMProvider, PromptTemplate, PromptTemplateVersion
 from app.schemas import PromptIn, PromptOut, PromptTestIn, PromptTestOut
-from app.services import activity, prompts
+from app.services import acting, activity, prompts
 
 router = APIRouter(prefix="/prompts", tags=["prompts"])
 
@@ -36,8 +36,9 @@ def list_prompts(db: DB, _: CurrentUser):
 
 
 @router.get("/meta")
-def meta(_: CurrentUser):
-    cfg = llm.resolve()
+def meta(db: DB, user: CurrentUser):
+    with acting.acting_for(db, user.id):  # the model this account's captions use: its own
+        cfg = llm.resolve()
     return {
         "variables": prompts.VARIABLES,
         "provider": cfg.provider if cfg else None,
@@ -126,18 +127,19 @@ def restore(prompt_id: int, version: int, db: DB, _: CurrentUser):
 
 
 @router.post("/test", response_model=PromptTestOut)
-def test_prompt(body: PromptTestIn, db: DB, _: CurrentUser):
+def test_prompt(body: PromptTestIn, db: DB, user: CurrentUser):
     try:
-        result = prompts.rewrite(
-            title_prompt=body.title_prompt,
-            caption_prompt=body.caption_prompt,
-            hashtags_prompt=body.hashtags_prompt,
-            title=body.title or body.caption.split("\n", 1)[0][:120],
-            caption=body.caption,
-            tags=body.tags,
-            niche=body.niche,
-            provider_id=body.llm_provider_id,
-        )
+        with acting.acting_for(db, user.id):  # the member's own AI model
+            result = prompts.rewrite(
+                title_prompt=body.title_prompt,
+                caption_prompt=body.caption_prompt,
+                hashtags_prompt=body.hashtags_prompt,
+                title=body.title or body.caption.split("\n", 1)[0][:120],
+                caption=body.caption,
+                tags=body.tags,
+                niche=body.niche,
+                provider_id=body.llm_provider_id,
+            )
     except ApiError as exc:
         raise HTTPException(502, f"LLM request failed: {exc}") from exc
     activity.record(db, "AI rewrite", "Prompt test run", event="prompt_tested")

@@ -1,7 +1,7 @@
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, HTTPException, Query, status
+from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -10,6 +10,7 @@ from app.models import User
 from app.security import decode_token
 
 bearer = HTTPBearer(auto_error=False)
+SUSPENDED = "Your account is suspended. Contact the owner."
 
 DB = Annotated[Session, Depends(get_db)]
 
@@ -24,13 +25,22 @@ def user_from_token(db: Session, token: str) -> User:
         user = None
     if not user or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired session", headers={"WWW-Authenticate": "Bearer"})
+    if user.suspended and not user.is_owner:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, SUSPENDED, headers={"WWW-Authenticate": "Bearer"})
     return user
 
 
-def current_user(db: DB, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> User:
+def current_user(request: Request, db: DB, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> User:
     if not credentials:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated", headers={"WWW-Authenticate": "Bearer"})
-    return user_from_token(db, credentials.credentials)
+    user = user_from_token(db, credentials.credentials)
+    # The Podcasts workspace is a plan feature: every request of the Podcasts window carries ?mode=podcasts.
+    if request.query_params.get("mode") == "podcasts" and not user.is_owner:
+        from app.services import plans
+
+        if not plans.effective(db, user)["features"]["podcasts"]:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "The Podcasts workspace is not part of your plan. Ask the owner to upgrade it.")
+    return user
 
 
 CurrentUser = Annotated[User, Depends(current_user)]

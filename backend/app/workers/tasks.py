@@ -63,11 +63,11 @@ def poll_channel(channel_id: int) -> int:
 
 
 @celery_app.task(bind=True, max_retries=3)
-def discover_video(self, youtube_channel_id: str, video_id: str) -> int | None:
+def discover_video(self, youtube_channel_id: str, video_id: str, title: str | None = None, published: str | None = None) -> int | None:
     """A push notification from YouTube."""
     try:
         with session_scope() as db:
-            video = detection.discover_by_ids(db, youtube_channel_id, video_id)
+            video = detection.discover_by_ids(db, youtube_channel_id, video_id, title=title, published=published)
             job = db.query(Job).filter(Job.video_id == video.id).first() if video else None
             job_id = job.id if job else None
     except ApiError as exc:
@@ -134,6 +134,13 @@ def cleanup_files() -> int:
     """Daily: delete source and rendered files past the retention period."""
     with session_scope() as db:
         return pipeline.cleanup_files(db)
+
+
+@celery_app.task
+def forget_skipped() -> dict:
+    """Hourly: skipped and not-processed videos are cleared once their plan's keep time has passed."""
+    with session_scope() as db:
+        return detection.forget_skipped(db)
 
 
 @celery_app.task

@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { PlanTag } from "@/components/PlanTag";
 import { useQuery } from "@tanstack/react-query";
 import { auth, editing, library as libraryApi } from "@/api/endpoints";
 import type { Library, TestRender } from "@/api/types";
@@ -56,7 +57,7 @@ export function LookFrame({ look, watermark, token, photo, className = "" }: { l
   const a = look.adjust;
   const tables = adjustTables(a);
   const filterId = `look-adjust-${useId().replace(/:/g, "")}`;
-  return <div className={`look-frame ${className}`} style={{ aspectRatio: `${w} / ${h}` }}>
+  return <div className={`look-frame ${className}`} style={{ aspectRatio: `${w} / ${h}`, ["--ar" as string]: w / h } as CSSProperties}>
     {/* The same tone curve, colour balance, saturation and hue as the render, as an SVG filter on the photo. */}
     <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true"><filter id={filterId} colorInterpolationFilters="sRGB">
       <feColorMatrix type="saturate" values={String(Math.max(0, 1 + a.saturation / 100))}/>
@@ -159,7 +160,7 @@ export function EditingPreview({ look, watermark, token, rendered, onTest }: { l
     <div className="spec-chips">{lookChips(look).map(item => <span key={item}>{item}</span>)}</div>
     <div className="preview-estimate"><span className="muted">Output</span><b>{w} × {h} · {look.encoding.fps} fps · CRF {look.encoding.crf}</b>
       <small className="muted">{rendered ? `${rendered} clip${rendered === 1 ? " was" : "s were"} rendered in the last 24 hours.` : "No clips have been rendered in the last 24 hours yet."}</small></div>
-    <Button variant="primary" onClick={onTest}>Test on a real video</Button>
+    <Button variant="primary" onClick={onTest}>Test on a real video <PlanTag feature="test_render"/></Button>
   </aside>;
 }
 

@@ -1,0 +1,7 @@
+# The PC Helper program (helper/). Build: python build.py
+yt-dlp[default]>=2026.8.19  # [default] brings yt-dlp-ejs, which answers YouTube's JavaScript challenge
+httpx==0.28.1
+imageio-ffmpeg>=0.6.0
+pystray==0.19.5
+pillow>=11.0.0
+pyinstaller>=6.11

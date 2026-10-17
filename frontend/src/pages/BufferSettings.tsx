@@ -99,26 +99,64 @@ function ChannelStatusModal({ channel, onClose }: { channel: BufferChannel; onCl
   </Modal>;
 }
 
-/** One Buffer account: whether clips go to it, and its schedule at a glance. The schedule is changed in a dialog. */
+/** The small mark of the network on an account's picture. */
+function ServiceMark({ service }: { service: string }) {
+  if (service === "tiktok") return <span className="acct-mark" title="TikTok"><svg viewBox="0 0 24 24" width="12" height="12" aria-hidden><path fill="currentColor" d="M16.6 5.8A4.3 4.3 0 0 1 15.5 3h-3.1v12.4a2.6 2.6 0 1 1-2.6-2.6c.3 0 .5 0 .8.1V9.7a5.7 5.7 0 1 0 4.9 5.7V9.1a7.3 7.3 0 0 0 4.3 1.4V7.4a4.3 4.3 0 0 1-3.2-1.6Z"/></svg></span>;
+  return <span className="acct-mark" title={serviceName(service)}>{serviceName(service).slice(0, 1)}</span>;
+}
+
+/** One Buffer account as a card: its switch, today's limit at a glance, its numbers, and its schedule. */
 function ChannelCard({ channel, upNext, onSave }: { channel: BufferChannel; upNext: boolean; onSave: (changes: BufferChannelChanges, done: string) => Promise<boolean> }) {
   const [scheduling, setScheduling] = useState(false);
   const [watching, setWatching] = useState(false);
-  return <Card className="buffer-card">
-    <div className="buffer-card-head"><Avatar label={initialsOf(channel.name)}/>
-      <div><strong>{channel.name}{upNext && <Badge tone="success">Next turn</Badge>}</strong><span>{serviceName(channel.service)} · {channel.used_today} of {channel.daily_limit} scheduled for today · {channel.uploaded} uploaded so far{channel.waiting > 0 ? ` · ${channel.waiting} waiting at Buffer` : ""}{channel.last_picked_at ? ` · last clip given ${savedDay(channel.last_picked_at)}` : ""}</span></div>
-      <label><span>{channel.enabled ? "Clips go here" : "Off"}</span><Toggle checked={channel.enabled} label={`Send clips to ${channel.name}`} onChange={() => void onSave({ enabled: !channel.enabled }, channel.enabled ? `${channel.name} is off. No clips go to it.` : `${channel.name} is on.`)}/></label>
-    </div>
-    <div className="buffer-card-foot">
-      <div>
-        <div className="buffer-chips">{channel.times.map(time => <span className="buffer-chip" key={time}>{to12Hour(time)}</span>)}{channel.times.length === 0 && <span className="buffer-chip">Publishes at once</span>}</div>
-        <small>{channel.time_zone.replace(/_/g, " ")} · up to {channel.daily_limit} a day{channel.start_date ? ` · from ${longDay(channel.start_date)}` : ""}</small>
-        <small>{!channel.enabled ? "Switched off." : channel.at_once ? (channel.next_slot ? "No posting times: its next clip is published as soon as it is its turn." : "No posting times, and today’s limit is used (or its start date has not come): its next clip waits.") : channel.next_slot ? `Next free time: ${inZone(channel.next_slot, channel.time_zone)}.` : "No free time in the next two months."}</small>
+  const left = Math.max(0, channel.daily_limit - channel.used_today);
+  const share = Math.min(100, (channel.used_today / Math.max(1, channel.daily_limit)) * 100);
+  const zone = channel.time_zone.replace(/_/g, " ");
+  const schedule = channel.at_once ? "No schedule · clips are published right away" : `Posts at ${channel.times.map(to12Hour).join(", ")}`;
+  const next = !channel.enabled ? "Switched off: no clips go to this account."
+    : channel.at_once ? (channel.next_slot ? "Published at once, taking turns with your other accounts." : "Today’s limit is used, or its start date has not come: its next clip waits.")
+      : channel.next_slot ? `Next free time: ${inZone(channel.next_slot, channel.time_zone)}.` : "No free time in the next two months.";
+  return <Card className={`acct-card ${channel.enabled ? "" : "off"}`}>
+    <div className="acct-head">
+      <div className="acct-photo">{channel.avatar ? <img src={channel.avatar} alt="" referrerPolicy="no-referrer"/> : <Avatar label={initialsOf(channel.name)}/>}<ServiceMark service={channel.service}/></div>
+      <div className="acct-name">
+        <strong title={channel.name}>{channel.name}</strong>
+        <span>{serviceName(channel.service)} · via Buffer</span>
+        <span className={`acct-pill ${channel.enabled ? "on" : ""}`}><i/>{channel.enabled ? "Connected · receiving clips" : "Connected · switched off"}</span>
       </div>
-      <span><Button onClick={() => setWatching(true)}>Live status</Button><Button variant="primary" onClick={() => setScheduling(true)}>Schedule</Button></span>
+      <label className="acct-switch"><Toggle checked={channel.enabled} label={`Send clips to ${channel.name}`} onChange={() => void onSave({ enabled: !channel.enabled }, channel.enabled ? `${channel.name} is off. No clips go to it.` : `${channel.name} is on.`)}/><span>{channel.enabled ? "On" : "Off"}</span></label>
     </div>
+    <div className="acct-today">
+      <div><small>Today’s limit</small><b className={left ? "good" : "bad"}>{left} left</b></div>
+      <p><strong>{channel.used_today}</strong> of {channel.daily_limit} clips used</p>
+      <div className="acct-bar"><i style={{ width: `${share}%` }} className={left ? "" : "full"}/></div>
+    </div>
+    <div className="acct-numbers">
+      <div><small>Uploaded</small><b>{channel.uploaded}</b></div>
+      <div><small>Waiting</small><b>{channel.waiting}</b></div>
+      <div><small>Daily limit</small><b>{channel.daily_limit}</b></div>
+    </div>
+    <div className="acct-schedule">
+      <span>{schedule}{upNext && channel.enabled ? <Badge tone="success">Next turn</Badge> : null}</span>
+      <small>{next} · {zone}{channel.start_date ? ` · from ${longDay(channel.start_date)}` : ""}</small>
+    </div>
+    <div className="acct-actions"><Button onClick={() => setWatching(true)}>Live status</Button><Button variant="primary" onClick={() => setScheduling(true)}>Schedule</Button></div>
     {watching && <ChannelStatusModal channel={channel} onClose={() => setWatching(false)}/>}
     {scheduling && <ScheduleModal channel={channel} onSave={changes => onSave(changes, `Saved the schedule for ${channel.name}.`)} onClose={() => setScheduling(false)}/>}
   </Card>;
+}
+
+/** The four numbers above the cards: connected, receiving clips, used today and left today. */
+function AccountsSummary({ channels }: { channels: BufferChannel[] }) {
+  const on = channels.filter(c => c.enabled);
+  const limit = on.reduce((sum, c) => sum + c.daily_limit, 0);
+  const used = on.reduce((sum, c) => sum + Math.min(c.used_today, c.daily_limit), 0);
+  return <div className="acct-summary">
+    <div><small>Connected</small><b>{channels.length}</b><span>in Buffer</span></div>
+    <div><small>Receiving clips</small><b>{on.length}</b><span>{on.length === channels.length ? "all accounts" : `${channels.length - on.length} switched off`}</span></div>
+    <div><small>Used today</small><b>{used} / {limit}</b><span>clips across accounts that are on</span></div>
+    <div><small>Left today</small><b>{Math.max(0, limit - used)}</b><span>clips that can still go out</span></div>
+  </div>;
 }
 
 type Run = (work: () => Promise<BufferStatus>, done: string) => Promise<boolean>;
@@ -206,7 +244,6 @@ export default function BufferSettings() {
     }
   };
   const connected = !!status?.connected;
-  const active = status?.channels.filter(channel => channel.enabled).length ?? 0;
   const groups = (status?.keys ?? []).map(item => ({ item, channels: status!.channels.filter(channel => channel.key_id === item.id) }));
 
   return <><PageHeader title="Buffer Settings" description={`Finished ${PODCASTS ? "clips" : "videos"} are sent to your Buffer accounts, which publish them to the accounts you connected there. These keys and settings are yours alone.`}>
@@ -216,7 +253,7 @@ export default function BufferSettings() {
       {status && !status.public_url && <div className="form-note warn">The server has no public address yet, so Buffer cannot fetch clips from it. An admin sets the public base URL in Integrations → YouTube Push Notifications.</div>}
 
       {status && <Card><div className="card-title">Buffer API keys <span className="muted">· {status.keys.length} of {status.max_keys}</span></div>
-        <div className="card-caption">Create a key in Buffer under Settings → API. It needs the permissions <b>account:read</b>, <b>posts:read</b> and <b>posts:write</b>. Add up to {status.max_keys} keys, one per Buffer account; all their accounts get clips in turn.</div>
+        <div className="card-caption">Create a key in Buffer under Settings → API. It needs the permissions <b>account:read</b>, <b>posts:read</b> and <b>posts:write</b>. Add up to {status.max_keys} key{status.max_keys === 1 ? "" : "s"}, one per Buffer account; all their accounts get clips in turn.{status.max_accounts ? ` Your plan connects up to ${status.max_accounts} social accounts in all; any more in Buffer are left out.` : ""}</div>
         <div className="buffer-keys">
           {status.keys.map(item => <KeyRow key={item.id} item={item} busy={busy} run={run}/>)}
           {status.keys.length < status.max_keys
@@ -226,13 +263,14 @@ export default function BufferSettings() {
       </Card>}
 
       {connected && <>
-        <div><div className="card-title">Your accounts{PODCASTS ? " · Podcasts workspace" : ""}</div>
-          <div className="card-caption">{status.channels.length} connected in Buffer · {active} receiving clips. The accounts take turns: each clip goes to the switched-on account that has waited longest, so every account gets one before any gets a second. A clip set to one account on its own page goes there instead.</div></div>
+        <div><div className="card-title">Connected accounts{PODCASTS ? " · Podcasts workspace" : ""}</div>
+          <div className="card-caption">Clips take turns across the accounts that are on, one account after another, each within its own daily limit.{status.max_accounts ? ` Your plan connects up to ${status.max_accounts} accounts.` : ""}</div></div>
+        <AccountsSummary channels={status.channels}/>
         {groups.map(({ item, channels }) => <section className="buffer-group" key={item.id}>
-          <div className="section-label">{item.label} <span className="muted">· <code>••••{item.last4}</code> · {channels.length} account{channels.length === 1 ? "" : "s"}</span></div>
+          {groups.length > 1 && <div className="section-label">{item.label} <span className="muted">· <code>••••{item.last4}</code> · {channels.length} account{channels.length === 1 ? "" : "s"}</span></div>}
           {channels.length === 0
             ? <Card><Empty icon="plus" title="No accounts on this key yet">Connect an account in Buffer, then press “Refresh accounts”. An account another of your keys already reaches is listed under that key.</Empty></Card>
-            : channels.map(channel => <ChannelCard key={channel.id} channel={channel} upNext={status.up_next === channel.id} onSave={(changes, done) => run(() => buffer.updateChannel(channel.id, changes), done)}/>)}
+            : <div className="acct-grid">{channels.map(channel => <ChannelCard key={channel.id} channel={channel} upNext={status.up_next === channel.id} onSave={(changes, done) => run(() => buffer.updateChannel(channel.id, changes), done)}/>)}</div>}
         </section>)}
       </>}
     </div>

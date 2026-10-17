@@ -11,7 +11,7 @@ from app.api.deps import DB, CurrentUser, Workspace
 from app.integrations import youtube
 from app.integrations.http import ApiError
 from app.models import Channel, Job, JobStatus, Mode, RuleSetting, User, Video, VideoStatus, utcnow
-from app.services import activity, detection, dispatch, push, rules, serializers
+from app.services import acting, activity, detection, dispatch, plans, push, rules, serializers
 
 router = APIRouter(tags=["channels"])
 
@@ -71,14 +71,22 @@ def list_channels(db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
     return {
         "items": [serializers.channel(c, stats.get(c.id), overrides.get(c.id, 0)) for c in channels],
         "push_available": youtube.push_available(),
-        "poll_minutes": int(rules.global_values(db, user_id=user.id)["poll_interval_minutes"]),
+        # How often the channels are checked besides push notifications; None: push only (the plan has no auto-check).
+        "poll_minutes": plans.auto_check_minutes(db, user.id, int(rules.global_values(db, user_id=user.id)["poll_interval_minutes"])),
+        # How many channels the account has added (both workspaces) and how many its plan allows (0: no limit).
+        "channels_used": db.scalar(select(func.count(Channel.id)).where(Channel.user_id == user.id)) or 0,
+        "channels_allowed": plans.limit(db, user.id, "channels"),
+        "plan": plans.effective(db, user)["plan"],
+        # The bigger plans and their channel slots, so a member sees what an upgrade gives.
+        "bigger_plans": plans.bigger_by(db, user, "channels"),
     }
 
 
 @router.post("/channels/resolve")
 def resolve(body: ResolveIn, db: DB, user: CurrentUser):
     """Look a channel up so the operator can confirm it is the right one before saving."""
-    info = _resolve(body.query)
+    with acting.acting_for(db, user.id):  # looked up with the member's own YouTube key, if any
+        info = _resolve(body.query)
     existing = db.scalar(select(Channel).where(Channel.youtube_channel_id == info.youtube_channel_id))
     return {
         "youtube_channel_id": info.youtube_channel_id, "display_name": info.display_name, "handle": info.handle,
@@ -89,7 +97,9 @@ def resolve(body: ResolveIn, db: DB, user: CurrentUser):
 
 @router.post("/channels", status_code=201)
 def add_channel(body: ChannelCreate, db: DB, user: CurrentUser, mode: Workspace = Mode.SHORTS):
-    info = _resolve(body.query)
+    plans.check_channels(db, user)
+    with acting.acting_for(db, user.id):  # looked up with the member's own YouTube key, if any
+        info = _resolve(body.query)
     existing = db.scalar(select(Channel).where(Channel.youtube_channel_id == info.youtube_channel_id))
     if existing:
         if existing.user_id != user.id:  # a channel belongs to the member who added it first
@@ -236,12 +246,13 @@ async def webhook_notify(request: Request, db: DB):
     if not youtube.verify_signature(body, request.headers.get("x-hub-signature")):
         return Response(status_code=204)  # the PubSubHubbub spec asks for 2xx even when a signature is ignored
     try:
-        pairs = youtube.parse_notification(body)
+        entries = youtube.parse_notification_entries(body)
     except ApiError:
         return Response(status_code=204)
-    if pairs:
-        push.note_notification(db, len(pairs))
+    if entries:
+        push.note_notification(db, len(entries))
         db.commit()
-    for youtube_channel_id, video_id in pairs:
-        dispatch.discover_video(youtube_channel_id, video_id)
+    for youtube_channel_id, entry in entries:
+        # The title and upload time travel along: a member at their daily limit gets the video recorded without reading it.
+        dispatch.discover_video(youtube_channel_id, entry.video_id, entry.title, entry.published_at.isoformat() if entry.published_at else None)
     return Response(status_code=204)

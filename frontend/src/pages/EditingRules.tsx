@@ -9,8 +9,12 @@ import { useToast } from "@/components/Toast";
 import { Button, Card, PageHeader, Spinner, Toggle } from "@/components/ui";
 import { capital, countChanges, type Look } from "@/lib/look";
 import { PODCASTS } from "@/lib/mode";
+import { useMyPlan } from "@/hooks/useMyPlan";
+import { PlanTag } from "@/components/PlanTag";
 
 /** The sections of the rules. One is open at a time, so the preview beside it stays in view. */
+/** The plan feature a whole section needs, to show its plan on the tab. */
+const SECTION_FEATURE: Partial<Record<string, string>> = { music: "background_music", watermark: "watermark" };
 const SECTIONS = [
   { value: "frame", label: "Frame", part: (l: Look) => l.frame },
   { value: "adjust", label: "Adjust", part: (l: Look) => l.adjust },
@@ -124,6 +128,8 @@ export default function EditingRules() {
   }, [changes, save]);
 
   if (loadError) return <div className="form-error">{message(loadError)}</div>;
+  const { locked } = useMyPlan();
+  const editingLocked = locked.filter(label => ["AI hook text", "Background music", "Watermark", "Own fonts", "Editing presets", "Test render", "Full editing"].includes(label));
   if (!state || !draft || !saved) return <><PageHeader title="Editing Rules" description="How your clips are edited."/><Spinner/></>;
 
   const open = (id: number | null) => {
@@ -174,13 +180,16 @@ export default function EditingRules() {
   };
 
   return <><PageHeader title="Editing Rules" description={`How your ${PODCASTS ? "clips" : "videos"} are edited. These rules are your own; changes apply to new ${PODCASTS ? "clips" : "videos"} only.`}/>
+    {editingLocked.length > 0 && <div className="plan-note"><b>{state.fast_mode ? "Fast mode · " : ""}Not in your plan: {editingLocked.join(", ")}</b><span>{state.fast_mode ? `Your ${PODCASTS ? "clips" : "videos"} are made in Fast mode: 720p, 30 fps, quick encoding. ` : ""}You can try every option here and see it on the photo, but saving paid ones ({[...(state.fast_mode ? ["1080p", "high-quality encoding", "a rounded title box", "sharpness", "grain", "vignette", "highlights", "shadows"] : []), ...editingLocked.filter(l => l !== "Full editing")].join(", ")}) needs a paid plan. Ask the owner to upgrade it.</span></div>}
     <div className="preset-bar">
       <button type="button" className={selected === null ? "active" : ""} aria-pressed={selected === null} onClick={() => open(null)}>Default{selected === null && " ✓"}</button>
       {state.presets.map(p => <button type="button" key={p.id} className={selected === p.id ? "active" : ""} aria-pressed={selected === p.id} title={`Used by ${p.channels} ${p.channels === 1 ? "channel" : "channels"}`} onClick={() => open(p.id)}>{p.name}{selected === p.id && " ✓"}</button>)}
-      <button type="button" className="new" title="Saves the rules on screen as a new preset" onClick={() => setModal("new")}>+ New preset</button>
+      <button type="button" className="new" title="Saves the rules on screen as a new preset" onClick={() => setModal("new")}>+ New preset <PlanTag feature="editing_presets"/></button>
       {preset && <span className="preset-actions"><button type="button" className="link-button" onClick={() => setModal("rename")}>Rename</button><button type="button" className="link-button danger" onClick={() => void removePreset(preset)}>Delete preset</button></span>}
     </div>
-    <div className="section-tabs" role="tablist" aria-label="Sections of the rules">{SECTIONS.map(s => <button type="button" role="tab" key={s.value} aria-selected={tab === s.value} className={tab === s.value ? "active" : ""} onClick={() => setTab(s.value)}>
+    {/* Above the editing area, so that area is the last thing on the page and the preview never scrolls out of view. */}
+    <PerChannelRules state={state} onAssign={(id, presetId) => void assign(id, presetId)}/>
+    <div className="section-tabs" data-i18n-skip role="tablist" aria-label="Sections of the rules">{SECTIONS.map(s => <button type="button" role="tab" key={s.value} aria-selected={tab === s.value} className={tab === s.value ? "active" : ""} onClick={() => setTab(s.value)}>{SECTION_FEATURE[s.value] && <PlanTag feature={SECTION_FEATURE[s.value]!}/>}
       {s.label}{countChanges(s.part(draft), s.part(saved)) > 0 && <i title="Unsaved changes"/>}</button>)}</div>
     <div className="editing-layout">
       <div className="editing-cards">
@@ -195,7 +204,6 @@ export default function EditingRules() {
       </div>
       <EditingPreview look={draft} watermark={watermark} token={token} rendered={state.rendered_last_day} onTest={() => setModal("test")}/>
     </div>
-    <PerChannelRules state={state} onAssign={(id, presetId) => void assign(id, presetId)}/>
     <div className={`save-bar${changes ? " dirty" : ""}`}>
       <div><b>{changes ? `${changes} unsaved ${changes === 1 ? "change" : "changes"}${preset ? ` to “${preset.name}”` : ""}` : "All changes saved"}</b>
         <small className="muted">Applies to new {PODCASTS ? "clips" : "videos"} only.{changes ? " Ctrl+S saves." : ""}</small></div>

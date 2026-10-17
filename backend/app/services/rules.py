@@ -37,7 +37,7 @@ RULES: dict[str, Rule] = {
     "cap_reset_timezone": Rule("timezone", "Asia/Karachi", "Timezone", "The day (for daily limits and reports) starts at midnight in this timezone.", "Publishing", per_channel=False),
     "hashtag_count": Rule("int", 8, "Hashtag count", "How many hashtags a caption gets.", "Caption", 0, 15),
     "fallback_hashtags": Rule("text", "fyp foryou viral trending shorts", "Fallback hashtags", "Used with the original title when the AI model fails.", "Caption", max=500),
-    "file_retention_days": Rule("int", 7, "File retention (days)", "Days after publishing before the downloaded and rendered files are deleted.", "Storage", 1, 365),
+    "file_retention_days": Rule("int", 1, "File retention (days)", "Days after publishing before the edited file is deleted (the original goes as soon as the edit is made). At most 3, so the server's disk never fills.", "Storage", 1, 3),
     "poll_interval_minutes": Rule("int", 5, "Polling interval (minutes)", "How often each channel's uploads are checked, in case a push notification is missed.", "Detection", 1, 1440, per_channel=False),
 }
 
@@ -46,6 +46,7 @@ RULES: dict[str, Rule] = {
 # workspaces never share a value. A few plumbing settings (timezone, publish mode, polling, retention)
 # are not repeated: Podcasts reads them from the Shorts rules above.
 PODCAST_PREFIX = "podcast."
+MAX_RETENTION_DAYS = 3  # an older, longer value saved before this limit counts as 3
 SHARED_WITH_PODCASTS = ("cap_reset_timezone", "poll_interval_minutes", "file_retention_days")
 PODCAST_RULES: dict[str, Rule] = {
     "clips_per_video": Rule("int", 3, "Clips per podcast", "How many short clips are cut from each podcast.", "Clips", 1, 10),
@@ -132,12 +133,24 @@ def global_values(db: Session, mode: str = Mode.SHORTS, user_id: int | None = No
         shared = {key: values[key] for key in SHARED_WITH_PODCASTS}
         values = {**shared, **{key: rule.default for key, rule in PODCAST_RULES.items()}}
         values.update({key: row.value for key, row in _rows(db, None, mode, user_id).items()})
+    return _within_bounds(values, mode)
+
+
+def _within_bounds(values: dict[str, Any], mode: str) -> dict[str, Any]:
+    """A number saved before its rule's range was narrowed (file retention went from 365 days to 3) counts as the nearest allowed value."""
+    for key, rule in {**RULES, **registry(mode)}.items():
+        value = values.get(key)
+        if rule.kind in ("int", "float") and isinstance(value, (int, float)) and not isinstance(value, bool):
+            if rule.max is not None and value > rule.max:
+                values[key] = type(value)(rule.max)
+            elif rule.min is not None and value < rule.min:
+                values[key] = type(value)(rule.min)
     return values
 
 
 def channel_overrides(db: Session, channel_id: int, mode: str = Mode.SHORTS) -> dict[str, Any]:
     known = registry(mode)
-    return {key: row.value for key, row in _rows(db, channel_id, mode).items() if known[key].per_channel}
+    return _within_bounds({key: row.value for key, row in _rows(db, channel_id, mode).items() if known[key].per_channel}, mode)
 
 
 def effective(db: Session, channel_id: int | None = None, mode: str = Mode.SHORTS, user_id: int | None = None) -> dict[str, Any]:

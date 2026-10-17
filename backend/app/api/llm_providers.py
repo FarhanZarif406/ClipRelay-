@@ -1,10 +1,14 @@
-"""Settings → AI models. Reads for everyone (no keys for members); writes owner-only."""
+"""Integrations (members) and the workspace Integrations page (owners): every account's own AI models.
+
+The owners share one set (no user); every member has their own, and with none they get no AI. An owner can also
+manage a member's set for them with ?for_user=<account id>.
+"""
 
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select, update
 
 from app.api.credentials import mask
-from app.api.deps import DB, CurrentUser, OwnerUser
+from app.api.deps import DB, CurrentUser
 from app.integrations import llm
 from app.integrations.http import ApiError
 from app.models import LLMProvider, User, utcnow
@@ -16,13 +20,29 @@ router = APIRouter(prefix="/llm-providers", tags=["ai-models"])
 TEST_PROMPT = "Reply with the single word OK."
 
 
+def _scope(db, user: User, for_user: int | None) -> int | None:
+    """Whose models a request is about: None for the owners' set, else a member's id."""
+    if for_user is None:
+        return None if user.is_owner else user.id
+    if not user.is_owner:
+        raise HTTPException(403, "Only owners can manage another account's AI models")
+    target = db.get(User, for_user)
+    if not target or not target.is_active:
+        raise HTTPException(404, "Account not found")
+    return None if target.is_owner else target.id
+
+
+def _in(scope: int | None):
+    return LLMProvider.user_id.is_(None) if scope is None else LLMProvider.user_id == scope
+
+
 def _item(row: LLMProvider, user: User) -> dict:
     item = {
         "id": row.id, "label": row.label, "provider": row.provider, "model": row.model, "base_url": row.base_url,
         "max_tokens": row.max_tokens, "temperature": row.temperature, "is_default": row.is_default, "status": row.status,
         "last_error": row.last_error, "last_tested_at": row.last_tested_at, "updated_at": row.updated_at,
     }
-    if user.is_owner:
+    if user.is_owner or row.user_id == user.id:  # a member sees the end of their own key
         try:
             item["masked_key"] = mask(decrypt(row.api_key_enc) or "")
         except RuntimeError:
@@ -30,9 +50,9 @@ def _item(row: LLMProvider, user: User) -> dict:
     return item
 
 
-def _get(db, provider_id: int) -> LLMProvider:
+def _get(db, provider_id: int, scope: int | None) -> LLMProvider:
     row = db.get(LLMProvider, provider_id)
-    if not row:
+    if not row or row.user_id != scope:
         raise HTTPException(404, "AI model not found")
     return row
 
@@ -50,9 +70,10 @@ def _changed(db) -> None:
 
 
 @router.get("")
-def list_providers(db: DB, user: CurrentUser):
-    rows = db.scalars(select(LLMProvider).order_by(LLMProvider.is_default.desc(), LLMProvider.id)).all()
-    env = llm_registry.env_config()
+def list_providers(db: DB, user: CurrentUser, for_user: int | None = None):
+    scope = _scope(db, user, for_user)
+    rows = db.scalars(select(LLMProvider).where(_in(scope)).order_by(LLMProvider.is_default.desc(), LLMProvider.id)).all()
+    env = llm_registry.env_config() if scope is None else None  # .env is the owners' fallback only
     return {
         "items": [_item(r, user) for r in rows],
         "providers": list(llm.PROVIDERS),
@@ -61,21 +82,23 @@ def list_providers(db: DB, user: CurrentUser):
 
 
 @router.post("/validate")
-def validate(body: ValidateProviderIn, db: DB, _: OwnerUser):
+def validate(body: ValidateProviderIn, db: DB, user: CurrentUser, for_user: int | None = None):
+    scope = _scope(db, user, for_user)
     key = body.api_key.strip()
     if not key and body.provider_id:
-        key = decrypt(_get(db, body.provider_id).api_key_enc) or ""
+        key = decrypt(_get(db, body.provider_id, scope).api_key_enc) or ""
     models = _models_or_400(llm.LLMConfig(provider=body.provider, api_key=key, model="", base_url=(body.base_url or "").strip() or None))
     return {"models": models}
 
 
 @router.post("", status_code=201)
-def create(body: ProviderIn, db: DB, user: OwnerUser):
+def create(body: ProviderIn, db: DB, user: CurrentUser, for_user: int | None = None):
+    scope = _scope(db, user, for_user)
     cfg = llm.LLMConfig(provider=body.provider, api_key=body.api_key.strip(), model=body.model, base_url=(body.base_url or "").strip() or None)
     _models_or_400(cfg)
-    first = db.scalar(select(LLMProvider.id).limit(1)) is None
+    first = db.scalar(select(LLMProvider.id).where(_in(scope)).limit(1)) is None
     row = LLMProvider(
-        label=body.label.strip(), provider=body.provider, api_key_enc=encrypt(cfg.api_key), base_url=cfg.base_url, model=body.model,
+        user_id=scope, label=body.label.strip(), provider=body.provider, api_key_enc=encrypt(cfg.api_key), base_url=cfg.base_url, model=body.model,
         max_tokens=body.max_tokens, temperature=body.temperature, is_default=first, status="valid", last_tested_at=utcnow(),
     )
     db.add(row)
@@ -86,8 +109,8 @@ def create(body: ProviderIn, db: DB, user: OwnerUser):
 
 
 @router.patch("/{provider_id}")
-def edit(provider_id: int, body: ProviderUpdate, db: DB, user: OwnerUser):
-    row = _get(db, provider_id)
+def edit(provider_id: int, body: ProviderUpdate, db: DB, user: CurrentUser, for_user: int | None = None):
+    row = _get(db, provider_id, _scope(db, user, for_user))
     data = body.model_dump(exclude_unset=True)
     new_key = (data.pop("api_key", None) or "").strip()
     connection_changed = bool(new_key) or ("provider" in data and data["provider"] != row.provider) or ("base_url" in data and (data["base_url"] or None) != row.base_url)
@@ -112,9 +135,10 @@ def edit(provider_id: int, body: ProviderUpdate, db: DB, user: OwnerUser):
 
 
 @router.post("/{provider_id}/default")
-def make_default(provider_id: int, db: DB, user: OwnerUser):
-    row = _get(db, provider_id)
-    db.execute(update(LLMProvider).values(is_default=False))
+def make_default(provider_id: int, db: DB, user: CurrentUser, for_user: int | None = None):
+    scope = _scope(db, user, for_user)
+    row = _get(db, provider_id, scope)
+    db.execute(update(LLMProvider).where(_in(scope)).values(is_default=False))
     row.is_default = True
     activity.record(db, "Settings", f"“{row.label}” set as the default AI model by {user.email}", event="llm_default")
     _changed(db)
@@ -122,8 +146,8 @@ def make_default(provider_id: int, db: DB, user: OwnerUser):
 
 
 @router.post("/{provider_id}/test")
-def test(provider_id: int, db: DB, user: OwnerUser):
-    row = _get(db, provider_id)
+def test(provider_id: int, db: DB, user: CurrentUser, for_user: int | None = None):
+    row = _get(db, provider_id, _scope(db, user, for_user))
     try:
         reply = llm.complete_with(llm_registry.to_config(row), TEST_PROMPT, max_tokens=10)
         ok, message = True, f"{row.model} replied: {reply[:40]}"
@@ -138,9 +162,10 @@ def test(provider_id: int, db: DB, user: OwnerUser):
 
 
 @router.delete("/{provider_id}")
-def delete(provider_id: int, db: DB, user: OwnerUser, new_default_id: int | None = None):
-    row = _get(db, provider_id)
-    others = db.scalars(select(LLMProvider).where(LLMProvider.id != row.id)).all()
+def delete(provider_id: int, db: DB, user: CurrentUser, new_default_id: int | None = None, for_user: int | None = None):
+    scope = _scope(db, user, for_user)
+    row = _get(db, provider_id, scope)
+    others = db.scalars(select(LLMProvider).where(_in(scope), LLMProvider.id != row.id)).all()
     if row.is_default and others:
         replacement = next((o for o in others if o.id == new_default_id), None)
         if replacement is None:
@@ -148,7 +173,7 @@ def delete(provider_id: int, db: DB, user: OwnerUser, new_default_id: int | None
         replacement.is_default = True
     label = row.label
     db.delete(row)
-    env = llm_registry.env_config()
+    env = llm_registry.env_config() if scope is None else None
     fallback = None if others else ("env" if env else "none")
     activity.record(db, "Settings", f"AI model “{label}” removed by {user.email}" + (" — using LLM_* from .env" if fallback == "env" else " — no AI model configured" if fallback == "none" else ""), event="llm_removed", level="warning" if fallback == "none" else "info")
     _changed(db)

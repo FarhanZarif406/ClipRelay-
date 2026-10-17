@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import BufferChannel, Job, Mode, SkipReason, Video
-from app.services import rules
+from app.services import plans, rules
 from app.services.pipeline import cap_day_start
 
 # Skips of a video that was fine to use but came over a limit; the rest (too long, too short, …) are filters.
@@ -44,10 +44,14 @@ def status(db: Session, user_id: int | None, mode: str) -> dict:
         limit = max(1, posts // max(1, int(values["clips_per_video"]))) if mode == Mode.PODCASTS else posts
     else:
         limit = int(values["daily_limit"])
+    capped = plans.limit(db, user_id, "podcasts_per_day" if mode == Mode.PODCASTS else "videos_per_day")  # the plan caps it, whatever the rule says
+    by_plan = bool(capped and capped < limit)
+    if by_plan:
+        limit = capped
     used = used_today(db, user_id, mode, zone)
     return {
         "limit": limit, "used": used, "remaining": max(0, limit - used), "reached": used >= limit,
-        "source": "accounts" if automatic else "manual", "accounts": len(accounts), "account_posts": posts,
+        "source": "plan" if by_plan else "accounts" if automatic else "manual", "accounts": len(accounts), "account_posts": posts,
         "set_to_match": values["daily_limit_mode"] == AUTO, "time_zone": zone, "resets_at": cap_day_start(zone) + timedelta(days=1),
     }
 
@@ -57,6 +61,6 @@ def check(db: Session, user_id: int | None, mode: str) -> tuple[str, str] | None
     today = status(db, user_id, mode)
     if not today["reached"]:
         return None
-    where = f"from your {today['accounts']} Buffer account{'s' if today['accounts'] != 1 else ''}" if today["source"] == "accounts" else "set by hand"
+    where = {"accounts": f"from your {today['accounts']} Buffer account{'s' if today['accounts'] != 1 else ''}", "plan": "your plan's limit"}.get(today["source"], "set by hand")
     noun = "podcasts" if mode == Mode.PODCASTS else "videos"
     return SkipReason.DAILY_LIMIT, f"Daily limit reached: {today['used']} of {today['limit']} {noun} already taken today ({where})"

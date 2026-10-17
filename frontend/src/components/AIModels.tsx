@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { createContext, useContext, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { llmProviders } from "@/api/endpoints";
 import type { LLMProvider, LLMProviderName } from "@/api/types";
@@ -12,9 +12,12 @@ export const PROVIDER_NAMES: Record<LLMProviderName, string> = {
   anthropic: "Anthropic (Claude)", openai: "OpenAI", gemini: "Google Gemini", openrouter: "OpenRouter",
   groq: "Groq", mistral: "Mistral", custom: "Custom (OpenAI-compatible)",
 };
+/** Whose models are shown: undefined for one's own, or the account an owner is managing. */
+const ForUser = createContext<number | undefined>(undefined);
 const STATUS = { valid: ["Valid", "success"], unverified: ["Unverified", "warning"], invalid: ["Invalid", "danger"] } as const;
 
 function ProviderModal({ existing, close }: { existing?: LLMProvider; close: () => void }) {
+  const forUser = useContext(ForUser);
   const queryClient = useQueryClient();
   const toast = useToast();
   const onError = useErrorToast();
@@ -34,7 +37,7 @@ function ProviderModal({ existing, close }: { existing?: LLMProvider; close: () 
   const resetValidation = () => { setValidated(false); setError(null); };
 
   const validate = useMutation({
-    mutationFn: () => llmProviders.validate({ provider, api_key: apiKey.trim(), base_url: provider === "custom" ? baseUrl.trim() || null : null, provider_id: existing?.id }),
+    mutationFn: () => llmProviders.validate({ provider, api_key: apiKey.trim(), base_url: provider === "custom" ? baseUrl.trim() || null : null, provider_id: existing?.id }, forUser),
     onSuccess: r => {
       setModels(r.models); setValidated(true); setError(null);
       if (!r.models.includes(model)) setModel(r.models[0] ?? "");
@@ -46,8 +49,8 @@ function ProviderModal({ existing, close }: { existing?: LLMProvider; close: () 
       const temp = temperature.trim() === "" ? null : Number(temperature);
       const common = { label: label.trim() || PROVIDER_NAMES[provider], provider, model, max_tokens: Number(maxTokens) || 600, base_url: provider === "custom" ? baseUrl.trim() || null : null };
       return existing
-        ? llmProviders.update(existing.id, { ...common, ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}), ...(temp === null ? { clear_temperature: true } : { temperature: temp }) })
-        : llmProviders.create({ ...common, api_key: apiKey.trim(), temperature: temp });
+        ? llmProviders.update(existing.id, { ...common, ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}), ...(temp === null ? { clear_temperature: true } : { temperature: temp }) }, forUser)
+        : llmProviders.create({ ...common, api_key: apiKey.trim(), temperature: temp }, forUser);
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["llm-providers"] }); queryClient.invalidateQueries({ queryKey: ["prompts", "meta"] }); toast({ title: existing ? "AI model updated" : "AI model added" }); close(); },
     onError,
@@ -73,13 +76,14 @@ function ProviderModal({ existing, close }: { existing?: LLMProvider; close: () 
 }
 
 function RemoveModal({ item, all, envConfigured, close }: { item: LLMProvider; all: LLMProvider[]; envConfigured: boolean; close: () => void }) {
+  const forUser = useContext(ForUser);
   const queryClient = useQueryClient();
   const toast = useToast();
   const onError = useErrorToast();
   const others = all.filter(p => p.id !== item.id);
   const [replacement, setReplacement] = useState(others[0]?.id);
   const remove = useMutation({
-    mutationFn: () => llmProviders.remove(item.id, item.is_default ? replacement : undefined),
+    mutationFn: () => llmProviders.remove(item.id, item.is_default ? replacement : undefined, forUser),
     onSuccess: r => { queryClient.invalidateQueries({ queryKey: ["llm-providers"] }); queryClient.invalidateQueries({ queryKey: ["prompts"] }); toast({ title: "AI model removed", message: r.fallback === "env" ? "Using LLM_* from .env." : r.fallback === "none" ? "No AI model is configured now." : undefined }); close(); },
     onError,
   });
@@ -87,29 +91,37 @@ function RemoveModal({ item, all, envConfigured, close }: { item: LLMProvider; a
     {item.is_default && others.length > 0 && <Field label="New default model"><select value={replacement} onChange={e => setReplacement(Number(e.target.value))}>{others.map(o => <option key={o.id} value={o.id}>{o.label} · {o.model}</option>)}</select></Field>}
     {others.length === 0 && (envConfigured
       ? <div className="form-note">This is the last AI model. ClipRelay falls back to the <code>LLM_*</code> settings in <code>.env</code>.</div>
-      : <div className="form-error">This is the last AI model and <code>.env</code> has no LLM key — captions fall back to the original title until you add one.</div>)}
+      : <div className="form-error">This is the last AI model: captions fall back to the original title until another is added.</div>)}
     <div className="form-note">Prompt templates that use this model switch to the workspace default.</div>
   </Modal>;
 }
 
-export function AIModels({ isOwner }: { isOwner: boolean }) {
+/**
+ * An account's own AI models. Owners share one set; every member has their own, and without one their captions
+ * use the original title. `forUser`: an owner managing another account's models for them.
+ */
+export function AIModels({ forUser, shared = false }: { forUser?: number; shared?: boolean }) {
+  return <ForUser.Provider value={forUser}><ModelList forUser={forUser} shared={shared}/></ForUser.Provider>;
+}
+
+function ModelList({ forUser, shared }: { forUser?: number; shared: boolean }) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const onError = useErrorToast();
-  const { data } = useQuery({ queryKey: ["llm-providers"], queryFn: llmProviders.list });
+  const { data } = useQuery({ queryKey: ["llm-providers", forUser ?? "mine"], queryFn: () => llmProviders.list(forUser) });
   const [modal, setModal] = useState<{ kind: "add" } | { kind: "edit" | "remove"; item: LLMProvider } | null>(null);
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["llm-providers"] });
-  const test = useMutation({ mutationFn: (id: number) => llmProviders.test(id), onSuccess: r => { invalidate(); toast({ title: r.ok ? "Model replied" : "Test failed", message: r.message, tone: r.ok ? "success" : "danger" }); }, onError });
-  const makeDefault = useMutation({ mutationFn: (id: number) => llmProviders.makeDefault(id), onSuccess: () => { invalidate(); queryClient.invalidateQueries({ queryKey: ["prompts", "meta"] }); }, onError });
+  const test = useMutation({ mutationFn: (id: number) => llmProviders.test(id, forUser), onSuccess: r => { invalidate(); toast({ title: r.ok ? "Model replied" : "Test failed", message: r.message, tone: r.ok ? "success" : "danger" }); }, onError });
+  const makeDefault = useMutation({ mutationFn: (id: number) => llmProviders.makeDefault(id, forUser), onSuccess: () => { invalidate(); queryClient.invalidateQueries({ queryKey: ["prompts", "meta"] }); }, onError });
   const items = data?.items ?? [];
   const env = data?.env_fallback;
 
-  return <Card><div className="credential-head" style={{ marginBottom: 6 }}><div><div className="card-title">AI models</div><div className="card-caption">Rewrite titles, captions and hashtags with any of these. The default is used unless a prompt template picks another model.</div></div>{isOwner && <Button variant="primary" icon="plus" onClick={() => setModal({ kind: "add" })}>Add model</Button>}</div>
-    {items.length === 0 && env && <div className={env.configured ? "form-note" : "form-error"}>{env.configured ? <>No AI models added yet — using <strong>{env.provider} · {env.model}</strong> from <code>.env</code>.</> : <>No AI model configured. Add one to enable rewriting.</>}</div>}
+  return <Card><div className="credential-head" style={{ marginBottom: 6 }}><div><div className="card-title">AI models</div><div className="card-caption">{shared ? "The owners' own models, for their videos. Every member adds their own." : forUser ? "This account's own models: its captions, hook text and podcast clips use them." : "Your own models: titles, captions, hashtags, hook text and podcast clips use the default one. Without one, captions use the original title."}</div></div><Button variant="primary" icon="plus" onClick={() => setModal({ kind: "add" })}>Add model</Button></div>
+    {items.length === 0 && env && <div className={env.configured ? "form-note" : "form-error"}>{env.configured ? <>No AI models added yet — using <strong>{env.provider} · {env.model}</strong> from <code>.env</code>.</> : <>No AI model yet. Add one with its own API key (for example a free Google Gemini key) to have captions written by AI.</>}</div>}
     {items.map(p => { const [label, tone] = STATUS[p.status]; const testing = test.isPending && test.variables === p.id; return <div className="api-row" key={p.id}>
-      <div><strong>{p.label}{p.is_default && <> <Badge tone="primary" dot={false}>Default</Badge></>}</strong><span>{PROVIDER_NAMES[p.provider]} · {p.model}{isOwner && p.masked_key ? ` · ${p.masked_key}` : ""}{p.last_tested_at ? ` · tested ${dayTime(p.last_tested_at)}` : ""}</span>{p.status === "invalid" && p.last_error && <span className="row-error" style={{ maxWidth: 420 }} title={p.last_error}>{p.last_error}</span>}</div>
+      <div><strong>{p.label}{p.is_default && <> <Badge tone="primary" dot={false}>Default</Badge></>}</strong><span>{PROVIDER_NAMES[p.provider]} · {p.model}{p.masked_key ? ` · ${p.masked_key}` : ""}{p.last_tested_at ? ` · tested ${dayTime(p.last_tested_at)}` : ""}</span>{p.status === "invalid" && p.last_error && <span className="row-error" style={{ maxWidth: 420 }} title={p.last_error}>{p.last_error}</span>}</div>
       <Badge tone={testing ? "primary" : tone}>{testing ? "Testing…" : label}</Badge>
-      {isOwner && <><Button onClick={() => test.mutate(p.id)} disabled={testing}>Test</Button><Button onClick={() => setModal({ kind: "edit", item: p })}>Edit</Button>{!p.is_default && <Button onClick={() => makeDefault.mutate(p.id)}>Set default</Button>}<Button variant="danger" onClick={() => setModal({ kind: "remove", item: p })}>Remove</Button></>}
+      <Button onClick={() => test.mutate(p.id)} disabled={testing}>Test</Button><Button onClick={() => setModal({ kind: "edit", item: p })}>Edit</Button>{!p.is_default && <Button onClick={() => makeDefault.mutate(p.id)}>Set default</Button>}<Button variant="danger" onClick={() => setModal({ kind: "remove", item: p })}>Remove</Button>
     </div>; })}
     {items.length === 0 && !env && <Empty icon="sparkles" title="Loading…"/>}
     {modal?.kind === "add" && <ProviderModal close={() => setModal(null)}/>}

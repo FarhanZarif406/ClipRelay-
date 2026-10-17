@@ -1,4 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
+import { PlanTag } from "@/components/PlanTag";
+import { useMyPlan } from "@/hooks/useMyPlan";
 import { library as libraryApi, type LibraryKind } from "@/api/endpoints";
 import type { Library } from "@/api/types";
 import { Field } from "@/components/Modal";
@@ -10,6 +12,17 @@ import {
 
 /** What every card works with: the look being edited, a way to change it, and an undo for its own settings. */
 export type CardProps = { look: Look; onChange: (look: Look) => void; onReset?: () => void };
+
+/** The adjustments only "Full editing" saves; the rest are light enough for Fast mode. */
+const HEAVY_ADJUST = new Set(["sharpness", "grain", "vignette", "highlights", "shadows"]);
+
+/** A line at the top of a section the plan does not include: it can be tried, saving needs the named plan. */
+function PlanNote({ feature }: { feature: string }) {
+  const { upgradeFor } = useMyPlan();
+  const plan = upgradeFor(feature);
+  if (!plan) return null;
+  return <div className="plan-lock-note"><span className="plan-tag">{plan.toUpperCase()}</span>Try it here and see it on the photo; saving it needs the {plan} plan.</div>;
+}
 
 export function RuleCard({ title, desc, onReset, children }: { title: string; desc: string; onReset?: () => void; children: ReactNode }) {
   return <section className="card rule-card">
@@ -85,7 +98,7 @@ export function AdjustCard({ look, onChange, onReset }: CardProps) {
     {(["Light", "Colour", "Detail"] as const).map((group, i) => <div key={group} className="adjust-group">
       <h3 className={i ? "rule-heading" : "rule-heading first"}>{group}</h3>
       <small className="muted">{ADJUST_HELP[group]}</small>
-      {grid(ADJUSTMENTS.filter(x => x.group === group).map(x => <Field key={x.key} label={x.label}>
+      {grid(ADJUSTMENTS.filter(x => x.group === group).map(x => <Field key={x.key} label={x.label} tag={HEAVY_ADJUST.has(x.key) ? <PlanTag feature="full_editing"/> : undefined}>
         <div onDoubleClick={() => onChange(patch(look, "adjust", { [x.key]: 0 }))} title="Double-click to put it back to 0">
           <Range min={x.min} max={x.max} value={a[x.key]} readout={x.min < 0 ? signed(a[x.key], x.key === "hue" ? "°" : "") : String(a[x.key])} onChange={v => onChange(patch(look, "adjust", { [x.key]: v }))}/>
         </div></Field>))}
@@ -112,10 +125,10 @@ export function QualityCard({ look, onChange, onReset, seconds }: CardProps & { 
   const e = look.encoding;
   return <RuleCard title="Quality" desc="Balance clarity, file size, and rendering time." onReset={onReset}>
     {grid(<>
-      <Field label="Resolution" hint={`Clips come out at ${outputSize(look).join(" × ")} pixels.`}>
+      <Field label="Resolution" tag={<PlanTag feature="full_editing"/>} hint={`Clips come out at ${outputSize(look).join(" × ")} pixels.`}>
         <select value={e.resolution} onChange={x => onChange(patch(look, "encoding", { resolution: x.target.value as Look["encoding"]["resolution"] }))}><option value="1080x1920">Full HD · 1080p</option><option value="720x1280">HD · 720p</option></select></Field>
-      <Field label="Frame rate"><select value={e.fps} onChange={x => onChange(patch(look, "encoding", { fps: Number(x.target.value) as Look["encoding"]["fps"] }))}>{FRAME_RATES.map(f => <option key={f} value={f}>{f} fps</option>)}</select></Field>
-      <Field label="Encoder preset" hint="Slower takes longer but produces a smaller file."><select value={e.preset} onChange={x => onChange(patch(look, "encoding", { preset: x.target.value as Look["encoding"]["preset"] }))}>{ENCODER_PRESETS.map(p => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}</select></Field>
+      <Field label="Frame rate" tag={<PlanTag feature="full_editing"/>}><select value={e.fps} onChange={x => onChange(patch(look, "encoding", { fps: Number(x.target.value) as Look["encoding"]["fps"] }))}>{FRAME_RATES.map(f => <option key={f} value={f}>{f} fps</option>)}</select></Field>
+      <Field label="Encoder preset" tag={<PlanTag feature="full_editing"/>} hint="Slower takes longer but produces a smaller file."><select value={e.preset} onChange={x => onChange(patch(look, "encoding", { preset: x.target.value as Look["encoding"]["preset"] }))}>{ENCODER_PRESETS.map(p => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}</select></Field>
       <Field label="Quality (CRF)" hint="Lower is sharper and larger. 23 is a good balance."><Range min={18} max={28} value={e.crf} readout={String(e.crf)} onChange={crf => onChange(patch(look, "encoding", { crf }))}/>
         <div className="range-labels"><span>Higher quality</span><span>Smaller file</span></div></Field>
     </>)}
@@ -195,7 +208,8 @@ export function LibraryFiles({ kind, library, onChange, onError, accept, noun, t
 export function MusicCard({ look, onChange, onReset, library, onLibrary, onError, token }: CardProps & { library: Library | null; onLibrary: (l: Library) => void; onError: (reason: unknown) => void; token?: string }) {
   const { music } = look;
   return <RuleCard title="Background music" desc="Add a track from your own library under every clip." onReset={onReset}>
-    <Field label="Add background music" hint="Each clip gets the next track in your library: 1, 2, 3 and so on, then back to the first.">
+    <PlanNote feature="background_music"/>
+    <Field label="Add background music" tag={<PlanTag feature="background_music"/>} hint="Each clip gets the next track in your library: 1, 2, 3 and so on, then back to the first.">
       <Toggle checked={music.enabled} label="Add background music" onChange={() => onChange(patch(look, "music", { enabled: !music.enabled }))}/></Field>
     {music.enabled && <Field label="Music volume" hint="How loud the music is under the video’s own sound. Around 20–30% keeps voices clear.">
       <Range min={2} max={100} value={Math.round(music.volume * 100)} readout={`${Math.round(music.volume * 100)}%`} onChange={v => onChange(patch(look, "music", { volume: v / 100 }))}/></Field>}
@@ -212,8 +226,8 @@ export function HookCard({ look, onChange, onReset, fonts, onFonts, onError, fon
   const { box } = hook;
   const set = (changes: Partial<Look["hook"]>) => onChange(patch(look, "hook", changes));
   const setBox = (changes: Partial<Look["hook"]["box"]>) => onChange(patchBox(look, changes));
-  const percent = (label: string, value: number, change: (v: number) => void, min = 0, max = 100) =>
-    <Field label={label}><Range min={min} max={max} value={Math.round(value)} readout={`${Math.round(value)}%`} onChange={change}/></Field>;
+  const percent = (label: string, value: number, change: (v: number) => void, min = 0, max = 100, tag?: ReactNode) =>
+    <Field label={label} tag={tag}><Range min={min} max={max} value={Math.round(value)} readout={`${Math.round(value)}%`} onChange={change}/></Field>;
   const fontOptions = [
     { value: "default", label: "Default (bold)" },
     ...(fonts?.items ?? []).map(f => ({ value: `custom:${f.id}`, label: f.name })),
@@ -224,7 +238,7 @@ export function HookCard({ look, onChange, onReset, fonts, onFonts, onError, fon
     {hook.enabled && <>
       {!fontAvailable && hook.font === "default" && <div className="form-note warn">No bold font was found on the server, so the hook text is left out of clips. Upload a font below, or set FONT_FILE on the server.</div>}
       {grid(<>
-        <Field label="Words" hint="The AI hook needs an AI model (Settings → AI models). Without one, the title is shown.">
+        <Field label="Words" tag={hook.source === "ai" ? <PlanTag feature="ai_hook"/> : undefined} hint="The AI hook needs an AI model (Settings → AI models). Without one, the title is shown.">
           <select value={hook.source} onChange={e => set({ source: e.target.value as Look["hook"]["source"] })}><option value="ai">Hook written by AI from the title</option><option value="title">The video’s own title</option></select></Field>
         <Field label="Stays on screen for"><NumberInput min={1} max={10} step={0.5} suffix="sec" value={hook.duration} onChange={duration => set({ duration })}/></Field>
       </>)}
@@ -248,7 +262,7 @@ export function HookCard({ look, onChange, onReset, fonts, onFonts, onError, fon
           {percent("Opacity", box.opacity * 100, v => setBox({ opacity: v / 100 }))}
           {percent("Width", box.width, width => setBox({ width }), 10)}
           {percent("Height", box.height, height => setBox({ height }), 3, 60)}
-          {percent("Roundness", box.radius, radius => setBox({ radius }))}
+          {percent("Roundness", box.radius, radius => setBox({ radius }), 0, 100, <PlanTag feature="full_editing"/>)}
         </>)}
         {grid(<>
           {percent("Background position · left to right", box.x, x => setBox({ x }))}
@@ -256,7 +270,7 @@ export function HookCard({ look, onChange, onReset, fonts, onFonts, onError, fon
         </>)}
         <button type="button" className="link-button" style={{ justifySelf: "start" }} onClick={() => setBox({ x: hook.x, y: hook.y })}>Centre the background on the text</button>
       </>}
-      <h3 className="rule-heading">Your fonts</h3>
+      <h3 className="rule-heading">Your fonts <PlanTag feature="custom_fonts"/></h3>
       <LibraryFiles kind="fonts" library={fonts} onChange={onFonts} onError={onError} accept=".ttf,.otf" noun="font"/>
       <small className="muted">TTF or OTF. An uploaded font appears in the Font list above.</small>
     </>}
@@ -293,6 +307,7 @@ export function WatermarkCard({ look, onChange, onReset, file, onFile, onError, 
     void run(() => libraryApi.upload("watermark", chosen));
   };
   return <RuleCard title="Watermark (optional)" desc="Add consistent branding to every clip." onReset={onReset}>
+    <PlanNote feature="watermark"/>
     <div className="watermark-grid">
       <div><input ref={picker} type="file" accept="image/png" hidden onChange={e => upload(e.target.files?.[0])}/>
         <button type="button" className={`watermark-slot${image ? " filled" : ""}`} disabled={busy} onClick={() => picker.current?.click()}>
@@ -302,7 +317,7 @@ export function WatermarkCard({ look, onChange, onReset, file, onFile, onError, 
         {image && <button type="button" className="link-button danger" disabled={busy} onClick={() => { set({ enabled: false }); void run(() => libraryApi.remove("watermark", image.id)); }}>Remove image</button>}
       </div>
       {image && <div className="watermark-settings">
-        <Field label="Show on clips"><Toggle checked={wm.enabled} label="Show the watermark on clips" onChange={() => set({ enabled: !wm.enabled })}/></Field>
+        <Field label="Show on clips" tag={<PlanTag feature="watermark"/>}><Toggle checked={wm.enabled} label="Show the watermark on clips" onChange={() => set({ enabled: !wm.enabled })}/></Field>
         {wm.enabled && <div className="watermark-controls">
           <div className="place-grid" role="radiogroup" aria-label="Watermark position">{WATERMARK_PLACES.map(p => <button type="button" role="radio" key={p} aria-checked={wm.position === p} title={PLACE_NAMES[p]} aria-label={PLACE_NAMES[p]} className={wm.position === p ? "active" : ""} onClick={() => set({ position: p })}/>)}</div>
           <div>

@@ -1,0 +1,50 @@
+# Builds the PC Helper for Windows and Mac. Run it by hand (Actions → PC Helper → Run workflow) to get the two
+# files as artifacts, or push a tag such as helper-v1.0.0 to also publish them as a GitHub release whose links
+# go into .env (HELPER_DOWNLOAD_WINDOWS / HELPER_DOWNLOAD_MAC).
+name: PC Helper
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["helper-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        working-directory: helper
+        run: python -m pip install -r requirements.txt
+      - name: Build
+        working-directory: helper
+        run: python build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helper-${{ matrix.os }}
+          path: |
+            helper/dist/ClipRelay-Helper-windows.exe
+            helper/dist/ClipRelay-Helper-mac.zip
+          if-no-files-found: ignore
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/helper-v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*

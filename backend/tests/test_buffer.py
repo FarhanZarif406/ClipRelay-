@@ -91,7 +91,7 @@ def test_buffer_key_and_accounts(client, auth, member_auth, db, fake):
     assert names["simran_sing0"]["times"] == ["09:00", "13:00", "18:00"] and names["simran_sing0"]["daily_limit"] == 3 and names["simran_sing0"]["next_slot"]
     # Each workspace has its own rows, and another member sees none of it.
     assert len(client.get("/api/buffer?mode=podcasts", headers=auth).json()["channels"]) == 2
-    assert client.get("/api/buffer", headers=member_auth).json() | {"time_zone": ""} == {"connected": False, "max_keys": 10, "keys": [], "public_url": False, "time_zone": "", "up_next": None, "channels": []}
+    assert client.get("/api/buffer", headers=member_auth).json() | {"time_zone": ""} == {"connected": False, "max_keys": 10, "max_accounts": 0, "keys": [], "public_url": False, "time_zone": "", "up_next": None, "channels": []}
     channel_id = names["simran_sing0"]["id"]
     assert client.patch(f"/api/buffer/channels/{channel_id}", headers=member_auth, json={"enabled": False}).status_code == 404
 
@@ -109,7 +109,7 @@ def test_buffer_key_and_accounts(client, auth, member_auth, db, fake):
     assert [c["name"] for c in client.post("/api/buffer/refresh", headers=auth).json()["channels"]] == ["simran_sing0"]
     key_id = status["keys"][0]["id"]
     assert client.delete(f"/api/buffer/keys/{key_id}", headers=member_auth).status_code == 404
-    assert client.delete(f"/api/buffer/keys/{key_id}", headers=auth).json() | {"time_zone": "", "public_url": False} == {"connected": False, "max_keys": 10, "keys": [], "public_url": False, "time_zone": "", "up_next": None, "channels": []}
+    assert client.delete(f"/api/buffer/keys/{key_id}", headers=auth).json() | {"time_zone": "", "public_url": False} == {"connected": False, "max_keys": 10, "max_accounts": 0, "keys": [], "public_url": False, "time_zone": "", "up_next": None, "channels": []}
     assert db.scalar(select(BufferChannel)) is None
 
 
@@ -285,3 +285,26 @@ def test_an_account_without_times_publishes_at_once(client, auth, db, fake, monk
     third.next_check_at = None
     db.commit()
     assert pipeline.upload_job(db, third.id) == "scheduled" and "mode: customScheduled" in fake.posts[-1]
+
+
+def test_the_plan_caps_how_many_buffer_accounts_connect(client, member_auth, db, fake):
+    from app.models import Plan, User
+
+    plan = Plan(name="Tiny", features={}, limits={"buffer_keys": 1, "buffer_accounts": 1})
+    db.add(plan)
+    db.flush()
+    member = db.scalar(select(User).where(User.role == "member"))
+    member.plan_id = plan.id
+    db.commit()
+
+    status = client.post("/api/buffer/keys", headers=member_auth, json={"api_key": KEY}).json()
+    assert status["max_accounts"] == 1 and status["max_keys"] == 1
+    assert len({c["name"] for c in status["channels"]}) == 1  # Buffer has 2; the plan allows 1
+    assert "allows 1 Buffer account" in status["keys"][0]["error"] and "1 more were not connected" in status["keys"][0]["error"]
+    assert "Up to 1 Buffer key" in client.post("/api/buffer/keys", headers=member_auth, json={"api_key": KEY2}).json()["detail"]
+
+    # A bigger plan connects the rest on the next refresh.
+    plan.limits = {"buffer_keys": 3, "buffer_accounts": 9}
+    db.commit()
+    again = client.post("/api/buffer/refresh", headers=member_auth).json()
+    assert len({c["name"] for c in again["channels"]}) == 2 and again["keys"][0]["error"] is None

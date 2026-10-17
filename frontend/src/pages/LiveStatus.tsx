@@ -45,11 +45,14 @@ function Row({ item, bar, showNote, stop, onStop, stopping, hold, onHold, holdin
       <span>{item.podcast ? "Podcast · reading the transcript and choosing clips" : item.clip ? `Clip ${timecode(item.clip.start)}–${timecode(item.clip.end)} of “${item.clip.podcast_title}”` : item.channel ?? "—"}{!item.clip && !item.podcast && item.duration_sec ? ` · ${duration(item.duration_sec)}` : ""}{item.buffer_channel ? ` · Buffer: ${item.buffer_channel.name}` : ""}</span>
       {item.due_at && <span className="status-note">Goes out {dayTime(item.due_at)}</span>}
       {item.paused_while && <span className="status-note warn">Paused while {PAUSED_WHILE[item.paused_while] ?? item.paused_while}. Resume carries on from here; a download or an edit that was cut short starts again.</span>}
-      {bar && !item.podcast && <div className="status-bar"><i className="primary" style={{ width: `${Math.max(2, percent)}%` }}/></div>}
+      {item.edit_place === "pc" && <span className="status-note place">On your PC{item.editor_name ? ` · ${item.editor_name}` : ""} (PC Helper)</span>}
+      {item.edit_place === "cloud" && <span className="status-note place">Edited in Google Cloud</span>}
+      {item.waiting_edit && <span className="status-note">Downloaded. Waiting for its turn to be edited: a few videos are edited at a time so the server stays quick.</span>}
+      {bar && !item.podcast && !item.waiting_edit && <div className="status-bar"><i className="primary" style={{ width: `${Math.max(2, percent)}%` }}/></div>}
       {item.note && (showNote || item.attempts > 0) && <span className={item.attempts ? "status-note warn" : "status-note"}>{item.attempts ? `Attempt ${item.attempts} failed${retrying ? `, retrying ${relativeTime(item.retry_at, { suffix: true })}` : ""}: ` : ""}{item.note}</span>}
     </div>
     <div className="status-row-side">
-      {bar && !item.podcast && <strong>{percent}%</strong>}
+      {bar && !item.podcast && !item.waiting_edit && <strong>{percent}%</strong>}
       <span>{relativeTime(item.since, { suffix: true })}</span>
     </div>
     {hold && !item.podcast && <Button icon={hold === "pause" ? "pause" : "play"} variant={hold === "resume" ? "primary" : "secondary"} disabled={holding} title={hold === "pause" ? "Hold this video where it is" : "Carry on from where it was paused"} onClick={() => onHold(item, hold)}>{holding ? (hold === "pause" ? "Pausing…" : "Resuming…") : hold === "pause" ? "Pause" : "Resume"}</Button>}
@@ -62,7 +65,7 @@ export default function LiveStatus() {
   const queryClient = useQueryClient();
   const toast = useToast();
   const onError = useErrorToast();
-  const { data, isLoading } = useQuery({ queryKey: ["pipeline-status"], queryFn: dashboard.status, refetchInterval: 3000 });
+  const { data, isLoading } = useQuery({ queryKey: ["pipeline-status"], queryFn: dashboard.status, refetchInterval: 10_000 });
   const nav = useQuery({ queryKey: ["nav"], queryFn: dashboard.nav, refetchInterval: 30_000 });
   // Stop = cancel the job. A download or an edit that is already running halts within a few seconds.
   const stop = useMutation({

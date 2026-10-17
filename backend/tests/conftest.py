@@ -43,6 +43,10 @@ def fresh_db(monkeypatch):
     credentials.bust()
     llm_registry.bust()
     monkeypatch.setattr(http_module.time, "sleep", lambda *_: None)
+    # Without a PC Helper or Cloud Run, the older tests have this server edit (the owner's last-resort choice).
+    from app.services import cloud_editor
+
+    monkeypatch.setattr(cloud_editor, "fallback", lambda db: "server")
     yield
 
 
@@ -115,7 +119,7 @@ def fake_media(monkeypatch):
     class Adapter:
         name = "fake"
 
-        def download(self, video, on_progress=None):
+        def download(self, video, on_progress=None, short_side=1080):
             if calls and calls[0].get("fail_download"):
                 calls[0]["fail_download"] -= 1
                 raise sources.SourceError("The video is private")

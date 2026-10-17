@@ -163,5 +163,5 @@ def is_configured() -> bool:
 def complete(prompt: str, *, system: str = SYSTEM_PROMPT, max_tokens: int | None = None, provider_id: int | None = None) -> str:
     cfg = resolve(provider_id)
     if cfg is None or not cfg.api_key:
-        raise ApiError("No AI model is configured — add one in Settings → AI models")
+        raise ApiError("No AI model of your own is set up — add one on your Integrations page")
     return complete_with(cfg, prompt, system=system, max_tokens=max_tokens)

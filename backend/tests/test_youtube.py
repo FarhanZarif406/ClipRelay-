@@ -276,7 +276,7 @@ def test_push_webhook(client, db, channel, monkeypatch):
     assert client.post("/api/youtube/webhook", content=body, headers={"X-Hub-Signature": "sha1=forged"}).status_code == 204
     assert dispatch.sent == []  # unsigned notifications are ignored
     assert client.post("/api/youtube/webhook", content=body, headers={"X-Hub-Signature": signature}).status_code == 204
-    assert dispatch.sent == [("discover_video", (channel.youtube_channel_id, "abc"))]
+    assert [(name, args[:2]) for name, args in dispatch.sent] == [("discover_video", (channel.youtube_channel_id, "abc"))]  # the title and upload time come along
 
 
 def test_review_published_and_skipped_screens(client, auth, db, channel, details):

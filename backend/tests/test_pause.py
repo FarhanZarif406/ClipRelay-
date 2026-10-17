@@ -31,7 +31,7 @@ def test_pausing_a_running_download_and_resuming_it(db, fake_media, monkeypatch)
     job = _make_job(db, status=JobStatus.FETCHED, caption="pending", rendered=False)
     adapter = sources.get_adapter()
 
-    def slow_download(video, on_progress=None):
+    def slow_download(video, on_progress=None, short_side=1080):
         other = SessionLocal()
         pipeline.pause_job(other, other.get(Job, job.id))
         other.commit()
@@ -58,7 +58,7 @@ def test_resume_keeps_what_was_finished(db):
     job = _make_job(db, status=JobStatus.RENDERING, caption="done", rendered=False)
     job.video.source_file_path = "source/x.mp4"  # downloaded already, paused while editing
     pipeline.pause_job(db, job)
-    assert pipeline.resume_job(db, job) == JobStatus.RENDERING  # only the edit is done again
+    assert pipeline.resume_job(db, job) == JobStatus.DOWNLOADING  # only the edit is done again, once an editing place is free
 
     edited = _make_job(db, status=JobStatus.REWRITING, caption="pending", youtube_video_id="v2")
     pipeline.pause_job(db, edited)

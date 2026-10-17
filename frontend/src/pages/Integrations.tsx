@@ -1,6 +1,7 @@
 import { Navigate } from "react-router-dom";
 import { AIModels } from "@/components/AIModels";
 import { VideoSource } from "@/components/VideoSource";
+import { CloudEditingCard } from "@/components/CloudEditingCard";
 import { PushNotificationsCard, YouTubeApiCard } from "@/components/YouTubeCards";
 import { Card, PageHeader } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
@@ -28,12 +29,15 @@ export default function Integrations() {
           <li>Pick a <strong>Flash</strong> model from the list (for example <code>gemini-2.5-flash</code>) and save it as the default.</li>
         </ol>
         <p className="howto" style={{ paddingLeft: 0 }}>Without a model, videos still go through: the original YouTube title and the fallback hashtags are used, and the video is marked “caption fallback”.</p></Card>
-      <AIModels isOwner={isOwner}/>
+      <AIModels shared/>
 
       <div className="section-label">3 · Video source (the downloader)</div>
       <VideoSource/>
 
-      <div className="section-label">4 · Editor and storage (already installed)</div>
+      <div className="section-label">4 · Cloud editing (when a member's PC is off)</div>
+      <CloudEditingCard/>
+
+      <div className="section-label">5 · Editor and storage (already installed)</div>
       <OtherIntegrations isOwner={isOwner}/>
     </div>
   </>;

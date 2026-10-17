@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.models import (
     ActivityLog,
@@ -251,7 +251,20 @@ def _status_item(job: Job) -> dict:
         "buffer_channel": serializers.buffer.channel_ref(job.buffer_channel),
         "due_at": job.buffer_due_at,
         "paused_while": job.paused_status,
+        # Downloaded, waiting for one of the few editing places on the server (see pipeline.claim_render).
+        "waiting_edit": job.status == JobStatus.DOWNLOADING and bool(video.source_file_path) and not job.attempts and job.edit_place in (None, "server"),
+        "edit_place": job.edit_place,  # pc (the member's PC Helper) | cloud | server
+        "editor_name": _editor_name(job),
     }
+
+
+def _editor_name(job: Job) -> str | None:
+    if job.edit_place != "pc" or not job.editor_device_id:
+        return None
+    from app.models import EditorDevice
+
+    device = object_session(job).get(EditorDevice, job.editor_device_id)
+    return device.name if device else None
 
 
 def pipeline_status(db: Session, mode: str = Mode.SHORTS, user_id: int | None = None) -> dict:

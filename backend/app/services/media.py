@@ -275,7 +275,7 @@ def render_command(src: str, dst: str, look: dict, *, width: int, height: int, d
     speed = look["speed"]["speed"]
     take = min(duration, max_seconds * speed) if max_seconds else duration
     seconds = _tidy(take / speed)
-    cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y"]
+    cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y", "-filter_complex_threads", "1"]
     cmd += (["-t", f"{_tidy(take)}"] if max_seconds else []) + ["-i", src]
     sound = "[0:a]" if has_audio and look["encoding"]["keep_audio"] else None
     music = bool(look["music"]["enabled"] and music_file)
@@ -353,6 +353,7 @@ def render_command(src: str, dst: str, look: dict, *, width: int, height: int, d
     cmd += ["-filter_complex", ";".join(graph), "-map", "[vout]"]
     cmd += ["-map", "[aout]"] if audible else ["-map", f"{silence}:a", "-shortest"]
     cmd += ["-c:v", "libx264", "-preset", enc["preset"], "-crf", str(enc["crf"]), "-pix_fmt", "yuv420p", "-r", str(enc["fps"])]
+    cmd += ["-threads", str(max(1, get_settings().render_threads))]  # a few edits at once share the processor, and each needs less memory
     cmd += ["-c:a", "aac", "-b:a", f"{enc['audio_bitrate']}k" if audible else "64k"]
     if track is not None or max_seconds:
         cmd += ["-t", str(seconds)]  # the picture decides the length: looping music never makes a clip longer
@@ -373,12 +374,23 @@ def _ffmpeg_message(stderr: str) -> str:
 Progress = Callable[[float], None]  # called with 0–100
 
 
+@lru_cache
+def _nice_exe() -> str | None:
+    return shutil.which("nice") if os.name == "posix" else None
+
+
+def _gentle(cmd: list[str]) -> list[str]:
+    """On Linux, edits run at a lower priority: downloads, the website and new-video checks stay quick while they work."""
+    nice = _nice_exe()
+    return [nice, "-n", "10", *cmd] if nice else cmd
+
+
 def _run(cmd: list[str], seconds: float, on_progress: Progress | None, timeout: float) -> tuple[int, str]:
     """Run FFmpeg and return (exit code, error text). With `on_progress`, reports how much of the output is written."""
     if on_progress is None or seconds <= 0:
-        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout)
+        result = subprocess.run(_gentle(cmd), capture_output=True, text=True, errors="replace", timeout=timeout)
         return result.returncode, result.stderr
-    proc = subprocess.Popen(cmd[:1] + ["-progress", "pipe:1", "-nostats"] + cmd[1:], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
+    proc = subprocess.Popen(_gentle(cmd[:1] + ["-progress", "pipe:1", "-nostats"] + cmd[1:]), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
     errors: list[str] = []
     reader = threading.Thread(target=lambda: errors.append(proc.stderr.read()), daemon=True)
     reader.start()

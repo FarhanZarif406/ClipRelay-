@@ -52,9 +52,19 @@ services:
       interval: 15s
       retries: 5
 
+  # Quick work: new-video checks, captions, uploads, the scheduler tick. Never waits behind an edit.
   worker:
     <<: *backend
-    command: celery -A app.workers.celery_app worker -Q default,uploads --loglevel=INFO --concurrency=${WORKER_CONCURRENCY:-4}
+    command: celery -A app.workers.celery_app worker -Q default,uploads --loglevel=INFO --concurrency=${WORKER_CONCURRENCY:-2}
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # Downloads and edits. Threads, because they wait on yt-dlp and FFmpeg and need far less memory than processes.
+  # At most MAX_RENDERS edits run at once; the other places keep downloading the next videos.
+  media-worker:
+    <<: *backend
+    command: celery -A app.workers.celery_app worker -Q media --pool threads --loglevel=INFO --concurrency=${MEDIA_CONCURRENCY:-6} -n media@%h
     depends_on:
       backend:
         condition: service_healthy

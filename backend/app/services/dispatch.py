@@ -45,5 +45,5 @@ def poll_channel(channel_id: int) -> None:
     _send("poll_channel", channel_id)
 
 
-def discover_video(youtube_channel_id: str, video_id: str) -> None:
-    _send("discover_video", youtube_channel_id, video_id)
+def discover_video(youtube_channel_id: str, video_id: str, title: str | None = None, published: str | None = None) -> None:
+    _send("discover_video", youtube_channel_id, video_id, title, published)

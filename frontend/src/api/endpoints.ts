@@ -2,7 +2,7 @@ import { ApiError, api, apiUrl, getToken } from "./client";
 import type { Look } from "@/lib/look";
 import type {
   ActivityLog, Channel, ChannelRules, CredentialCard, CredentialResult, DailyReport, LLMProvider, LLMProviderList, LLMProviderName, Integration, Job, Nav, NotificationSettings, Page, Prompt,
-  PipelineStatus, DailyLimit, SystemState, EditingState, Library, Preset, TestRender, BufferChannelChanges, BufferChannelStatus, BufferStatus, PushInfo, YouTubeApiInfo, YouTubeApiTest, SourceDiagnosis, SourceInfo, CookiesInfo, RuleChange, RuleDef, RuleValue, RuleValues, Summary, User, Video,
+  PipelineStatus, DailyLimit, SystemState, Account, AccountChanges, MyPlan, PlanInput, PlanList, EditingState, Library, Preset, TestRender, BufferChannelChanges, BufferChannelStatus, BufferStatus, PushInfo, HelperPage, CloudEditing, YouTubeApiInfo, YouTubeApiTest, SourceDiagnosis, SourceInfo, CookiesInfo, RuleChange, RuleDef, RuleValue, RuleValues, Summary, User, Video,
 } from "./types";
 
 export const auth = {
@@ -12,6 +12,24 @@ export const auth = {
   register: (body: { email: string; password: string; name: string; workspace_name: string; accept_terms?: boolean }) =>
     api<{ access_token: string; user: User }>("/auth/register", { method: "POST", body }),
   me: () => api<User>("/auth/me"),
+  /** The account's language, kept for every device it signs in on. */
+  setLanguage: (language: "en" | "ur") => api<User>("/auth/me", { method: "PATCH", body: { language } }),
+};
+
+/** The owner's panel: accounts and plans. `myPlan` is for every account. */
+export const accounts = {
+  myPlan: () => api<MyPlan>("/plan"),
+  list: () => api<Account[]>("/accounts"),
+  create: (body: { email: string; password: string; name: string; plan_id: number | null; plan_expires_at: string | null }) => api<Account>("/accounts", { method: "POST", body }),
+  update: (id: number, changes: AccountChanges) => api<Account>(`/accounts/${id}`, { method: "PATCH", body: changes }),
+  remove: (id: number) => api<void>(`/accounts/${id}`, { method: "DELETE" }),
+  buffer: (id: number) => api<BufferStatus>(`/accounts/${id}/buffer`),
+  addBufferKey: (id: number, apiKey: string, label?: string) => api<BufferStatus>(`/accounts/${id}/buffer/keys`, { method: "POST", body: { api_key: apiKey, label: label || null } }),
+  removeBufferKey: (id: number, keyId: number) => api<BufferStatus>(`/accounts/${id}/buffer/keys/${keyId}`, { method: "DELETE" }),
+  plans: () => api<PlanList>("/plans"),
+  createPlan: (body: PlanInput) => api<PlanList>("/plans", { method: "POST", body }),
+  updatePlan: (id: number, body: PlanInput) => api<PlanList>(`/plans/${id}`, { method: "PUT", body }),
+  removePlan: (id: number) => api<PlanList>(`/plans/${id}`, { method: "DELETE" }),
 };
 
 /** The admin's main switch for the whole tool. */
@@ -63,7 +81,8 @@ export const jobs = {
 };
 
 export const channels = {
-  list: () => api<{ items: Channel[]; push_available: boolean; poll_minutes: number }>("/channels"),
+  /** `poll_minutes`: how often channels are checked besides push notifications; null = push only (the plan has no auto-check). */
+  list: () => api<{ items: Channel[]; push_available: boolean; poll_minutes: number | null; channels_used: number; channels_allowed: number; plan: string; bigger_plans: { name: string; value: number }[] }>("/channels"),
   create: (body: { query: string }) => api<Channel>("/channels", { method: "POST", body }),
   update: (id: number, body: { active: boolean }) => api<Channel>(`/channels/${id}`, { method: "PATCH", body }),
   remove: (id: number) => api<void>(`/channels/${id}`, { method: "DELETE" }),
@@ -104,15 +123,24 @@ export const credentials = {
 
 export type LLMProviderBody = { label: string; provider: LLMProviderName; api_key: string; base_url: string | null; model: string; max_tokens: number; temperature: number | null };
 
+/** An account's own AI models. `forUser`: an owner managing another account's models for them. */
 export const llmProviders = {
-  list: () => api<LLMProviderList>("/llm-providers"),
-  validate: (body: { provider: LLMProviderName; api_key: string; base_url: string | null; provider_id?: number }) =>
-    api<{ models: string[] }>("/llm-providers/validate", { method: "POST", body }),
-  create: (body: LLMProviderBody) => api<LLMProvider>("/llm-providers", { method: "POST", body }),
-  update: (id: number, body: Partial<LLMProviderBody> & { clear_temperature?: boolean }) => api<LLMProvider>(`/llm-providers/${id}`, { method: "PATCH", body }),
-  remove: (id: number, new_default_id?: number) => api<{ fallback: "env" | "none" | null }>(`/llm-providers/${id}`, { method: "DELETE", query: { new_default_id } }),
-  makeDefault: (id: number) => api<LLMProvider>(`/llm-providers/${id}/default`, { method: "POST" }),
-  test: (id: number) => api<{ ok: boolean; message: string; item: LLMProvider }>(`/llm-providers/${id}/test`, { method: "POST" }),
+  list: (forUser?: number) => api<LLMProviderList>("/llm-providers", { query: { for_user: forUser } }),
+  validate: (body: { provider: LLMProviderName; api_key: string; base_url: string | null; provider_id?: number }, forUser?: number) =>
+    api<{ models: string[] }>("/llm-providers/validate", { method: "POST", body, query: { for_user: forUser } }),
+  create: (body: LLMProviderBody, forUser?: number) => api<LLMProvider>("/llm-providers", { method: "POST", body, query: { for_user: forUser } }),
+  update: (id: number, body: Partial<LLMProviderBody> & { clear_temperature?: boolean }, forUser?: number) => api<LLMProvider>(`/llm-providers/${id}`, { method: "PATCH", body, query: { for_user: forUser } }),
+  remove: (id: number, new_default_id?: number, forUser?: number) => api<{ fallback: "env" | "none" | null }>(`/llm-providers/${id}`, { method: "DELETE", query: { new_default_id, for_user: forUser } }),
+  makeDefault: (id: number, forUser?: number) => api<LLMProvider>(`/llm-providers/${id}/default`, { method: "POST", query: { for_user: forUser } }),
+  test: (id: number, forUser?: number) => api<{ ok: boolean; message: string; item: LLMProvider }>(`/llm-providers/${id}/test`, { method: "POST", query: { for_user: forUser } }),
+};
+
+type YouTubeKeyState = { has_key: boolean; key_last4: string; shared: boolean };
+/** A member's own YouTube Data API key (owners use the shared one on the Integrations page). */
+export const myKeys = {
+  youtube: (forUser?: number) => api<YouTubeKeyState>("/my-keys/youtube", { query: { for_user: forUser } }),
+  saveYoutube: (apiKey: string, forUser?: number) => api<YouTubeKeyState>("/my-keys/youtube", { method: "PUT", body: { api_key: apiKey }, query: { for_user: forUser } }),
+  removeYoutube: (forUser?: number) => api<YouTubeKeyState>("/my-keys/youtube", { method: "DELETE", query: { for_user: forUser } }),
 };
 
 export const users = {
@@ -195,4 +223,28 @@ export const library = {
   },
   remove: (kind: LibraryKind, id: number) => api<Library>(`/library/${kind}/${id}`, { method: "DELETE" }),
   fileUrl: (kind: LibraryKind, id: number, token: string) => apiUrl(`/library/${kind}/${id}/file`, { token }),
+};
+
+/** PC Helper: connect a computer with a short code, and see or disconnect the member's computers. */
+export const helper = {
+  page: () => api<HelperPage>("/helper"),
+  code: () => api<{ code: string; expires_at: string }>("/helper/code", { method: "POST" }),
+  remove: (id: number) => api<void>(`/helper/devices/${id}`, { method: "DELETE" }),
+};
+
+/** Integrations → Cloud editing: Cloud Run's address, the service account key, and what happens when nothing can edit (owner only). */
+export const cloudEditing = {
+  info: () => api<CloudEditing>("/integrations/cloud-editing"),
+  save: (body: { url?: string; fallback?: "fail" | "server"; enabled?: boolean }) => api<CloudEditing>("/integrations/cloud-editing", { method: "PUT", body }),
+  /** The key file goes up once; only its status comes back. */
+  uploadKey: async (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch(apiUrl("/integrations/cloud-editing/key"), { method: "POST", headers: { Authorization: `Bearer ${getToken() ?? ""}` }, body: form });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new ApiError(typeof body?.detail === "string" ? body.detail : `Upload failed (${response.status})`, response.status);
+    return body as CloudEditing;
+  },
+  removeKey: () => api<CloudEditing>("/integrations/cloud-editing/key", { method: "DELETE" }),
+  test: () => api<{ ok: boolean; message: string; at: string }>("/integrations/cloud-editing/test", { method: "POST" }),
 };

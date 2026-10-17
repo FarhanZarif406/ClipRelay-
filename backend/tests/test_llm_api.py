@@ -1,9 +1,12 @@
 import httpx
 import respx
 
+from sqlalchemy import select
+
 from app.integrations import llm
-from app.models import LLMProvider
+from app.models import LLMProvider, User
 from app.security import decrypt
+from app.services import acting, llm_registry
 
 GROQ_MODELS = "https://api.groq.com/openai/v1/models"
 GROQ_CHAT = "https://api.groq.com/openai/v1/chat/completions"
@@ -28,12 +31,30 @@ def test_validate_returns_models_and_errors(client, auth):
 
 
 @respx.mock
-def test_member_cannot_manage_or_see_keys(client, auth, member_auth):
-    _create(client, auth)
-    listing = client.get("/api/llm-providers", headers=member_auth).json()
-    assert listing["items"] and "masked_key" not in listing["items"][0]
-    assert client.post("/api/llm-providers/validate", headers=member_auth, json={"provider": "groq", "api_key": "k"}).status_code == 403
-    assert client.post(f"/api/llm-providers/{listing['items'][0]['id']}/default", headers=member_auth).status_code == 403
+def test_every_member_has_their_own_models(client, auth, member_auth, db):
+    owners = _create(client, auth)
+    # A member sees none of the owners' models, cannot touch them, and has no AI until they add their own.
+    assert client.get("/api/llm-providers", headers=member_auth).json()["items"] == []
+    assert client.post(f"/api/llm-providers/{owners['id']}/default", headers=member_auth).status_code == 404
+    member_id = db.scalar(select(User.id).where(User.role == "member"))
+    with acting.scope(member_id):
+        assert llm.resolve() is None
+    with acting.scope(None):
+        assert llm.resolve().label == "Groq"
+
+    # Their own model is theirs alone; they see the end of its key.
+    mine = _create(client, member_auth, label="Mine", key="gsk-member-key-9876")
+    assert mine["is_default"] is True and mine["masked_key"].endswith("9876")
+    assert [i["label"] for i in client.get("/api/llm-providers", headers=member_auth).json()["items"]] == ["Mine"]
+    assert [i["label"] for i in client.get("/api/llm-providers", headers=auth).json()["items"]] == ["Groq"]
+    llm_registry.bust()
+    with acting.scope(member_id):
+        assert llm.resolve().label == "Mine"
+        assert llm.resolve(owners["id"]).label == "Mine"  # a template pointing at the owners' model still uses the member's own
+
+    # An owner can manage a member's models for them; a member cannot reach another account's.
+    assert [i["label"] for i in client.get(f"/api/llm-providers?for_user={member_id}", headers=auth).json()["items"]] == ["Mine"]
+    assert client.get("/api/llm-providers?for_user=1", headers=member_auth).status_code == 403
 
 
 @respx.mock

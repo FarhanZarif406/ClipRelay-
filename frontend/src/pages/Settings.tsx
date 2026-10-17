@@ -3,10 +3,9 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { credentials, settings, users } from "@/api/endpoints";
 import type { NotificationSettings } from "@/api/types";
-import { AIModels } from "@/components/AIModels";
 import { CredentialCard } from "@/components/CredentialCard";
 import { ChannelOverrides, GlobalRules, RuleHistory } from "@/components/RulesEditor";
-import { Icon } from "@/components/Icon";
+import { Icon, type IconName } from "@/components/Icon";
 import { Field } from "@/components/Modal";
 import { useErrorToast, useToast } from "@/components/Toast";
 import { Avatar, Badge, Button, Card, PageHeader, Toggle } from "@/components/ui";
@@ -14,10 +13,20 @@ import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { initialsOf } from "@/lib/format";
 
-const TABS = ["Pipeline rules", "Channel overrides", "Change history", "API keys", "AI models", "Notifications", "Team members", "Appearance"] as const;
+const TABS = ["Pipeline rules", "Channel overrides", "Change history", "API keys", "Notifications", "Team members", "Appearance"] as const;
 /** Tabs only the admin sees: API keys and everything else that belongs to the whole workspace. */
-const ADMIN_TABS: readonly string[] = ["API keys", "AI models", "Notifications", "Team members"];
+const ADMIN_TABS: readonly string[] = ["API keys", "Notifications", "Team members"];
 type Tab = (typeof TABS)[number];
+/** Each tab's icon and what it holds, for the menu and the heading above the tab. */
+const TAB_INFO: Record<Tab, { icon: IconName; text: string }> = {
+  "Pipeline rules": { icon: "rules", text: "How new videos are found, limited, captioned and kept" },
+  "Channel overrides": { icon: "filter", text: "Different rules for one of your channels" },
+  "Change history": { icon: "clock", text: "Who changed which rule, and when" },
+  "API keys": { icon: "link", text: "The workspace's own keys and services" },
+  "Notifications": { icon: "bell", text: "Where alerts about failures are sent" },
+  "Team members": { icon: "shield", text: "Owners and members of the workspace" },
+  "Appearance": { icon: "sun", text: "Light or dark, for this browser" },
+};
 
 const CARD_KEYS = new Set(["llm", "ytdlp"]);  // the downloader has its own Video Source card
 
@@ -103,7 +112,8 @@ export default function Settings() {
   const wanted: Tab = params.get("tab") === "keys" ? "API keys" : "Pipeline rules";
   const [chosen, setTab] = useState<Tab>(wanted);
   const tab: Tab = tabs.includes(chosen) ? chosen : "Pipeline rules";
-  return <><PageHeader title="Settings" description={isAdmin ? "Your own rules and accounts, plus the workspace's API keys, AI models and team." : "Your own rules and channel overrides. They apply only to your channels."}/><div className="settings-layout"><div className="settings-nav">{tabs.map(x => <button className={tab === x ? "active" : ""} key={x} onClick={() => setTab(x)}>{x}</button>)}</div><div className="settings-content">
+  return <><PageHeader title="Settings" description={isAdmin ? "Your own rules and accounts, plus the workspace's API keys, AI models and team." : "Your own rules and channel overrides. They apply only to your channels."}/><div className="settings-layout"><nav className="settings-nav" aria-label="Settings sections">{tabs.map(x => <button className={tab === x ? "active" : ""} key={x} onClick={() => setTab(x)} aria-current={tab === x ? "page" : undefined}><i><Icon name={TAB_INFO[x].icon} size={15}/></i><span><b data-i18n-skip>{x}</b><small>{TAB_INFO[x].text}</small></span></button>)}</nav><div className="settings-content">
+    <div className="settings-head"><i><Icon name={TAB_INFO[tab].icon} size={19}/></i><div><b data-i18n-skip>{tab}</b><span>{TAB_INFO[tab].text}.</span></div></div>
     {tab === "Pipeline rules" && <>
       <Card><div className="card-title">Set in one place</div><div className="card-caption">These are not repeated here, so there is only one place to change each of them.</div>
         <div className="api-row"><div><strong>Shape, speed, sound, text and watermark</strong><span>The edit every video gets, and presets per channel</span></div><Link className="button secondary" to="/editing">Open Editing Rules</Link></div>
@@ -114,7 +124,6 @@ export default function Settings() {
     {tab === "Channel overrides" && <ChannelOverrides/>}
     {tab === "Change history" && <RuleHistory/>}
     {tab === "API keys" && <ApiKeys/>}
-    {tab === "AI models" && <AIModels isOwner={user?.role === "owner"}/>}
     {tab === "Notifications" && <Notifications/>}
     {tab === "Team members" && <Team/>}
     {tab === "Appearance" && <Appearance/>}

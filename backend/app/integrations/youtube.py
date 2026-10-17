@@ -78,9 +78,25 @@ def watch_url(video_id: str) -> str:
 
 
 def api_key() -> str:
-    from app.services import credentials
+    """The YouTube Data API key of whoever the code acts for: a member's own, or the owners' shared one.
 
-    return credentials.get("youtube.api_key")
+    Empty when a member has none: lookups then go through yt-dlp, which needs no key.
+    """
+    from app.services import acting, credentials
+
+    scope = acting.current()
+    if scope is None:
+        return credentials.get("youtube.api_key")
+    from app.db import SessionLocal
+    from app.models import User
+    from app.security import decrypt
+
+    db = SessionLocal()
+    try:
+        user = db.get(User, scope)
+        return (decrypt(user.youtube_api_key_enc) or "") if user and user.youtube_api_key_enc else ""
+    finally:
+        db.close()
 
 
 def _parse_time(value: str | None) -> datetime | None:
@@ -403,6 +419,11 @@ def verify_signature(body: bytes, header: str | None) -> bool:
         return False
     expected = hmac.new(hub_secret().encode(), body, algorithm).hexdigest()
     return hmac.compare_digest(expected, sent.strip())
+
+
+def parse_notification_entries(body: bytes) -> list[tuple[str, FeedEntry]]:
+    """A push notification's uploads: (channel id, the entry with the video's id, title and upload time)."""
+    return [(channel_id, entry) for channel_id, _video_id, entry in _entries(_parse_xml(body)) if channel_id]
 
 
 def parse_notification(body: bytes) -> list[tuple[str, str]]:

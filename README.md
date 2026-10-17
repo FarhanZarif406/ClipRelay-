@@ -17,6 +17,101 @@ A video that fails the duration check is never discarded: it is held under **Ski
 processed by hand. A usable video that comes over a daily limit is held under **Not Processed** instead: it is detected
 and recorded but not downloaded or edited, and **Process now** sends it on anyway.
 
+**Language.** Every account chooses English or Roman Urdu: a board on the Dashboard and an EN / UR switch in the top
+bar, kept on the account for every device. In Roman Urdu the text on screen (headings, help, buttons, messages,
+placeholders) is swapped from a dictionary as pages draw it (`frontend/src/lib/ur.ts`, with patterns for lines that carry
+numbers); menu, section and tab names and page titles stay in English, and so does what people typed. The server
+answers its common messages (plans, limits, trial, keys, channels, sign-in) in Roman Urdu too (`backend/app/i18n.py`).
+A new English line on a page shows in English until it is added to the dictionary.
+
+**Accounts and plans.** The owner makes a login for every person on the **Accounts** page (owners only); there is no
+public sign-up. Each account gets a plan, optionally until a date, and the owner can change its plan, set a new
+password, suspend it (no sign-in, its channels are not watched) or delete it, and add or remove its Buffer keys for it.
+Under **Plans** the owner makes plans with switches (Podcasts workspace, AI captions, AI hook text, background music,
+watermark, own fonts, editing presets, test render) and limits (channels, videos per day, Buffer keys, Buffer accounts across all keys; 0 = no limit) and an auto-check interval: how often the channels are checked
+as a backup to push notifications (0 = push notifications only, the lightest; Pro checks hourly). A fresh install has four plans, sized for about 30
+members on a 1-vCPU, 4 GB server (keep Business to about 5 accounts there):
+
+| | Free (default) | Starter | Pro | Business |
+|---|---|---|---|---|
+| Trial | 5 days, then the account stops | – | – | – |
+| Videos / podcasts per day | 3 / – | 8 / – | 15 / – | 30 / 3 |
+| Channels | 50 | 101 | 210 | 315 |
+| Buffer keys / accounts | 1 / 3 | 1 / 3 | 3 / 9 | 5 / 15 |
+| Auto-check | push only | push only | hourly | every 30 min |
+| Editing | Fast (720p) | Fast | Full (1080p) | Full |
+| Extras | AI captions | + AI hook, watermark, own fonts, test render | + music, presets | + Podcasts |
+
+An option a plan does not include is not hidden: it carries a small tag naming the smallest plan that has it (PRO,
+STARTER, BUSINESS); it can be tried on the photo, and saving it is refused. When a trial or a plan ends, the account
+can still sign in, but nothing is detected, downloaded, edited or uploaded for it; the Dashboard says so in a large
+notice until the owner gives it a plan.
+One plan is the default: new accounts get it, and so does an account whose plan has ended. A member sees their plan on
+the Dashboard, and what it leaves out; owners are never limited.
+
+**Fast mode.** A plan without *Full editing* makes videos the light way, which a small server handles quickly: 720p,
+at most 30 fps, quick encoding (superfast), a square title box, and no sharpness, grain, vignette, highlights or
+shadows. Members on such a plan can still try every option on the Editing Rules page and see it on the photo; saving a
+paid option is refused with the list of what is for paid members.
+
+**Whose keys.** The cookies file and the proxy are the owner's, for everyone's downloads. Everything else is each
+account's own, so the owner does not pay for everyone: its AI models and its YouTube Data API key (on a member's own Integrations page,
+which owners do not see) and its Buffer keys. A member's videos only ever use that member's keys: without an AI model of their
+own, captions use the original title and the hook shows the title; without a YouTube key, videos are read through
+yt-dlp, which needs none. The owner can add or remove any account's keys for it (Accounts → Keys).
+
+**One video at a time.** To keep the server light, each member's videos go through one by one: the next is not
+downloaded until the one before has been downloaded, edited, captioned and handed to Buffer, or has reached the review
+queue, been paused, failed or been stopped. Each member has their own line, oldest video first; a video left waiting
+for a Buffer account does not hold the line.
+
+**A few edits at a time.** Editing is the heavy part, so only `MAX_RENDERS` videos (3 by default) are edited at once
+on the whole server, across all members. Downloads have places of their own and carry on meanwhile: a video that is
+downloaded while every editing place is taken keeps its file and waits ("Downloaded. Waiting for its turn to be
+edited" in Live Status), and takes the next free place without downloading again. A failed edit gives its place up
+while it waits to try again, and so does a paused one. Each edit uses `RENDER_THREADS` encoder threads (1 by default)
+and, on Linux, runs at a lower priority, so the website, new-video checks and downloads stay quick while it works.
+For a 1 vCPU / 4 GB server (Hostinger KVM 1) keep `MAX_RENDERS=3`, `RENDER_THREADS=1`; with more processors raise
+`MAX_RENDERS` to about the number of vCPUs. (These places are for edits made on this server; see below.)
+
+### Where videos are edited: the member's PC first, then Google Cloud
+
+**PC Helper.** Each member can run the PC Helper (`helper/`), a small program for Windows and Mac. Connected with a
+short code from the website (menu → PC Helper → Connect a PC), it asks the server every few seconds for the member's
+next video, downloads it from YouTube over the member's own internet (no cookies or proxy are sent to a PC), edits it
+with the very same FFmpeg edit (it carries the backend's `app/services/media.py`), and sends back only the finished
+video. The server writes the caption and hands it to Buffer as usual. So the server neither downloads nor edits it, and
+YouTube sees a home connection. The member's "one video at a time" line holds. The helper sits next to the clock,
+runs below normal priority, keeps the computer awake only while it works, starts with the computer, removes every file
+of a video when done, and has a small window (opened from its icon, on 127.0.0.1 only) in English or Roman Urdu.
+Its key is stored only as a hash on the server; Disconnect (on the website or in the helper) stops it at once.
+
+**Cloud editing (Google Cloud Run).** When a member's PC has not answered for 3 minutes (off, asleep, offline, paused),
+its video moves on: this server downloads it (with its cookies and proxy) and Cloud Run edits it, many at a time,
+with the same edit (`cloud-editor/`). Cloud Run fetches the original and the member's files from this server with a
+one-job key and sends the finished video back, so this server needs its public HTTPS address. A late result from the
+PC is refused: a video is never made twice. Set it up once (owner):
+
+1. Google Cloud: make a project and add billing (Budget alert recommended), install the Google Cloud CLI, `gcloud auth login`.
+2. From the ClipRelay folder: `powershell -ExecutionPolicy Bypass -File cloud-editor\deploy.ps1 -Project <project-id>`
+   (or `sh cloud-editor/deploy.sh <project-id>`). It builds and starts the editor (no public access), makes the
+   `cliprelay-caller` service account with the Cloud Run Invoker role, prints the Cloud Run address and writes
+   `cliprelay-cloud-key.json`.
+3. ClipRelay → Integrations → Cloud editing: paste the address, upload the key file (then delete it), press Test.
+
+**When nothing can edit.** Integrations → Cloud editing decides what happens to a video when neither a PC nor the cloud
+may edit it (no helper on, cloud not set up or not in the plan): **show it as failed** (default; the member presses
+Retry) or **edit it on this server** (within `MAX_RENDERS`). Plans have two switches, *PC Helper editing* and
+*Cloud editing* (both on for every plan for now). Live Status shows where each video is edited.
+
+**Building the PC Helper.** `cd helper && python -m venv .venv && .venv/Scripts/pip install -r requirements.txt &&
+.venv/Scripts/python build.py` makes `dist/ClipRelay-Helper-windows.exe` (a Mac build needs a Mac). The GitHub workflow
+*PC Helper* (`.github/workflows/helper.yml`) builds both; a tag `helper-v1.0.0` publishes them as a release. Put the two
+download links in `.env` (`HELPER_DOWNLOAD_WINDOWS`, `HELPER_DOWNLOAD_MAC`) so members see them on the PC Helper page.
+On first run the Windows program copies itself to `%LOCALAPPDATA%\Programs\ClipRelay Helper` (no admin rights); a Mac
+user opens it once with right-click → Open, since it is not from the App Store. If no Deno or Node.js is on the
+computer, the helper fetches Deno once from its official releases (yt-dlp needs it to read YouTube).
+
 **Main switch.** The admin has a main switch at the top of the Dashboard. Off stops everything for every member: no
 channel is checked and push notifications are ignored, nothing is downloaded, edited, captioned or handed to Buffer,
 and videos on their way are paused where they are. Members do not see the switch, but every page tells them the system
@@ -55,8 +150,8 @@ python -c "from cryptography.fernet import Fernet;print('ENCRYPTION_KEY='+Fernet
 docker compose up -d --build
 ```
 
-> **Downloads run in the `worker` service, not in `backend`.** Deploy all of `backend`, `worker` and `beat`: without the
-> worker, videos are detected but never downloaded or edited, while *Test download* (which runs in `backend`) still
+> **Downloads and edits run in the `media-worker` service, not in `backend`.** Deploy all of `backend`, `worker`,
+> `media-worker` and `beat`: without the media worker, videos are detected but never downloaded or edited, while *Test download* (which runs in `backend`) still
 > works. Integrations → Video Source and Live Status warn when the worker has not checked in for three minutes, and
 > show what the worker itself sees (yt-dlp version, JavaScript runtime, cookies file). On a host that runs a single
 > container, set `INLINE_WORKER=true` so that container does the work itself.
@@ -74,8 +169,9 @@ at least one owner). You can also create users from the CLI (the first user crea
 docker compose exec backend python -m app.cli create-user you@example.com 'a-strong-password' "Your Name"
 ```
 
-Services: `postgres`, `redis`, `backend` (FastAPI, which runs migrations on start), `worker` (Celery), `beat`
-(the scheduler tick), and `frontend` (nginx serving the SPA and proxying `/api`).
+Services: `postgres`, `redis`, `backend` (FastAPI, which runs migrations on start), `worker` (Celery: new-video
+checks, captions, uploads), `media-worker` (Celery in threads: downloads and edits, `MEDIA_CONCURRENCY` places of
+which `MAX_RENDERS` may be editing), `beat` (the scheduler tick), and `frontend` (nginx serving the SPA and proxying `/api`).
 
 > **A public HTTPS address is required.** Buffer fetches each clip from this server, and YouTube sends its push
 > notifications to it. In production,
@@ -265,7 +361,7 @@ Channel overrides). Every change is recorded with who made it and when (Settings
 | `cap_reset_timezone` | Asia/Karachi | global only; caps reset at midnight in this timezone |
 | `hashtag_count` | 8 | 0 to 15 |
 | `fallback_hashtags` | fyp foryou viral trending shorts | used when the AI model fails |
-| `file_retention_days` | 7 | days after publishing before the files are deleted |
+| `file_retention_days` | 1 | days after publishing before the edited file is deleted (1 to 3) |
 | `poll_interval_minutes` | 5 | global only |
 
 Caps are counted from the `videos` and `jobs` tables at the moment a video is detected, not kept in counters.
@@ -302,7 +398,10 @@ where the rendered video plays inline and the caption, hashtags and the account 
 appears under **Published**.
 
 ### File retention
-Downloaded and rendered files are deleted `file_retention_days` after publishing (or after a job was rejected or failed).
+The downloaded original is deleted as soon as the edit is made. The edited file is deleted `file_retention_days` (1 to
+3 days) after publishing, or after a job was rejected or failed. Downloads never exceed the plan's quality: 720p in Fast
+mode, Full HD otherwise (never 1440p or 4K). Logs and the videos' timelines are kept for 60 days. A test render covers 15
+seconds of a video, and each member can run 5 a day.
 The database rows are kept forever as the record of what was published.
 
 ### Never posting the same video twice
@@ -344,6 +443,7 @@ uvicorn app.main:app --reload --port 8000
 
 # worker + scheduler (two more terminals, inside backend/)
 celery -A app.workers.celery_app worker -Q default,uploads --loglevel=INFO   # Windows: add --pool=solo
+celery -A app.workers.celery_app worker -Q media --pool threads --concurrency 6 -n media@%h --loglevel=INFO
 celery -A app.workers.celery_app beat --loglevel=INFO
 
 # frontend
